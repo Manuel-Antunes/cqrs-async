@@ -64,9 +64,7 @@ pub use aggregate::{Aggregate, EventAppender};
 pub use command_handler::{Appender, CommandHandler, EventPublisher, Pending, dispatch_command};
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
-pub use dead_letter::{
-    DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, TransactionalDeadLetters, retry_dead_letters,
-};
+pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
 pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};

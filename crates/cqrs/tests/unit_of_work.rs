@@ -18,10 +18,11 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, Cursor, DeadLetter, DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor,
-    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
-    InMemoryTokenStore, InlinePublisher, Intercepted, Loaded, Metadata, Pending, ProcessingContext, StoreError,
-    StreamId, TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore, retry_dead_letters,
+    Aggregate, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
+    EventInterceptor, EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters,
+    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, Intercepted, Loaded, Metadata, Pending, ProcessingContext,
+    StoreError, StreamId, TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore,
+    retry_dead_letters,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -293,18 +294,68 @@ async fn a_failed_batch_rolls_back_and_its_events_run_one_at_a_time() {
     );
 }
 
+/// The dead letters of a [`Journal`]: a letter's removal is a row of the
+/// unit of work, like the handler's.
+struct JournaledLetters {
+    letters: InMemoryDeadLetters<Ticked>,
+    phases: Phases,
+}
+
+impl DeadLetterQueue<Ticked, Vec<String>> for JournaledLetters {
+    async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
+        self.letters.contains(processor, sequence).await
+    }
+
+    async fn sequences(&self, processor: &str) -> Result<Vec<String>, StoreError> {
+        self.letters.sequences(processor).await
+    }
+
+    async fn first(&self, processor: &str, sequence: &str) -> Result<Option<DeadLetter<Ticked>>, StoreError> {
+        self.letters.first(processor, sequence).await
+    }
+
+    async fn enqueue_in(
+        &self,
+        rows: &mut Vec<String>,
+        processor: &str,
+        letter: DeadLetter<Ticked>,
+    ) -> Result<(), StoreError> {
+        rows.push(format!("parked {}", letter.event.payload.0));
+        self.letters.enqueue(processor, letter);
+        Ok(())
+    }
+
+    async fn remove_in(
+        &self,
+        rows: &mut Vec<String>,
+        processor: &str,
+        letter: &DeadLetter<Ticked>,
+    ) -> Result<bool, StoreError> {
+        let n = letter.event.payload.0;
+        log(&self.phases, format!("unpark {n}"));
+        rows.push(format!("unparked {n}"));
+        self.letters.remove_in(&mut (), processor, letter).await
+    }
+}
+
+/// A parked event is retried in a unit of work that also takes its letter
+/// out of the queue: the handler's row and the removal commit together, and
+/// a failed retry leaves both undone.
 #[tokio::test]
 async fn dead_letter_retries_run_in_the_unit_of_work() {
     let journal = Journal::default();
     let store = InMemoryEventStore::new();
-    let queue = InMemoryDeadLetters::default();
+    let queue = JournaledLetters {
+        letters: InMemoryDeadLetters::default(),
+        phases: Arc::clone(&journal.phases),
+    };
     for event in tick(&store, [1, 2]).await {
         let letter = DeadLetter {
             sequence: event.stream.to_string(),
             event: Arc::new(event),
             cause: "down".into(),
         };
-        queue.enqueue("rows", letter);
+        queue.letters.enqueue("rows", letter);
     }
     let handler = rows(&journal, 2); // tick 2 fails its first retry
 
@@ -318,17 +369,24 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
         [
             "begin",
             "handle 1",
+            "unpark 1",
             "commit",
             "committed 1",
             "begin",
             "handle 2", // failed: rolled back, still parked
             "begin",
             "handle 2",
+            "unpark 2",
             "commit",
             "committed 2",
         ]
     );
-    assert_eq!(*journal.database.lock().unwrap(), ["row 1", "row 2"]);
+    assert_eq!(
+        *journal.database.lock().unwrap(),
+        ["row 1", "unparked 1", "row 2", "unparked 2"],
+        "each letter left the queue in the unit of work that applied its event"
+    );
+    assert!(queue.sequences("rows").await.unwrap().is_empty());
 }
 
 struct Clock(u32);

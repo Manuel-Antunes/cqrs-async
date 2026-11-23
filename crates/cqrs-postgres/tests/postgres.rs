@@ -21,7 +21,7 @@ use cqrs::SnapshotStore;
 use cqrs::{
     Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventPublisher, EventStore,
     Events, ExpectedVersion, Gap, HandlerError, Metadata, Pending, ProcessingContext, StoreError, StreamId,
-    SubscriptionOptions, TokenStore, TrackingOptions, TransactionalDeadLetters, TransactionalTokenStore,
+    SubscriptionOptions, TokenStore, TrackingOptions, TransactionalTokenStore, retry_dead_letters,
 };
 use cqrs_postgres::{
     PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, migrate, upcast,
@@ -712,10 +712,11 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
     assert!(second > first);
 }
 
-/// Parking joins the unit of work: it commits with it, rolls back with it,
-/// and parking the same event again leaves one letter.
+/// A letter enters and leaves the queue in a unit of work: parking and
+/// removing commit with it and roll back with it, parking the same event
+/// again leaves one letter, and removing one that is gone says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn parking_commits_and_rolls_back_with_its_unit_of_work() {
+async fn letters_are_parked_and_removed_with_their_unit_of_work() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
     let tokens = PostgresTokenStore::new(pool.clone());
@@ -757,7 +758,100 @@ async fn parking_commits_and_rolls_back_with_its_unit_of_work() {
         count, 1,
         "one letter: the duplicate and the rolled-back one left nothing"
     );
-    queue.remove_first("p", &sequence).await.unwrap();
+
+    let mut unit = tokens.begin().await.unwrap();
+    assert!(queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap());
+    drop(unit); // rolled back: still parked
+    assert!(queue.contains("p", &sequence).await.unwrap());
+
+    let mut unit = tokens.begin().await.unwrap();
+    assert!(queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap());
+    assert!(
+        queue.contains("p", &sequence).await.unwrap(),
+        "parked until the unit of work commits"
+    );
+    tokens.commit(unit).await.unwrap();
+    assert!(queue.sequences("p").await.unwrap().is_empty());
+
+    let mut unit = tokens.begin().await.unwrap();
+    assert!(
+        !queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap(),
+        "already removed: the caller rolls its unit of work back"
+    );
+}
+
+/// [`Totals`], whose first two calls wait for each other: two retries that
+/// both hold the oldest letter before either handles it.
+struct Racing {
+    totals: Totals,
+    meet: tokio::sync::Barrier,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl EventHandler<ClockEvent, PgTransaction> for Racing {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<ClockEvent>,
+        context: &mut ProcessingContext<'_, PgTransaction>,
+    ) -> Result<(), HandlerError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) < 2 {
+            self.meet.wait().await;
+        }
+        self.totals.handle(event, context).await
+    }
+}
+
+/// Two retries running at once (two operators, two instances) both find the
+/// same oldest letter. A letter leaves the queue in the unit of work that
+/// applies its event, so the retry that comes second finds it gone and rolls
+/// its own handling back: every parked event is applied once, and none is
+/// removed unhandled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn racing_retries_apply_each_parked_event_once() {
+    let pool = database_or_skip!();
+    sqlx::query("CREATE TABLE clock_totals (clock text PRIMARY KEY, total bigint NOT NULL, events bigint NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let tokens = PostgresTokenStore::new(pool.clone());
+    let queue = PostgresDeadLetters::new(store.clone());
+    store
+        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &Metadata::new())
+        .await
+        .unwrap();
+    let mut unit = tokens.begin().await.unwrap();
+    for event in store.read_all(0, 10).await.unwrap() {
+        let letter = DeadLetter {
+            sequence: stream(1).to_string(),
+            event: Arc::new(event),
+            cause: "down".to_owned(),
+        };
+        queue.enqueue_in(&mut unit, "p", letter).await.unwrap();
+    }
+    tokens.commit(unit).await.unwrap();
+
+    let handler = Racing {
+        totals: Totals::default(),
+        meet: tokio::sync::Barrier::new(2),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let (one, other) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(
+            retry_dead_letters(&queue, "p", &tokens, &handler),
+            retry_dead_letters(&queue, "p", &tokens, &handler),
+        )
+    })
+    .await
+    .expect("both retries finish");
+    let (one, other) = (one.unwrap(), other.unwrap());
+
+    assert_eq!(
+        totals(&pool).await,
+        (1 + 2, 2),
+        "ticks 1 and 2, each applied exactly once"
+    );
+    assert_eq!(one.handled + other.handled, 2);
     assert!(queue.sequences("p").await.unwrap().is_empty());
 }
 

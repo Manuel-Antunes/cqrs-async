@@ -15,7 +15,7 @@ use std::{
 use cqrs::{
     Aggregate, AggregateLoader, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventPublisher, Events,
     HandlerError, InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, Pending, ProcessingContext,
-    StoreError, StreamId, TrackingOptions, TransactionalDeadLetters, retry_dead_letters, segment_of,
+    StoreError, StreamId, TrackingOptions, retry_dead_letters, segment_of,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -369,17 +369,6 @@ struct FlakyQueue {
     failures_served: AtomicU32,
 }
 
-impl TransactionalDeadLetters<Ticked, ()> for FlakyQueue {
-    async fn enqueue_in(&self, tx: &mut (), processor: &str, letter: DeadLetter<Ticked>) -> Result<(), StoreError> {
-        let first = self.inner.letters(processor).is_empty();
-        self.inner.enqueue_in(tx, processor, letter).await?;
-        if first {
-            *self.failures_left.lock().unwrap() = 3; // the next lookups fail
-        }
-        Ok(())
-    }
-}
-
 impl DeadLetterQueue<Ticked> for FlakyQueue {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
         let failing = {
@@ -405,8 +394,17 @@ impl DeadLetterQueue<Ticked> for FlakyQueue {
         self.inner.first(processor, sequence).await
     }
 
-    async fn remove_first(&self, processor: &str, sequence: &str) -> Result<(), StoreError> {
-        self.inner.remove_first(processor, sequence).await
+    async fn enqueue_in(&self, tx: &mut (), processor: &str, letter: DeadLetter<Ticked>) -> Result<(), StoreError> {
+        let first = self.inner.letters(processor).is_empty();
+        self.inner.enqueue_in(tx, processor, letter).await?;
+        if first {
+            *self.failures_left.lock().unwrap() = 3; // the next lookups fail
+        }
+        Ok(())
+    }
+
+    async fn remove_in(&self, tx: &mut (), processor: &str, letter: &DeadLetter<Ticked>) -> Result<bool, StoreError> {
+        self.inner.remove_in(tx, processor, letter).await
     }
 }
 

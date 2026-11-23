@@ -20,8 +20,7 @@ use super::{
 };
 use crate::{
     Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
-    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalDeadLetters,
-    TransactionalTokenStore, segment_of,
+    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
 };
 
 /// How a [`TrackingProcessor`] splits, claims, reads and retries.
@@ -178,7 +177,7 @@ where
     S: EventStore<E> + Clone + 'static,
     H: EventHandler<E, T::Transaction> + 'static,
     T: TransactionalTokenStore + 'static,
-    D: DeadLetterQueue<E> + TransactionalDeadLetters<E, T::Transaction> + 'static,
+    D: DeadLetterQueue<E, T::Transaction> + 'static,
 {
     /// Replaces the default settings.
     #[must_use]
@@ -188,8 +187,13 @@ where
     }
 
     /// Parks events in `queue` after `after` failed attempts (with the later
-    /// events of their aggregate) instead of retrying forever.
-    pub fn with_dead_letters<D2>(self, queue: D2, after: u32) -> TrackingProcessor<E, S, H, T, D2> {
+    /// events of their aggregate) instead of retrying forever. The queue
+    /// joins the token store's unit of work, so it is the one of that store:
+    /// a queue of another one is refused here.
+    pub fn with_dead_letters<D2>(self, queue: D2, after: u32) -> TrackingProcessor<E, S, H, T, D2>
+    where
+        D2: DeadLetterQueue<E, T::Transaction>,
+    {
         TrackingProcessor {
             name: self.name,
             store: self.store,

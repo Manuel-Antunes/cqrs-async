@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cqrs::{DeadLetter, DeadLetterQueue, StoreError, TransactionalDeadLetters, Upcaster};
+use cqrs::{DeadLetter, DeadLetterQueue, StoreError, Upcaster};
 use serde::de::DeserializeOwned;
 
 use crate::{PgTransaction, PostgresEventStore, backend};
@@ -12,10 +12,14 @@ use crate::{PgTransaction, PostgresEventStore, backend};
 /// store's log, so the event is neither copied nor decoded twice: give the
 /// queue the store the processor reads from.
 ///
-/// Parking happens in the unit of work that moves the processor's token
-/// ([`TransactionalDeadLetters`] over [`PgTransaction`]): a crash right after
-/// parking cannot lose the letter, nor leave the token before it. Parking the
-/// same event twice leaves one letter.
+/// It is the queue of a [`PostgresTokenStore`](crate::PostgresTokenStore): a
+/// letter enters and leaves it in that store's unit of work
+/// ([`PgTransaction`]). Parking commits with the token moving past the
+/// event, so a crash right after parking cannot lose the letter, nor leave
+/// the token before it; a retry removes the letter in the transaction that
+/// applies its event, so the event is applied once even if the process dies
+/// or two retries run at the same time. Parking the same event twice leaves
+/// one letter.
 pub struct PostgresDeadLetters<E, U = ()> {
     /// Where the parked events are read back from.
     store: PostgresEventStore<E, U>,
@@ -37,7 +41,7 @@ impl<E, U> Clone for PostgresDeadLetters<E, U> {
     }
 }
 
-impl<E, U> DeadLetterQueue<E> for PostgresDeadLetters<E, U>
+impl<E, U> DeadLetterQueue<E, PgTransaction> for PostgresDeadLetters<E, U>
 where
     E: DeserializeOwned + Send + Sync,
     U: Upcaster,
@@ -89,25 +93,6 @@ where
         }))
     }
 
-    async fn remove_first(&self, processor: &str, sequence: &str) -> Result<(), StoreError> {
-        sqlx::query!(
-            "DELETE FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2 AND position = \
-             (SELECT min(position) FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2)",
-            processor,
-            sequence,
-        )
-        .execute(self.store.pool())
-        .await
-        .map_err(backend)?;
-        Ok(())
-    }
-}
-
-impl<E, U> TransactionalDeadLetters<E, PgTransaction> for PostgresDeadLetters<E, U>
-where
-    E: DeserializeOwned + Send + Sync,
-    U: Upcaster,
-{
     async fn enqueue_in(
         &self,
         tx: &mut PgTransaction,
@@ -126,5 +111,25 @@ where
         .await
         .map_err(backend)?;
         Ok(())
+    }
+
+    /// Waits for a concurrent removal of the same letter to commit or roll
+    /// back, then reports whether this one removed it.
+    async fn remove_in(
+        &self,
+        tx: &mut PgTransaction,
+        processor: &str,
+        letter: &DeadLetter<E>,
+    ) -> Result<bool, StoreError> {
+        let removed = sqlx::query!(
+            "DELETE FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2 AND position = $3",
+            processor,
+            letter.sequence,
+            i64::try_from(letter.event.position).map_err(backend)?,
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(backend)?;
+        Ok(removed.rows_affected() == 1)
     }
 }

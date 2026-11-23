@@ -17,4 +17,4 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 cqrs.workspace = true
 futures-util.workspace = true
 serde = { version = "1", features = ["derive"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }

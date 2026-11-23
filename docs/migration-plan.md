@@ -342,9 +342,11 @@ e o portão passa.
   `HandlerError(String)` jogam fora o erro original. Guardar
   `Box<dyn Error + Send + Sync>` e expor `source()`. `StoreError` deixa de
   ser `PartialEq`: os testes que comparam erros passam a usar `matches!`.
-- **6.5 Dead letters por `dyn`.** O parâmetro `D` de `TrackingProcessor`
-  existe para um caminho que só roda quando um evento falha. Trocar por um
-  objeto apagado remove um parâmetro de tipo sem tocar no caminho quente.
+- **6.5 Dead letters por `dyn`: descartado.** A fila virou
+  `DeadLetterQueue<E, Tx>`, com `Tx` sendo a transação do token store: a
+  carta entra e sai da fila na unidade de trabalho do processor, e é o tipo
+  que impede combinar uma fila em memória com tokens em banco. Apagar o
+  tipo perderia essa checagem; o parâmetro `D` fica.
 - **6.6 Feature `tokio` (D5).** São 12 `cfg` em `lib.rs` e `unit.rs` para
   um modo cujo único consumidor são testes. Mover o builder com processors
   para dentro do módulo `streaming`, de modo que não sobre `cfg` fora dele.

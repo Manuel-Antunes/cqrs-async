@@ -35,10 +35,25 @@ impl<E> Clone for DeadLetter<E> {
 
 /// Parked events per processor and sequence, oldest first.
 ///
-/// Parking itself is [`TransactionalDeadLetters`].
+/// `Tx` is the unit of work of the processor's token store
+/// ([`TransactionalTokenStore::Transaction`]). A letter enters and leaves the
+/// queue inside one: parked in the unit of work that moves the token past
+/// its event, removed in the one that applies it. So a crash can neither lose
+/// a letter nor apply its event twice, and a queue only fits the token store
+/// whose unit of work it joins: `InMemoryDeadLetters` goes with
+/// `InMemoryTokenStore` (`Tx = ()`), not with a database's, where its
+/// letters would be lost on restart with the tokens already past them.
+///
+/// ```compile_fail,E0277
+/// use cqrs::{DeadLetterQueue, InMemoryDeadLetters};
+/// /// A database's unit of work.
+/// struct SqlTransaction;
+/// fn parks_in<Q: DeadLetterQueue<u8, SqlTransaction>>(_: Q) {}
+/// parks_in(InMemoryDeadLetters::<u8>::default());
+/// ```
 ///
 /// Implemented for `()`: no queue, nothing is ever parked.
-pub trait DeadLetterQueue<E>: Send + Sync {
+pub trait DeadLetterQueue<E, Tx = ()>: Send + Sync {
     /// Whether `sequence` has parked events (later events must queue behind).
     fn contains(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
@@ -52,17 +67,6 @@ pub trait DeadLetterQueue<E>: Send + Sync {
         sequence: &str,
     ) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send;
 
-    /// Removes the oldest parked event of `sequence` (after it was handled).
-    fn remove_first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
-}
-
-/// A dead-letter queue that parks within the unit of work of the processor's
-/// token store (`Tx` is its
-/// [`TransactionalTokenStore::Transaction`]): the processor parks an event
-/// and moves its token in that one unit of work, so a crash can neither lose
-/// the letter nor leave the token behind it. A queue that is not
-/// transactional (the in-memory one) accepts any `Tx` and ignores it.
-pub trait TransactionalDeadLetters<E, Tx>: DeadLetterQueue<E> {
     /// Parks `letter` at the end of its sequence, within `tx`. Parking the
     /// same event again (after a crash that lost the token move, say) leaves
     /// one letter.
@@ -72,9 +76,19 @@ pub trait TransactionalDeadLetters<E, Tx>: DeadLetterQueue<E> {
         processor: &str,
         letter: DeadLetter<E>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Removes `letter` within `tx`, once its event was handled there.
+    /// `false`: it is no longer parked (another retry handled it), and the
+    /// caller must roll `tx` back so the event is not applied twice.
+    fn remove_in(
+        &self,
+        tx: &mut Tx,
+        processor: &str,
+        letter: &DeadLetter<E>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 }
 
-impl<E: Send + Sync> DeadLetterQueue<E> for () {
+impl<E: Send + Sync, Tx: Send> DeadLetterQueue<E, Tx> for () {
     async fn contains(&self, _: &str, _: &str) -> Result<bool, StoreError> {
         Ok(false)
     }
@@ -87,14 +101,12 @@ impl<E: Send + Sync> DeadLetterQueue<E> for () {
         Ok(None)
     }
 
-    async fn remove_first(&self, _: &str, _: &str) -> Result<(), StoreError> {
-        Ok(())
-    }
-}
-
-impl<E: Send + Sync, Tx: Send> TransactionalDeadLetters<E, Tx> for () {
     async fn enqueue_in(&self, _: &mut Tx, processor: &str, _: DeadLetter<E>) -> Result<(), StoreError> {
         Err(StoreError::Backend(format!("{processor} has no dead-letter queue")))
+    }
+
+    async fn remove_in(&self, _: &mut Tx, _: &str, _: &DeadLetter<E>) -> Result<bool, StoreError> {
+        Ok(false)
     }
 }
 
@@ -142,6 +154,9 @@ impl<E> InMemoryDeadLetters<E> {
     }
 }
 
+/// In memory there is no unit of work to join (`Tx = ()`, the one of
+/// [`InMemoryTokenStore`](crate::InMemoryTokenStore)): parking and removing
+/// are immediate, and lost with the tokens when the process ends.
 impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
         let letters = self.letters.lock().expect("dead letters poisoned");
@@ -164,33 +179,31 @@ impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
             .and_then(|queue| queue.first().cloned()))
     }
 
-    async fn remove_first(&self, processor: &str, sequence: &str) -> Result<(), StoreError> {
-        let mut letters = self.letters.lock().expect("dead letters poisoned");
-        let key = (processor.to_owned(), sequence.to_owned());
-        if let Some(queue) = letters.get_mut(&key) {
-            if !queue.is_empty() {
-                queue.remove(0);
-            }
-            if queue.is_empty() {
-                letters.remove(&key);
-            }
-        }
-        Ok(())
-    }
-}
-
-/// In memory there is no unit of work to join: parking is immediate.
-impl<E: Send + Sync, Tx: Send> TransactionalDeadLetters<E, Tx> for InMemoryDeadLetters<E> {
-    async fn enqueue_in(&self, _: &mut Tx, processor: &str, letter: DeadLetter<E>) -> Result<(), StoreError> {
+    async fn enqueue_in(&self, (): &mut (), processor: &str, letter: DeadLetter<E>) -> Result<(), StoreError> {
         self.enqueue(processor, letter);
         Ok(())
+    }
+
+    async fn remove_in(&self, (): &mut (), processor: &str, letter: &DeadLetter<E>) -> Result<bool, StoreError> {
+        let mut letters = self.letters.lock().expect("dead letters poisoned");
+        let key = (processor.to_owned(), letter.sequence.clone());
+        let Some(queue) = letters.get_mut(&key) else {
+            return Ok(false);
+        };
+        let parked = queue.len();
+        queue.retain(|other| other.event.position != letter.event.position);
+        let removed = queue.len() < parked;
+        if queue.is_empty() {
+            letters.remove(&key);
+        }
+        Ok(removed)
     }
 }
 
 /// A shared dead-letter queue is a dead-letter queue.
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
-impl<E, Q: DeadLetterQueue<E>> DeadLetterQueue<E> for Arc<Q> {
+impl<E, Tx, Q: DeadLetterQueue<E, Tx>> DeadLetterQueue<E, Tx> for Arc<Q> {
     fn contains(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<bool, StoreError>> + Send {
         (**self).contains(processor, sequence)
     }
@@ -207,15 +220,6 @@ impl<E, Q: DeadLetterQueue<E>> DeadLetterQueue<E> for Arc<Q> {
         (**self).first(processor, sequence)
     }
 
-    fn remove_first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<(), StoreError>> + Send {
-        (**self).remove_first(processor, sequence)
-    }
-}
-
-/// A shared transactional dead-letter queue is one.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<E, Tx, Q: TransactionalDeadLetters<E, Tx>> TransactionalDeadLetters<E, Tx> for Arc<Q> {
     fn enqueue_in(
         &self,
         tx: &mut Tx,
@@ -223,6 +227,15 @@ impl<E, Tx, Q: TransactionalDeadLetters<E, Tx>> TransactionalDeadLetters<E, Tx> 
         letter: DeadLetter<E>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send {
         (**self).enqueue_in(tx, processor, letter)
+    }
+
+    fn remove_in(
+        &self,
+        tx: &mut Tx,
+        processor: &str,
+        letter: &DeadLetter<E>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        (**self).remove_in(tx, processor, letter)
     }
 }
 
@@ -241,9 +254,11 @@ pub struct RetryOutcome {
 /// the processor uses (or [`TrackingProcessor::retry_dead_letters`]).
 ///
 /// Each event runs in its own unit of work from `units`, as in the
-/// processor: `handle`, commit, then `committed`. A failure rolls its
-/// changes back. The letter is removed after the commit, so a crash in
-/// between handles it again: at least once, like any processor.
+/// processor: `handle`, the letter's removal, commit, then `committed`. A
+/// failure rolls its changes back and the letter stays. The removal commits
+/// with what the handler wrote: with a transactional token store, a crash
+/// (or another retry running at the same time) never applies a parked event
+/// twice, nor removes one that was not handled.
 ///
 /// # Errors
 ///
@@ -258,7 +273,7 @@ pub async fn retry_dead_letters<E, Q, T, H>(
 ) -> Result<RetryOutcome, StoreError>
 where
     E: DomainEvent,
-    Q: DeadLetterQueue<E>,
+    Q: DeadLetterQueue<E, T::Transaction>,
     T: TransactionalTokenStore,
     H: EventHandler<E, T::Transaction>,
 {
@@ -274,9 +289,13 @@ where
                 outcome.still_parked += 1;
                 break; // dropping `tx` rolls back
             }
+            if !queue.remove_in(&mut tx, processor, &letter).await? {
+                // Another retry handled it meanwhile: dropping `tx` undoes
+                // what this one did, and the next letter is looked up again.
+                continue;
+            }
             units.commit(tx).await?;
             handler.committed(&letter.event).await;
-            queue.remove_first(processor, &sequence).await?;
             outcome.handled += 1;
         }
     }

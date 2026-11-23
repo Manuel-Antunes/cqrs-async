@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2 AND position = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf9c445610cc6403c1f4dce1d467a465b1442ccfd0f999318f3cc6b204e39ef1"
+}

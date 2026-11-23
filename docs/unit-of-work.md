@@ -184,9 +184,10 @@ interceptors).
 
 `processor.retry_dead_letters()` (or
 `retry_dead_letters(queue, name, &token_store, &handler)`) runs each parked
-event in a unit of work like the processor's: begin, `handle`, commit,
-`committed`. A failure rolls back and leaves the sequence parked. The
-letter is removed after the commit: a crash in between handles it again.
+event in a unit of work like the processor's: begin, `handle`, the letter's
+removal, commit, `committed`. A failure rolls back and leaves the sequence
+parked. The removal commits with what the handler wrote: neither a crash nor
+a second retry running at the same time applies a parked event twice.
 
 ### Inline processing
 

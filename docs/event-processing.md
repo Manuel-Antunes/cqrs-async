@@ -127,26 +127,28 @@ let outcome = events
 Each sequence is retried oldest first, each event in a unit of work, and
 stops at its first failure.
 
-Two queues are provided. `InMemoryDeadLetters` is lost when the process
-ends: with a durable token store the token moves past a parked event, so the
-event would never be handled again. `PostgresDeadLetters::new(store)`
-(table `cqrs_dead_letters`) keeps the letters in the database:
+Two queues are provided, one per token store. `InMemoryDeadLetters` goes
+with `InMemoryTokenStore`: both are lost when the process ends. With a
+durable token store the token moves past a parked event, so a queue in
+memory would lose the event for good: the compiler refuses that pair.
+`PostgresDeadLetters::new(store)` (table `cqrs_dead_letters`) goes with
+`PostgresTokenStore` and keeps the letters in the database:
 
 ```rust
 let queue = PostgresDeadLetters::new(store.clone());   // the store the processor reads
 events.projection(..).with_dead_letters(queue, 5).spawn();
 ```
 
-Parking happens in the same unit of work as the token move
-(`TransactionalDeadLetters::enqueue_in` over the token store's transaction),
-so a crash cannot lose a letter or leave the token behind it, and parking the
-same event twice leaves one letter. A new process finds the letters and
+A letter enters and leaves the queue in the token store's unit of work.
+Parking (`enqueue_in`) commits with the token move, so a crash cannot lose a
+letter or leave the token behind it, and parking the same event twice leaves
+one letter. A retry removes the letter (`remove_in`) in the transaction that
+applies its event, so the event is applied once, even if the process dies or
+two retries run at the same time. A new process finds the letters and
 `retry_dead_letters` handles them. If the queue cannot answer whether an
 aggregate is parked, the processor waits and asks again (backoff) rather
-than handling the event ahead of the parked ones. Your own durable queue
-implements `DeadLetterQueue<E>` (lookups) and
-`TransactionalDeadLetters<E, Tx>` (parking), where `Tx` is your token
-store's transaction.
+than handling the event ahead of the parked ones. Your own queue implements
+`DeadLetterQueue<E, Tx>`, where `Tx` is your token store's transaction.
 
 ## Subscriptions
 
