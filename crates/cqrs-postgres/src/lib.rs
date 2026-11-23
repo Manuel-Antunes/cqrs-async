@@ -77,8 +77,7 @@ use cqrs::StoreError;
 use sqlx::PgPool;
 
 /// Creates the tables (idempotent): `cqrs_events`, `cqrs_event_tags`,
-/// `cqrs_consistency`, `cqrs_head`, `cqrs_snapshots`, `cqrs_tokens`,
-/// `cqrs_dead_letters`.
+/// `cqrs_snapshots`, `cqrs_tokens`, `cqrs_dead_letters`.
 ///
 /// # Errors
 ///
@@ -93,10 +92,6 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
 const SCHEMA: &str = concat!(
     "SELECT pg_advisory_xact_lock(7239048102394);\n",
     include_str!("../migrations/0001_cqrs.sql"),
-    include_str!("../migrations/0002_parallel_appends.sql"),
-    include_str!("../migrations/0003_json_payloads.sql"),
-    include_str!("../migrations/0004_event_logs.sql"),
-    include_str!("../migrations/0005_dead_letters.sql"),
 );
 
 /// Any database failure, as the core sees it.

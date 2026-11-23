@@ -8,8 +8,6 @@
 
 use std::{borrow::Cow, fmt};
 
-use crate::{DomainEvent, EventEnvelope};
-
 /// A label on an event (`course=42`), what [`EventCriteria`] select by.
 /// Derived with `#[derive(TagResolver)]` and `#[tag]` on event fields.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -119,19 +117,6 @@ impl EventCriteria {
     pub fn or(mut self, other: Self) -> Self {
         self.criteria.extend(other.criteria);
         self
-    }
-
-    /// Whether an event of `event_type` with `tags` matches.
-    pub fn matches(&self, event_type: &str, tags: &[Tag]) -> bool {
-        self.criteria.iter().any(|criterion| {
-            (criterion.types.is_empty() || criterion.types.contains(&event_type))
-                && criterion.tags.iter().all(|tag| tags.contains(tag))
-        })
-    }
-
-    /// Whether a committed `event` matches.
-    pub fn matches_event<E: DomainEvent>(&self, event: &EventEnvelope<E>) -> bool {
-        self.matches(&event.event_type, &event.payload.tags())
     }
 }
 
