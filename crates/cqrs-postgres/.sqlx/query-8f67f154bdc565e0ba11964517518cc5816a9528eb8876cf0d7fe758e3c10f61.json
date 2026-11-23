@@ -1,0 +1,110 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload::text AS \"payload!\", metadata::text AS \"metadata!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE position IN (SELECT t.position FROM cqrs_event_tags t WHERE t.tag = ($1::text[])[1] AND (SELECT count(*) FROM cqrs_event_tags o WHERE o.position = t.position AND o.tag = ANY($1)) = cardinality($1)) AND (cardinality($2::text[]) = 0 OR event_type = ANY($2)) ORDER BY position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "stream_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "stream_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "stream_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sequence",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "event_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "event_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "event_version"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "payload!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "metadata!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "recorded_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8f67f154bdc565e0ba11964517518cc5816a9528eb8876cf0d7fe758e3c10f61"
+}

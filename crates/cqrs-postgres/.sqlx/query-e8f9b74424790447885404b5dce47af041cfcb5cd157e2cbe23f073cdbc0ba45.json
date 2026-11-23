@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cqrs_lock($1, '{}')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cqrs_lock",
+        "type_info": "Void",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e8f9b74424790447885404b5dce47af041cfcb5cd157e2cbe23f073cdbc0ba45"
+}

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT position, gaps, gap_horizons FROM cqrs_tokens WHERE processor = $1 ORDER BY segment",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "gaps",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "gaps"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "gap_horizons",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "gap_horizons"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e539cbcbf4f9a36174991b047fb962a66ad41eaa36b6dc6579826e7e3029a472"
+}

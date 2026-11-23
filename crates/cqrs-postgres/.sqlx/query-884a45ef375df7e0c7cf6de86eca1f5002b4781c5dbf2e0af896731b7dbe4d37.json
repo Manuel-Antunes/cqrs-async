@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE cqrs_tokens SET owner = $3, claimed_until = now() + make_interval(secs => $4::float8 / 1000.0) WHERE processor = $1 AND segment = $2 AND (owner IS NULL OR owner = $3 OR claimed_until < now()) RETURNING position, gaps, gap_horizons",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "gaps",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "gaps"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "gap_horizons",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "cqrs_tokens",
+            "name": "gap_horizons"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "884a45ef375df7e0c7cf6de86eca1f5002b4781c5dbf2e0af896731b7dbe4d37"
+}

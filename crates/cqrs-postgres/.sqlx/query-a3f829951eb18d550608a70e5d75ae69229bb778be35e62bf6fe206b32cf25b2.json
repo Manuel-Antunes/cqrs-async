@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS \"xmin!\",\n                   pg_snapshot_xmax(pg_current_snapshot())::text::bigint AS \"xmax!\",\n                   array(SELECT p FROM generate_series(greatest($1::bigint - $2::bigint, 0) + 1, $1::bigint) AS p\n                         WHERE NOT EXISTS (SELECT 1 FROM cqrs_events WHERE position = p)) AS \"missing!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xmin!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "xmax!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "missing!",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a3f829951eb18d550608a70e5d75ae69229bb778be35e62bf6fe206b32cf25b2"
+}

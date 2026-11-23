@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO cqrs_tokens (processor, segment) SELECT $1, generate_series(0, $2 - 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4b9a24359955a157582b258573952ba05e23888c01afc1c988585c8cd4a872bd"
+}
