@@ -221,8 +221,12 @@ where
     /// The aggregate of the stream `id`: from its newest snapshot, if any,
     /// then the events after it.
     async fn load_stream(&self, id: &A::Id) -> Result<Option<Loaded<A>>, StoreError> {
-        // A failing snapshot store only costs a full replay.
-        let snapshot = self.snapshots.load(id).await.ok().flatten();
+        // A failing snapshot store only costs a full replay, but one that
+        // keeps failing costs it on every load: say so.
+        let snapshot = self.snapshots.load(id).await.unwrap_or_else(|error| {
+            tracing::warn!(aggregate = A::TYPE, %error, "cannot read the snapshot, replaying the whole stream");
+            None
+        });
         let (mut aggregate, mut version) = snapshot.unwrap_or_else(|| (A::initial(id), 0));
         let tail = self.store.load(&StreamId::of::<A>(id), version).await?;
         if version == 0 && tail.is_empty() {
@@ -234,7 +238,9 @@ where
         }
         if self.snapshot_every > 0 && tail.len() as u64 >= self.snapshot_every {
             // A failed snapshot only means a longer replay next time.
-            let _ = self.snapshots.save(&aggregate, version).await;
+            if let Err(error) = self.snapshots.save(&aggregate, version).await {
+                tracing::warn!(aggregate = A::TYPE, version, %error, "cannot keep the snapshot");
+            }
         }
         Ok(Some(Loaded {
             aggregate,
