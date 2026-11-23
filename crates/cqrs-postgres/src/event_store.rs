@@ -145,7 +145,9 @@ where
             .map_err(backend)?;
         for criterion in &condition.criteria.criteria {
             let (tags, types) = bind_criterion(criterion);
-            let failed = condition_failed(&mut tx, &tags, &types, to_i64(condition.after)).await.map_err(backend)?;
+            let failed = condition_failed(&mut tx, &tags, &types, to_i64(condition.after))
+                .await
+                .map_err(backend)?;
             if failed {
                 return Err(StoreError::ConditionFailed);
             }
@@ -166,16 +168,22 @@ where
         // and any later one takes a position above the head read here.
         let exclusive = criteria_keys(criteria)?;
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        sqlx::query!("SELECT cqrs_lock($1, '{}')", &exclusive).fetch_one(&mut *tx).await.map_err(backend)?;
+        sqlx::query!("SELECT cqrs_lock($1, '{}')", &exclusive)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(backend)?;
         let mut rows = Vec::new();
         for criterion in &criteria.criteria {
             let (tags, types) = bind_criterion(criterion);
             let matching = if tags.is_empty() {
                 // shortcut: no index on event_type, so this reads the whole
                 // log; add one if tag-less criteria become common.
-                select_events!("(cardinality($1::text[]) = 0 OR event_type = ANY($1)) ORDER BY position", &types)
-                    .fetch_all(&mut *tx)
-                    .await
+                select_events!(
+                    "(cardinality($1::text[]) = 0 OR event_type = ANY($1)) ORDER BY position",
+                    &types
+                )
+                .fetch_all(&mut *tx)
+                .await
             } else {
                 // Positions of the events carrying every tag: walks the first
                 // tag's entries (an index range, in position order) and checks
@@ -196,7 +204,10 @@ where
         let head = head(&mut *tx).await?;
         tx.commit().await.map_err(backend)?;
 
-        let mut events = rows.into_iter().map(|row| envelope(row, &*self.upcaster)).collect::<Result<Vec<_>, _>>()?;
+        let mut events = rows
+            .into_iter()
+            .map(|row| envelope(row, &*self.upcaster))
+            .collect::<Result<Vec<_>, _>>()?;
         // Several criteria may match the same event.
         events.sort_unstable_by_key(|event| event.position);
         events.dedup_by_key(|event| event.position);
@@ -293,8 +304,14 @@ where
         .fetch_one(&self.pool)
         .await
         .map_err(backend)?;
-        let horizon = Horizon { finished_below: row.xmin as u64, started_below: row.xmax as u64 };
-        let gaps = row.missing.into_iter().map(|missing| Gap { position: missing as u64, horizon: horizon.started_below });
+        let horizon = Horizon {
+            finished_below: row.xmin as u64,
+            started_below: row.xmax as u64,
+        };
+        let gaps = row.missing.into_iter().map(|missing| Gap {
+            position: missing as u64,
+            horizon: horizon.started_below,
+        });
         let mut cursor = Cursor::new(position, gaps);
         cursor.settle(&horizon, |_| false);
         Ok(cursor)
@@ -423,12 +440,18 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
     .await;
     match result {
         // Nothing inserted: the version check refused the append.
-        Ok(rows) if rows.is_empty() => Err(StoreError::Conflict { stream: stream.clone(), expected, actual: None }),
+        Ok(rows) if rows.is_empty() => Err(StoreError::Conflict {
+            stream: stream.clone(),
+            expected,
+            actual: None,
+        }),
         Ok(rows) => Ok(rows),
         // A concurrent append to this stream won (see above).
-        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
-            Err(StoreError::Conflict { stream: stream.clone(), expected, actual: None })
-        }
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => Err(StoreError::Conflict {
+            stream: stream.clone(),
+            expected,
+            actual: None,
+        }),
         Err(error) => Err(backend(error)),
     }
 }
@@ -494,7 +517,9 @@ fn criteria_keys(criteria: &EventCriteria) -> Result<Vec<i64>, StoreError> {
         .map(|criterion| match (criterion.tags.first(), criterion.types.is_empty()) {
             (Some(tag), _) => Ok(vec![key("tag", &tag.to_string())]),
             (None, false) => Ok(criterion.types.iter().map(|name| key("type", name)).collect()),
-            (None, true) => Err(StoreError::Backend("a criterion must name a tag or an event type".to_owned())),
+            (None, true) => Err(StoreError::Backend(
+                "a criterion must name a tag or an event type".to_owned(),
+            )),
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|keys| keys.concat())
@@ -619,27 +644,44 @@ mod tests {
             Tagged(vec![Tag::new("room", 1)]),
         ];
         let batch: Vec<_> = batch.into_iter().map(TaggedEvent::new).collect();
-        assert_eq!(EventTags::of(&batch), EventTags {
-            tags: vec!["floor=2".into(), "room=1".into(), "room=1".into()],
-            events: vec![1, 1, 3],
-        });
+        assert_eq!(
+            EventTags::of(&batch),
+            EventTags {
+                tags: vec!["floor=2".into(), "room=1".into(), "room=1".into()],
+                events: vec![1, 1, 3],
+            }
+        );
     }
 
     #[test]
     fn an_append_locks_its_tags_and_types_and_a_criterion_one_tag_or_its_types() {
-        let batch = [Tagged(vec![Tag::new("room", 1)]), Tagged(vec![Tag::new("room", 1), Tag::new("floor", 2)])];
+        let batch = [
+            Tagged(vec![Tag::new("room", 1)]),
+            Tagged(vec![Tag::new("room", 1), Tag::new("floor", 2)]),
+        ];
         let mut expected = vec![key("tag", "room=1"), key("tag", "floor=2"), key("type", "tagged")];
         expected.sort_unstable();
         let batch: Vec<_> = batch.into_iter().map(TaggedEvent::new).collect();
         assert_eq!(write_keys(&batch), expected);
         let criteria = EventCriteria {
             criteria: vec![
-                cqrs::Criterion { types: vec![], tags: vec![Tag::new("room", 1), Tag::new("floor", 2)] },
-                cqrs::Criterion { types: vec!["a", "b"], tags: vec![] },
+                cqrs::Criterion {
+                    types: vec![],
+                    tags: vec![Tag::new("room", 1), Tag::new("floor", 2)],
+                },
+                cqrs::Criterion {
+                    types: vec!["a", "b"],
+                    tags: vec![],
+                },
             ],
         };
         let keys = criteria_keys(&criteria).unwrap();
         assert_eq!(keys.len(), 3, "one tag, then both types");
-        assert!(criteria_keys(&EventCriteria { criteria: vec![cqrs::Criterion::default()] }).is_err());
+        assert!(
+            criteria_keys(&EventCriteria {
+                criteria: vec![cqrs::Criterion::default()]
+            })
+            .is_err()
+        );
     }
 }

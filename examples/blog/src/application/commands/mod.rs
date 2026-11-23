@@ -3,10 +3,10 @@
 
 /// Drafting a new post.
 mod create_post;
-/// Making a draft public.
-mod publish_post;
 /// Where the handlers find posts (a port).
 mod post_repository;
+/// Making a draft public.
+mod publish_post;
 /// Renaming a draft.
 mod retitle_post;
 

@@ -32,7 +32,12 @@ use crate::{
 /// `impl<C: Command> Interceptor<C> for RequireUser where C::Error: From<Unauthorized>`.
 pub trait Interceptor<M: Message>: Send + Sync {
     /// Handles `message` by calling `next` with it (or not).
-    fn intercept<N, F>(&self, message: M, metadata: Metadata, next: N) -> impl Future<Output = Result<M::Output, M::Error>> + Send
+    fn intercept<N, F>(
+        &self,
+        message: M,
+        metadata: Metadata,
+        next: N,
+    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send
     where
         N: FnOnce(M, Metadata) -> F + Send,
         F: Future<Output = Result<M::Output, M::Error>> + Send;
@@ -237,9 +242,14 @@ where
     G: Dispatch<M>,
     I: Interceptor<M>,
 {
-    fn dispatch_with(&self, message: M, metadata: Metadata) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
-        self.interceptor
-            .intercept(message, metadata, |message, metadata| self.inner.dispatch_with(message, metadata))
+    fn dispatch_with(
+        &self,
+        message: M,
+        metadata: Metadata,
+    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
+        self.interceptor.intercept(message, metadata, |message, metadata| {
+            self.inner.dispatch_with(message, metadata)
+        })
     }
 }
 
@@ -260,7 +270,14 @@ where
         event: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send {
-        self.interceptor.intercept(event, context, Handle { handler: &self.inner, event })
+        self.interceptor.intercept(
+            event,
+            context,
+            Handle {
+                handler: &self.inner,
+                event,
+            },
+        )
     }
 
     fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
@@ -271,11 +288,24 @@ where
         self.inner.reset(context)
     }
 
-    async fn handle_in(&self, event: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
+    async fn handle_in(
+        &self,
+        event: &EventEnvelope<E>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> Result<(), HandlerError> {
         if context.replay() && !H::REPLAY {
             return Ok(());
         }
-        self.interceptor.intercept(event, context, HandleIn { handler: &self.inner, event }).await
+        self.interceptor
+            .intercept(
+                event,
+                context,
+                HandleIn {
+                    handler: &self.inner,
+                    event,
+                },
+            )
+            .await
     }
 
     fn committed_in(&self, event: &EventEnvelope<E>, replay: bool) -> impl Future<Output = ()> + Send {

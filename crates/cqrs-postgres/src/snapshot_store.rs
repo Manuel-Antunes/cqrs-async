@@ -27,7 +27,11 @@ impl<A> PostgresSnapshotStore<A> {
     /// A store over `pool`, whose schema [`migrate`](crate::migrate)
     /// created, at revision 1.
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, revision: 1, aggregate: PhantomData }
+        Self {
+            pool,
+            revision: 1,
+            aggregate: PhantomData,
+        }
     }
 
     /// Reads and writes snapshots of shape `revision` only.
@@ -40,7 +44,11 @@ impl<A> PostgresSnapshotStore<A> {
 
 impl<A> Clone for PostgresSnapshotStore<A> {
     fn clone(&self) -> Self {
-        Self { pool: self.pool.clone(), revision: self.revision, aggregate: PhantomData }
+        Self {
+            pool: self.pool.clone(),
+            revision: self.revision,
+            aggregate: PhantomData,
+        }
     }
 }
 

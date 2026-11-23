@@ -21,7 +21,13 @@ fn handle(item: &ItemImpl) -> Result<&ImplItemFn> {
 
 /// The type of the `index`-th argument after `&self`.
 fn argument(method: &ImplItemFn, index: usize, expected: &str) -> Result<Type> {
-    match method.sig.inputs.iter().filter(|input| matches!(input, FnArg::Typed(_))).nth(index) {
+    match method
+        .sig
+        .inputs
+        .iter()
+        .filter(|input| matches!(input, FnArg::Typed(_)))
+        .nth(index)
+    {
         Some(FnArg::Typed(argument)) => Ok((*argument.ty).clone()),
         _ => Err(Error::new(method.sig.span(), format!("`handle` needs {expected}"))),
     }
@@ -29,7 +35,9 @@ fn argument(method: &ImplItemFn, index: usize, expected: &str) -> Result<Type> {
 
 /// Whether `item` already declares the associated type `name`.
 fn declares(item: &ItemImpl, name: &str) -> bool {
-    item.items.iter().any(|item| matches!(item, ImplItem::Type(ty) if ty.ident == name))
+    item.items
+        .iter()
+        .any(|item| matches!(item, ImplItem::Type(ty) if ty.ident == name))
 }
 
 /// `#[command_handler]` on `impl CommandHandler for H`: the command is the
@@ -42,16 +50,32 @@ pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
     let krate = crate::krate();
     let method = handle_mut(&mut item)?;
     let command = match argument(method, 0, "a `&Command` argument")? {
-        Type::Reference(TypeReference { elem, mutability: None, .. }) => *elem,
-        other => return Err(Error::new(other.span(), "expected `&Command`: the handler may run again after a lost race")),
+        Type::Reference(TypeReference {
+            elem, mutability: None, ..
+        }) => *elem,
+        other => {
+            return Err(Error::new(
+                other.span(),
+                "expected `&Command`: the handler may run again after a lost race",
+            ));
+        }
     };
     let appender = argument(method, 1, "an `events: &mut Appender<Event>` argument")?;
     let (event, publisher) = appender_arguments(&appender)?;
     if publisher.is_none() {
         // `Appender<Event>` → `Appender<Event, __P>`, `handle<__P: EventPublisher<Event>>`.
-        method.sig.generics.params.push(parse_quote!(__P: #krate::EventPublisher<#event>));
+        method
+            .sig
+            .generics
+            .params
+            .push(parse_quote!(__P: #krate::EventPublisher<#event>));
         // The path as written (so its import stays used), one argument more.
-        if let Some(FnArg::Typed(argument)) = method.sig.inputs.iter_mut().filter(|input| matches!(input, FnArg::Typed(_))).nth(1)
+        if let Some(FnArg::Typed(argument)) = method
+            .sig
+            .inputs
+            .iter_mut()
+            .filter(|input| matches!(input, FnArg::Typed(_)))
+            .nth(1)
             && let Type::Reference(reference) = &mut *argument.ty
             && let Type::Path(path) = &mut *reference.elem
             && let Some(segment) = path.path.segments.last_mut()
@@ -84,13 +108,23 @@ fn handle_mut(item: &mut ItemImpl) -> Result<&mut ImplItemFn> {
 /// `E` (and `P`, if written) in `&mut Appender<E>` / `&mut Appender<E, P>`.
 fn appender_arguments(ty: &Type) -> Result<(Type, Option<Type>)> {
     let error = || Error::new(ty.span(), "expected `&mut Appender<Event>`");
-    let Type::Reference(TypeReference { elem, mutability: Some(_), .. }) = ty else {
+    let Type::Reference(TypeReference {
+        elem,
+        mutability: Some(_),
+        ..
+    }) = ty
+    else {
         return Err(error());
     };
     let Type::Path(path) = &**elem else {
         return Err(error());
     };
-    let segment = path.path.segments.last().filter(|segment| segment.ident == "Appender").ok_or_else(error)?;
+    let segment = path
+        .path
+        .segments
+        .last()
+        .filter(|segment| segment.ident == "Appender")
+        .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(error());
     };

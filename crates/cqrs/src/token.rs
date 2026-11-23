@@ -46,7 +46,12 @@ pub trait TokenStore: Send + Sync {
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     /// Gives `segment` up, if `owner` holds it.
-    fn release(&self, processor: &str, segment: u32, owner: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
+    fn release(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The stored cursor of each of `processor`'s segments, whoever owns
     /// them: the event at a position was handled, by some instance, once
@@ -57,7 +62,12 @@ pub trait TokenStore: Send + Sync {
     /// events up to `replay_until` as a replay, unless some segment is
     /// claimed (a claim expired before `now` does not count). `false`: an
     /// instance still runs it.
-    fn reset(&self, processor: &str, now: u64, replay_until: u64) -> impl Future<Output = Result<bool, StoreError>> + Send;
+    fn reset(
+        &self,
+        processor: &str,
+        now: u64,
+        replay_until: u64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     /// Up to where events are a replay since the last [`reset`](Self::reset)
     /// (0: never reset).
@@ -150,7 +160,14 @@ impl TokenStore for InMemoryTokenStore {
         Ok(tokens.len() as u32)
     }
 
-    async fn claim(&self, processor: &str, segment: u32, owner: &str, now: u64, until: u64) -> Result<Option<Cursor>, StoreError> {
+    async fn claim(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+        now: u64,
+        until: u64,
+    ) -> Result<Option<Cursor>, StoreError> {
         self.with(processor, segment, |token| {
             let free = match &token.claim {
                 None => true,
@@ -190,10 +207,17 @@ impl TokenStore for InMemoryTokenStore {
         let Some(tokens) = processors.get_mut(processor) else {
             return Ok(true);
         };
-        if tokens.iter().any(|token| token.claim.as_ref().is_some_and(|(_, until)| *until >= now)) {
+        if tokens
+            .iter()
+            .any(|token| token.claim.as_ref().is_some_and(|(_, until)| *until >= now))
+        {
             return Ok(false);
         }
-        tokens.fill(Token { cursor: Cursor::default(), claim: None, replay_until });
+        tokens.fill(Token {
+            cursor: Cursor::default(),
+            claim: None,
+            replay_until,
+        });
         Ok(true)
     }
 
@@ -223,11 +247,22 @@ impl<T: TokenStore> TokenStore for std::sync::Arc<T> {
         (**self).claim(processor, segment, owner, now, until)
     }
 
-    fn store(&self, processor: &str, segment: u32, owner: &str, cursor: &Cursor) -> impl Future<Output = Result<bool, StoreError>> + Send {
+    fn store(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+        cursor: &Cursor,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
         (**self).store(processor, segment, owner, cursor)
     }
 
-    fn release(&self, processor: &str, segment: u32, owner: &str) -> impl Future<Output = Result<(), StoreError>> + Send {
+    fn release(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
         (**self).release(processor, segment, owner)
     }
 
@@ -235,7 +270,12 @@ impl<T: TokenStore> TokenStore for std::sync::Arc<T> {
         (**self).cursors(processor)
     }
 
-    fn reset(&self, processor: &str, now: u64, replay_until: u64) -> impl Future<Output = Result<bool, StoreError>> + Send {
+    fn reset(
+        &self,
+        processor: &str,
+        now: u64,
+        replay_until: u64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
         (**self).reset(processor, now, replay_until)
     }
 
@@ -266,8 +306,14 @@ impl crate::TransactionalTokenStore for InMemoryTokenStore {
     }
 
     async fn store_in(&self, _: &mut (), token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
-        let owned = self.store(token.processor, token.segment, token.owner, token.cursor).await?;
-        Ok(if owned { TokenUpdate::Stored } else { TokenUpdate::ClaimLost })
+        let owned = self
+            .store(token.processor, token.segment, token.owner, token.cursor)
+            .await?;
+        Ok(if owned {
+            TokenUpdate::Stored
+        } else {
+            TokenUpdate::ClaimLost
+        })
     }
 
     async fn commit(&self, (): ()) -> Result<(), StoreError> {

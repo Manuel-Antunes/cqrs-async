@@ -10,10 +10,9 @@ use std::{
 };
 
 use cqrs::{
-    ProcessingContext,
-    Aggregate, EventEnvelope, EventHandler, EventSourced, Events, HandlerError,
-    InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, StreamId,
-    TrackingOptions, retry_dead_letters, segment_of,
+    Aggregate, EventEnvelope, EventHandler, EventSourced, Events, HandlerError, InMemoryDeadLetters,
+    InMemoryEventStore, InMemoryTokenStore, Loaded, ProcessingContext, StreamId, TrackingOptions, retry_dead_letters,
+    segment_of,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -54,7 +53,11 @@ impl World {
     fn new() -> Self {
         let tokens = Arc::new(InMemoryTokenStore::default());
         let events = Events::new(Arc::new(InMemoryEventStore::new())).with_tokens(Arc::clone(&tokens));
-        Self { clocks: events.event_sourced(), events, tokens }
+        Self {
+            clocks: events.event_sourced(),
+            events,
+            tokens,
+        }
     }
 
     /// One more tick on clock `id`; returns the event's position.
@@ -93,7 +96,10 @@ struct Recorder {
 
 impl Recorder {
     fn poisoned(stream: String) -> Self {
-        Self { poison: Mutex::new(Some(stream)), ..Self::default() }
+        Self {
+            poison: Mutex::new(Some(stream)),
+            ..Self::default()
+        }
     }
 
     fn heal(&self) {
@@ -165,8 +171,16 @@ async fn segments_keep_each_aggregate_in_order_and_handle_everything_once() {
 async fn two_instances_share_the_segments_without_handling_an_event_twice() {
     let world = World::new();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
-    let a = world.events.processor("shared", Arc::clone(&first)).with_options(World::options(4, 2)).spawn();
-    let b = world.events.processor("shared", Arc::clone(&second)).with_options(World::options(4, 2)).spawn();
+    let a = world
+        .events
+        .processor("shared", Arc::clone(&first))
+        .with_options(World::options(4, 2))
+        .spawn();
+    let b = world
+        .events
+        .processor("shared", Arc::clone(&second))
+        .with_options(World::options(4, 2))
+        .spawn();
 
     let mut last = 0;
     for id in 1..=40 {
@@ -189,7 +203,11 @@ async fn two_instances_share_the_segments_without_handling_an_event_twice() {
 async fn the_segments_of_a_crashed_instance_are_taken_over() {
     let world = World::new();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
-    let a = world.events.processor("failover", Arc::clone(&first)).with_options(World::options(2, u32::MAX)).spawn();
+    let a = world
+        .events
+        .processor("failover", Arc::clone(&first))
+        .with_options(World::options(2, u32::MAX))
+        .spawn();
     let mut last = 0;
     for id in 1..=10 {
         last = world.tick(id).await;
@@ -197,7 +215,11 @@ async fn the_segments_of_a_crashed_instance_are_taken_over() {
     a.caught_up(last).await;
     a.abort().await; // a crash: its claims are not released
 
-    let b = world.events.processor("failover", Arc::clone(&second)).with_options(World::options(2, u32::MAX)).spawn();
+    let b = world
+        .events
+        .processor("failover", Arc::clone(&second))
+        .with_options(World::options(2, u32::MAX))
+        .spawn();
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(b.status().segments.is_empty(), "claims still held by the dead instance");
 
@@ -216,7 +238,13 @@ async fn the_segments_of_a_crashed_instance_are_taken_over() {
     // Resumed from the stored positions: what the dead instance finished is
     // not handled again (at most the events it had not stored yet).
     assert!(first.seen().len() + second.seen().len() >= 20);
-    assert!(world.tokens.positions("failover").iter().all(|position| *position >= 10));
+    assert!(
+        world
+            .tokens
+            .positions("failover")
+            .iter()
+            .all(|position| *position >= 10)
+    );
     b.stop().await;
 }
 
@@ -240,7 +268,10 @@ async fn a_poison_event_only_holds_back_its_own_segment() {
 
     let handled = recorder.streams();
     for &id in &healthy {
-        assert!(handled.contains(&stream(id)), "clock {id} in a healthy segment was handled");
+        assert!(
+            handled.contains(&stream(id)),
+            "clock {id} in a healthy segment was handled"
+        );
     }
     assert!(!handled.contains(&stream(poison_id)));
     assert_eq!(processor.status().failing.as_deref(), Some("cannot handle this one"));
@@ -267,7 +298,11 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     processor.caught_up(last).await; // the segment moved past the poison
 
     assert_eq!(recorder.seen(), [(stream(other), 1), (stream(other), 2)]);
-    let parked: Vec<_> = queue.letters("parking").iter().map(|letter| (letter.event.sequence, letter.cause.clone())).collect();
+    let parked: Vec<_> = queue
+        .letters("parking")
+        .iter()
+        .map(|letter| (letter.event.sequence, letter.cause.clone()))
+        .collect();
     assert_eq!(
         parked,
         [
@@ -277,13 +312,18 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     );
 
     // Still broken: the retry stops at the first event, keeping the order.
-    let outcome = retry_dead_letters(&*queue, "parking", &*world.tokens, &*recorder).await.unwrap();
+    let outcome = retry_dead_letters(&*queue, "parking", &*world.tokens, &*recorder)
+        .await
+        .unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (0, 1));
 
     // Fixed: the parked events are handled in order and the queue empties.
     // Through the processor's own configuration this time.
     recorder.heal();
-    let retrying = world.events.processor("parking", Arc::clone(&recorder)).with_dead_letters(Arc::clone(&queue), 2);
+    let retrying = world
+        .events
+        .processor("parking", Arc::clone(&recorder))
+        .with_dead_letters(Arc::clone(&queue), 2);
     let outcome = retrying.retry_dead_letters().await.unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (2, 0));
     assert!(queue.letters("parking").is_empty());
@@ -306,7 +346,11 @@ async fn a_stuck_segment_is_detached_so_the_shared_reader_never_waits_for_it() {
         segment_stall_timeout: Duration::from_secs(1),
         ..World::options(4, u32::MAX)
     };
-    let processor = world.events.processor("detach", Arc::clone(&recorder)).with_options(options).spawn();
+    let processor = world
+        .events
+        .processor("detach", Arc::clone(&recorder))
+        .with_options(options)
+        .spawn();
 
     // Interleave: many events for the stuck aggregate between healthy ones.
     for round in 0..10 {

@@ -4,7 +4,10 @@
 use std::marker::PhantomData;
 
 use blog::domain::{Post, PostError, PostEvent, PostId};
-use cqrs::{Aggregate, EventSourced, InMemoryEventStore, testing::{AggregateFixture, block_on}};
+use cqrs::{
+    Aggregate, EventSourced, InMemoryEventStore,
+    testing::{AggregateFixture, block_on},
+};
 
 const ID: PostId = PostId(7);
 

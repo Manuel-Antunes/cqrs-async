@@ -38,7 +38,9 @@ pub struct QueryUpdateEmitter<Q, U = OutputOf<Q>> {
 
 impl<Q, U> Default for QueryUpdateEmitter<Q, U> {
     fn default() -> Self {
-        Self { subscribers: Mutex::new(Vec::new()) }
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+        }
     }
 }
 
@@ -80,7 +82,9 @@ impl<Q, U: Clone> QueryUpdateEmitter<Q, U> {
     {
         let (sender, receiver) = mpsc::channel(BUFFER);
         self.subscribers.lock().expect("emitter poisoned").push((query, sender));
-        stream::unfold(receiver, |mut receiver| async move { receiver.recv().await.map(|update| (update, receiver)) })
+        stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|update| (update, receiver))
+        })
     }
 
     /// How many subscriptions are live (dropped ones are counted until the
@@ -130,7 +134,11 @@ pub struct Projected<F, P, E> {
 
 impl<F: Clone, P: Clone, E> Clone for Projected<F, P, E> {
     fn clone(&self) -> Self {
-        Self { feed: self.feed.clone(), progress: self.progress.clone(), event: PhantomData }
+        Self {
+            feed: self.feed.clone(),
+            progress: self.progress.clone(),
+            event: PhantomData,
+        }
     }
 }
 
@@ -167,18 +175,18 @@ impl<G, U> SubscriptionQueries<G, U> {
     /// Subscriptions over `queries`, updated through `updates` (shared with
     /// the projections that emit). The initial result is read right away.
     pub fn new(queries: G, updates: Arc<U>) -> Self {
-        Self { queries: Arc::new(queries), updates, catch_up: () }
+        Self {
+            queries: Arc::new(queries),
+            updates,
+            catch_up: (),
+        }
     }
 
     /// Reads each initial result once the projection (followed by
     /// `progress`) handled every event `events` had committed when the
     /// subscription started: a client subscribing right after its own
     /// command sees it.
-    pub fn after_projection<E, F, P>(
-        self,
-        events: F,
-        progress: P,
-    ) -> SubscriptionQueries<G, U, Projected<F, P, E>>
+    pub fn after_projection<E, F, P>(self, events: F, progress: P) -> SubscriptionQueries<G, U, Projected<F, P, E>>
     where
         E: DomainEvent,
         F: EventFeed<E> + Clone + 'static,
@@ -187,7 +195,11 @@ impl<G, U> SubscriptionQueries<G, U> {
         SubscriptionQueries {
             queries: self.queries,
             updates: self.updates,
-            catch_up: Projected { feed: events, progress, event: PhantomData },
+            catch_up: Projected {
+                feed: events,
+                progress,
+                event: PhantomData,
+            },
         }
     }
 }
@@ -200,7 +212,11 @@ impl<G, U, C> SubscriptionQueries<G, U, C> {
 }
 
 impl<M: Message, G: Dispatch<M>, U: Send + Sync, C: Send + Sync> Dispatch<M> for SubscriptionQueries<G, U, C> {
-    fn dispatch_with(&self, message: M, metadata: Metadata) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
+    fn dispatch_with(
+        &self,
+        message: M,
+        metadata: Metadata,
+    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
         self.queries.dispatch_with(message, metadata)
     }
 }
@@ -232,16 +248,17 @@ where
 fn distinct<T: Clone + PartialEq + Send, E: Send>(
     results: impl Stream<Item = Result<T, E>> + Send,
 ) -> impl Stream<Item = Result<T, E>> + Send {
-    results.scan(None::<T>, |last, result| {
-        let keep = match &result {
-            Ok(value) if last.as_ref() == Some(value) => false,
-            Ok(value) => {
-                *last = Some(value.clone());
-                true
-            }
-            Err(_) => true,
-        };
-        std::future::ready(Some(keep.then_some(result)))
-    })
-    .filter_map(std::future::ready)
+    results
+        .scan(None::<T>, |last, result| {
+            let keep = match &result {
+                Ok(value) if last.as_ref() == Some(value) => false,
+                Ok(value) => {
+                    *last = Some(value.clone());
+                    true
+                }
+                Err(_) => true,
+            };
+            std::future::ready(Some(keep.then_some(result)))
+        })
+        .filter_map(std::future::ready)
 }

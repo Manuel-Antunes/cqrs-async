@@ -39,7 +39,11 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
     let Some((_, trait_path, _)) = &item.trait_ else {
         return Err(Error::new(item.self_ty.span(), "expected `impl EventHandler for ...`"));
     };
-    if trait_path.segments.last().is_none_or(|segment| segment.ident != "EventHandler") {
+    if trait_path
+        .segments
+        .last()
+        .is_none_or(|segment| segment.ident != "EventHandler")
+    {
         return Err(Error::new(trait_path.span(), "expected `impl EventHandler for ...`"));
     }
 
@@ -56,10 +60,16 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
         FnArg::Receiver(_) => None,
     });
     let event = typed.next().map(envelope_event).transpose()?.flatten().ok_or_else(|| {
-        Error::new(handle.sig.span(), "`handle` needs an `event: &EventEnvelope<Event>` argument")
+        Error::new(
+            handle.sig.span(),
+            "`handle` needs an `event: &EventEnvelope<Event>` argument",
+        )
     })?;
     let context = typed.next().ok_or_else(|| {
-        Error::new(handle.sig.span(), "`handle` needs a `context: &mut ProcessingContext<'_, Tx>` argument")
+        Error::new(
+            handle.sig.span(),
+            "`handle` needs a `context: &mut ProcessingContext<'_, Tx>` argument",
+        )
     })?;
     let transaction = context_transaction(context)?;
 
@@ -68,7 +78,9 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
     let transaction = match transaction {
         Some(transaction) => transaction,
         None => {
-            item.generics.params.push(GenericParam::Type(parse_quote!(__CqrsTx: ::core::marker::Send)));
+            item.generics
+                .params
+                .push(GenericParam::Type(parse_quote!(__CqrsTx: ::core::marker::Send)));
             let generic: Type = parse_quote!(__CqrsTx);
             for item in &mut item.items {
                 if let ImplItem::Fn(method) = item {
@@ -106,13 +118,21 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
 /// `E` in `&EventEnvelope<E>`.
 fn envelope_event(ty: &Type) -> Result<Option<Type>> {
     let error = || Error::new(ty.span(), "expected `&EventEnvelope<Event>`");
-    let Type::Reference(TypeReference { elem, mutability: None, .. }) = ty else {
+    let Type::Reference(TypeReference {
+        elem, mutability: None, ..
+    }) = ty
+    else {
         return Err(error());
     };
     let Type::Path(path) = &**elem else {
         return Err(error());
     };
-    let segment = path.path.segments.last().filter(|segment| segment.ident == "EventEnvelope").ok_or_else(error)?;
+    let segment = path
+        .path
+        .segments
+        .last()
+        .filter(|segment| segment.ident == "EventEnvelope")
+        .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(error());
     };
@@ -125,14 +145,29 @@ fn envelope_event(ty: &Type) -> Result<Option<Type>> {
 /// `Tx` in `&mut ProcessingContext<'_, Tx>`, or `None` for
 /// `&mut ProcessingContext<'_>`.
 fn context_transaction(ty: &Type) -> Result<Option<Type>> {
-    let error = || Error::new(ty.span(), "expected `&mut ProcessingContext<'_>` or `&mut ProcessingContext<'_, Tx>`");
-    let Type::Reference(TypeReference { elem, mutability: Some(_), .. }) = ty else {
+    let error = || {
+        Error::new(
+            ty.span(),
+            "expected `&mut ProcessingContext<'_>` or `&mut ProcessingContext<'_, Tx>`",
+        )
+    };
+    let Type::Reference(TypeReference {
+        elem,
+        mutability: Some(_),
+        ..
+    }) = ty
+    else {
         return Err(error());
     };
     let Type::Path(path) = &**elem else {
         return Err(error());
     };
-    let segment = path.path.segments.last().filter(|segment| segment.ident == "ProcessingContext").ok_or_else(error)?;
+    let segment = path
+        .path
+        .segments
+        .last()
+        .filter(|segment| segment.ident == "ProcessingContext")
+        .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Ok(None);
     };
@@ -152,11 +187,16 @@ impl VisitMut for AddTransaction<'_> {
             let transaction = self.0;
             match &mut segment.arguments {
                 PathArguments::AngleBracketed(arguments)
-                    if !arguments.args.iter().any(|argument| matches!(argument, GenericArgument::Type(_))) =>
+                    if !arguments
+                        .args
+                        .iter()
+                        .any(|argument| matches!(argument, GenericArgument::Type(_))) =>
                 {
                     arguments.args.push(parse_quote!(#transaction));
                 }
-                PathArguments::None => segment.arguments = PathArguments::AngleBracketed(parse_quote!(<'_, #transaction>)),
+                PathArguments::None => {
+                    segment.arguments = PathArguments::AngleBracketed(parse_quote!(<'_, #transaction>))
+                }
                 _ => {}
             }
         }

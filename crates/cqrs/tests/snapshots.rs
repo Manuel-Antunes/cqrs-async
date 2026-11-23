@@ -4,8 +4,8 @@
 use std::future::{Future, ready};
 
 use cqrs::{
-    Aggregate, EventAppender, EventSourced, InMemoryEventStore, InMemorySnapshots,
-    NotFound, SnapshotStore, StoreError, testing::block_on,
+    Aggregate, EventAppender, EventSourced, InMemoryEventStore, InMemorySnapshots, NotFound, SnapshotStore, StoreError,
+    testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -80,8 +80,7 @@ where
 
 #[test]
 fn loading_from_a_snapshot_equals_a_full_replay() {
-    let sums = EventSourced::new(InMemoryEventStore::new())
-        .with_snapshots(InMemorySnapshots::default(), 10);
+    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 10);
     add_n(&sums, 25);
 
     let loaded = block_on(sums.load(&1)).unwrap().unwrap();
@@ -161,8 +160,7 @@ fn a_broken_snapshot_store_only_costs_a_full_replay() {
 
 #[test]
 fn optimistic_concurrency_still_holds_with_snapshots() {
-    let sums = EventSourced::new(InMemoryEventStore::new())
-        .with_snapshots(InMemorySnapshots::default(), 1);
+    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 1);
     add_n(&sums, 3);
     let first = block_on(sums.load(&1)).unwrap().unwrap();
     let second = block_on(sums.load(&1)).unwrap().unwrap();

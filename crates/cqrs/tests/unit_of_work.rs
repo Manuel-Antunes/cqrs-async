@@ -48,7 +48,14 @@ impl TokenStore for Journal {
         self.tokens.initialize(processor, segments).await
     }
 
-    async fn claim(&self, processor: &str, segment: u32, owner: &str, now: u64, until: u64) -> Result<Option<Cursor>, StoreError> {
+    async fn claim(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+        now: u64,
+        until: u64,
+    ) -> Result<Option<Cursor>, StoreError> {
         self.tokens.claim(processor, segment, owner, now, until).await
     }
 
@@ -84,8 +91,15 @@ impl TransactionalTokenStore for Journal {
     async fn store_in(&self, rows: &mut Vec<String>, token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
         log(&self.phases, "token");
         rows.push(format!("token {}", token.cursor.position()));
-        let owned = self.tokens.store(token.processor, token.segment, token.owner, token.cursor).await?;
-        Ok(if owned { TokenUpdate::Stored } else { TokenUpdate::ClaimLost })
+        let owned = self
+            .tokens
+            .store(token.processor, token.segment, token.owner, token.cursor)
+            .await?;
+        Ok(if owned {
+            TokenUpdate::Stored
+        } else {
+            TokenUpdate::ClaimLost
+        })
     }
 
     async fn commit(&self, rows: Vec<String>) -> Result<(), StoreError> {
@@ -105,7 +119,11 @@ struct Rows {
 
 #[cqrs::projection(namespace = "rows")]
 impl EventHandler for Rows {
-    async fn handle(&self, event: &EventEnvelope<Ticked>, context: &mut ProcessingContext<'_, Vec<String>>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<Ticked>,
+        context: &mut ProcessingContext<'_, Vec<String>>,
+    ) -> Result<(), HandlerError> {
         let n = event.payload.0;
         log(&self.phases, format!("handle {n}"));
         context.transaction().push(format!("row {n}"));
@@ -137,12 +155,24 @@ impl EventInterceptor<Ticked, Vec<String>> for Stamp {
 }
 
 fn rows(journal: &Journal, fail_on: u64) -> Rows {
-    Rows { phases: Arc::clone(&journal.phases), fail_on, failed: AtomicBool::new(false) }
+    Rows {
+        phases: Arc::clone(&journal.phases),
+        fail_on,
+        failed: AtomicBool::new(false),
+    }
 }
 
 async fn tick(store: &InMemoryEventStore<Ticked>, ticks: impl IntoIterator<Item = u64>) -> Vec<EventEnvelope<Ticked>> {
     let ticks = ticks.into_iter().map(Ticked).collect();
-    store.append(&StreamId::new("clock", "1"), ExpectedVersion::Any, ticks, &Metadata::new()).await.unwrap()
+    store
+        .append(
+            &StreamId::new("clock", "1"),
+            ExpectedVersion::Any,
+            ticks,
+            &Metadata::new(),
+        )
+        .await
+        .unwrap()
 }
 
 #[tokio::test(start_paused = true)]
@@ -152,21 +182,39 @@ async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
     let projection = Intercepted::new(rows(&journal, 1), Stamp(Arc::clone(&journal.phases)));
     let running = events.projection(projection).spawn();
     let last = tick(events.store(), [1, 2]).await.last().unwrap().position;
-    tokio::time::timeout(Duration::from_secs(60), running.caught_up(last)).await.expect("caught up");
+    tokio::time::timeout(Duration::from_secs(60), running.caught_up(last))
+        .await
+        .expect("caught up");
     running.stop().await;
 
     let phases = journal.phases.lock().unwrap().clone();
-    assert_eq!(phases, [
-        // Tick 1, first try: fails after writing; nothing commits.
-        "begin", "intercept 1", "handle 1",
-        // Retried in a new unit.
-        "begin", "intercept 1", "handle 1", "token", "commit", "committed 1",
-        "begin", "intercept 2", "handle 2", "token", "commit", "committed 2",
-    ]);
+    assert_eq!(
+        phases,
+        [
+            // Tick 1, first try: fails after writing; nothing commits.
+            "begin",
+            "intercept 1",
+            "handle 1",
+            // Retried in a new unit.
+            "begin",
+            "intercept 1",
+            "handle 1",
+            "token",
+            "commit",
+            "committed 1",
+            "begin",
+            "intercept 2",
+            "handle 2",
+            "token",
+            "commit",
+            "committed 2",
+        ]
+    );
     // The failed try's stamp and row were rolled back with it.
-    assert_eq!(*journal.database.lock().unwrap(), [
-        "stamp 1", "row 1", "token 1", "stamp 2", "row 2", "token 2",
-    ]);
+    assert_eq!(
+        *journal.database.lock().unwrap(),
+        ["stamp 1", "row 1", "token 1", "stamp 2", "row 2", "token 2",]
+    );
 }
 
 /// Runs `rows` (failing tick `fail_on` once) with batches of 10 over ticks
@@ -175,9 +223,14 @@ async fn batched(fail_on: u64) -> Journal {
     let journal = Arc::new(Journal::default());
     let events = Events::new(Arc::new(InMemoryEventStore::new())).with_tokens(Arc::clone(&journal));
     let last = tick(events.store(), [1, 2, 3]).await.last().unwrap().position;
-    let options = TrackingOptions { batch_size: 10, ..TrackingOptions::default() };
+    let options = TrackingOptions {
+        batch_size: 10,
+        ..TrackingOptions::default()
+    };
     let running = events.projection(rows(&journal, fail_on)).with_options(options).spawn();
-    tokio::time::timeout(Duration::from_secs(60), running.caught_up(last)).await.expect("caught up");
+    tokio::time::timeout(Duration::from_secs(60), running.caught_up(last))
+        .await
+        .expect("caught up");
     running.stop().await;
     drop(events);
     Arc::into_inner(journal).expect("the processor stopped")
@@ -186,25 +239,58 @@ async fn batched(fail_on: u64) -> Journal {
 #[tokio::test(start_paused = true)]
 async fn a_batch_is_one_unit_of_work_with_one_token() {
     let journal = batched(0).await;
-    assert_eq!(*journal.phases.lock().unwrap(), [
-        "begin", "handle 1", "handle 2", "handle 3", "token", "commit",
-        "committed 1", "committed 2", "committed 3",
-    ]);
-    assert_eq!(*journal.database.lock().unwrap(), ["row 1", "row 2", "row 3", "token 3"]);
+    assert_eq!(
+        *journal.phases.lock().unwrap(),
+        [
+            "begin",
+            "handle 1",
+            "handle 2",
+            "handle 3",
+            "token",
+            "commit",
+            "committed 1",
+            "committed 2",
+            "committed 3",
+        ]
+    );
+    assert_eq!(
+        *journal.database.lock().unwrap(),
+        ["row 1", "row 2", "row 3", "token 3"]
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_failed_batch_rolls_back_and_its_events_run_one_at_a_time() {
     let journal = batched(2).await;
-    assert_eq!(*journal.phases.lock().unwrap(), [
-        // The batch: tick 2 fails, everything rolls back.
-        "begin", "handle 1", "handle 2",
-        // One at a time.
-        "begin", "handle 1", "token", "commit", "committed 1",
-        "begin", "handle 2", "token", "commit", "committed 2",
-        "begin", "handle 3", "token", "commit", "committed 3",
-    ]);
-    assert_eq!(*journal.database.lock().unwrap(), ["row 1", "token 1", "row 2", "token 2", "row 3", "token 3"]);
+    assert_eq!(
+        *journal.phases.lock().unwrap(),
+        [
+            // The batch: tick 2 fails, everything rolls back.
+            "begin",
+            "handle 1",
+            "handle 2",
+            // One at a time.
+            "begin",
+            "handle 1",
+            "token",
+            "commit",
+            "committed 1",
+            "begin",
+            "handle 2",
+            "token",
+            "commit",
+            "committed 2",
+            "begin",
+            "handle 3",
+            "token",
+            "commit",
+            "committed 3",
+        ]
+    );
+    assert_eq!(
+        *journal.database.lock().unwrap(),
+        ["row 1", "token 1", "row 2", "token 2", "row 3", "token 3"]
+    );
 }
 
 #[tokio::test]
@@ -213,7 +299,11 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
     let store = InMemoryEventStore::new();
     let queue = InMemoryDeadLetters::default();
     for event in tick(&store, [1, 2]).await {
-        let letter = DeadLetter { sequence: event.stream.to_string(), event: Arc::new(event), cause: "down".into() };
+        let letter = DeadLetter {
+            sequence: event.stream.to_string(),
+            event: Arc::new(event),
+            cause: "down".into(),
+        };
         queue.enqueue("rows", letter).await.unwrap();
     }
     let handler = rows(&journal, 2); // tick 2 fails its first retry
@@ -223,11 +313,21 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
     let outcome = retry_dead_letters(&queue, "rows", &journal, &handler).await.unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (1, 0));
 
-    assert_eq!(*journal.phases.lock().unwrap(), [
-        "begin", "handle 1", "commit", "committed 1",
-        "begin", "handle 2", // failed: rolled back, still parked
-        "begin", "handle 2", "commit", "committed 2",
-    ]);
+    assert_eq!(
+        *journal.phases.lock().unwrap(),
+        [
+            "begin",
+            "handle 1",
+            "commit",
+            "committed 1",
+            "begin",
+            "handle 2", // failed: rolled back, still parked
+            "begin",
+            "handle 2",
+            "commit",
+            "committed 2",
+        ]
+    );
     assert_eq!(*journal.database.lock().unwrap(), ["row 1", "row 2"]);
 }
 
@@ -268,6 +368,12 @@ impl<E: DomainEvent> EventHandler<E> for Inline {
 async fn inline_handlers_get_their_committed_step() {
     let phases = Phases::default();
     let clocks = EventSourced::<Clock, _, _>::with_processor(InMemoryEventStore::new(), (Inline(Arc::clone(&phases)),));
-    clocks.append(Loaded::new(Clock(1)), vec![Ticked(1), Ticked(2)]).await.unwrap();
-    assert_eq!(*phases.lock().unwrap(), ["handle 1", "committed 1", "handle 2", "committed 2"]);
+    clocks
+        .append(Loaded::new(Clock(1)), vec![Ticked(1), Ticked(2)])
+        .await
+        .unwrap();
+    assert_eq!(
+        *phases.lock().unwrap(),
+        ["handle 1", "committed 1", "handle 2", "committed 2"]
+    );
 }

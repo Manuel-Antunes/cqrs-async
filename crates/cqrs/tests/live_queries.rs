@@ -3,12 +3,16 @@
 
 #![cfg(feature = "tokio")]
 
-use std::{collections::HashMap, pin::pin, sync::{Arc, Mutex}, time::Duration};
+use std::{
+    collections::HashMap,
+    pin::pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use cqrs::{
-    ProcessingContext,
-    Aggregate, EventEnvelope, EventHandler, Events, Handler, HandlerError,
-    InMemoryEventStore, LiveQueries, QuerySubscriptions, RefreshedBy, StoreError,
+    Aggregate, EventEnvelope, EventHandler, Events, Handler, HandlerError, InMemoryEventStore, LiveQueries,
+    ProcessingContext, QuerySubscriptions, RefreshedBy, StoreError,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -43,7 +47,11 @@ impl Aggregate for Clock {
 struct Ticks(Mutex<HashMap<String, u64>>);
 
 impl EventHandler<ClockEvent> for Ticks {
-    async fn handle(&self, event: &EventEnvelope<ClockEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<ClockEvent>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         if event.payload == ClockEvent::Ticked {
             *self.0.lock().unwrap().entry(event.stream.id().to_owned()).or_default() += 1;
         }
@@ -90,8 +98,18 @@ impl World {
         let events = Events::new(Arc::new(InMemoryEventStore::new()));
         let ticks = Arc::new(Ticks::default());
         let projection = events.track("ticks", Arc::clone(&ticks));
-        let queries = LiveQueries::new(ClockQueries { ticks: TicksOfHandler(ticks) }, events.clone(), &projection);
-        Self { clocks: events.event_sourced(), queries, projection }
+        let queries = LiveQueries::new(
+            ClockQueries {
+                ticks: TicksOfHandler(ticks),
+            },
+            events.clone(),
+            &projection,
+        );
+        Self {
+            clocks: events.event_sourced(),
+            queries,
+            projection,
+        }
     }
 
     async fn record(&self, id: u32, event: ClockEvent) {
@@ -211,7 +229,10 @@ async fn global_progress_waits_for_every_segment_of_every_instance() {
     assert!(!waiting.is_finished(), "segment 1 is still behind");
 
     tokens.store("p", 1, "b", &cqrs::Cursor::at(7)).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(1), waiting).await.expect("released").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("released")
+        .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -219,17 +240,33 @@ async fn live_queries_follow_a_projection_split_across_instances() {
     use cqrs::{QueryGateway, StreamId, TrackingOptions, segment_of};
     let events: Events<ClockEvent, Store> = Events::new(Arc::new(InMemoryEventStore::new()));
     let ticks = Arc::new(Ticks::default());
-    let options = TrackingOptions { segments: 2, max_segments: 1, ..TrackingOptions::default() };
+    let options = TrackingOptions {
+        segments: 2,
+        max_segments: 1,
+        ..TrackingOptions::default()
+    };
     // Two instances of the projection, one segment each.
-    let a = events.processor("ticks", Arc::clone(&ticks)).with_options(options).spawn();
-    let b = events.processor("ticks", Arc::clone(&ticks)).with_options(options).spawn();
+    let a = events
+        .processor("ticks", Arc::clone(&ticks))
+        .with_options(options)
+        .spawn();
+    let b = events
+        .processor("ticks", Arc::clone(&ticks))
+        .with_options(options)
+        .spawn();
     let queries = LiveQueries::with_progress(
-        ClockQueries { ticks: TicksOfHandler(Arc::clone(&ticks)) },
+        ClockQueries {
+            ticks: TicksOfHandler(Arc::clone(&ticks)),
+        },
         events.clone(),
         events.global_progress("ticks"),
     );
     let clocks = events.event_sourced::<Clock>();
-    let in_segment = |segment| (1..).find(|id| segment_of(&StreamId::of::<Clock>(id), 2) == segment).unwrap();
+    let in_segment = |segment| {
+        (1..)
+            .find(|id| segment_of(&StreamId::of::<Clock>(id), 2) == segment)
+            .unwrap()
+    };
     let (first, second) = (in_segment(0), in_segment(1));
 
     let mut on_first = pin!(queries.subscribe(TicksOf(first)));

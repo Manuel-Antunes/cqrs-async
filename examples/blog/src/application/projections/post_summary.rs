@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
 
 use crate::{
-    application::queries::{PostSummaryRepository, PostSummary, PostUpdates},
+    application::queries::{PostSummary, PostSummaryRepository, PostUpdates},
     domain::{PostEvent, PostId},
 };
 
@@ -34,19 +34,34 @@ impl<S> PostSummaryProjection<S> {
 
 #[cqrs::projection(namespace = "post-summaries")]
 impl<S: PostSummaryRepository> EventHandler for PostSummaryProjection<S> {
-    async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<PostEvent>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         let found = match &event.payload {
             PostEvent::Created { id, title } => {
-                let summary = PostSummary { id: *id, title: title.clone(), published: false };
+                let summary = PostSummary {
+                    id: *id,
+                    title: title.clone(),
+                    published: false,
+                };
                 self.summaries.save(summary).await?;
                 true
             }
-            PostEvent::Retitled { title } => self.summaries.update(post_of(event)?, |s| s.title.clone_from(title)).await?,
+            PostEvent::Retitled { title } => {
+                self.summaries
+                    .update(post_of(event)?, |s| s.title.clone_from(title))
+                    .await?
+            }
             PostEvent::Published => self.summaries.update(post_of(event)?, |s| s.published = true).await?,
         };
         if !found {
             // Events of a stream arrive in order, its creation first.
-            return Err(HandlerError::msg(format!("{} has no summary: its creation was not projected", event.stream)));
+            return Err(HandlerError::msg(format!(
+                "{} has no summary: its creation was not projected",
+                event.stream
+            )));
         }
         Ok(())
     }
@@ -74,5 +89,9 @@ impl<S: PostSummaryRepository> EventHandler for PostSummaryProjection<S> {
 
 /// The post a stream belongs to (its id is the stream's).
 fn post_of(event: &EventEnvelope<PostEvent>) -> Result<PostId, HandlerError> {
-    event.stream.id().parse().map_err(|_| HandlerError::msg(format!("not a post stream: {}", event.stream)))
+    event
+        .stream
+        .id()
+        .parse()
+        .map_err(|_| HandlerError::msg(format!("not a post stream: {}", event.stream)))
 }

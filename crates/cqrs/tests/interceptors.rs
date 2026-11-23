@@ -3,8 +3,7 @@
 use std::sync::Mutex;
 
 use cqrs::{
-    Command, CommandGateway, Handler, Intercepted, Interceptor, Message, Metadata, QueryGateway,
-    testing::block_on,
+    Command, CommandGateway, Handler, Intercepted, Interceptor, Message, Metadata, QueryGateway, testing::block_on,
 };
 
 #[derive(Debug, PartialEq)]
@@ -31,7 +30,10 @@ impl Handler for RenameHandler {
     }
 
     async fn handle_with(&self, Rename(name): Rename, metadata: Metadata) -> Result<String, Error> {
-        Ok(format!("{name} by {}", metadata.get("user").map_or("nobody", String::as_str)))
+        Ok(format!(
+            "{name} by {}",
+            metadata.get("user").map_or("nobody", String::as_str)
+        ))
     }
 }
 
@@ -64,7 +66,10 @@ impl<M: Message> Interceptor<M> for Journal {
         let name = std::any::type_name::<M>().rsplit("::").next().unwrap();
         self.0.lock().unwrap().push(format!("{name} in"));
         let result = next(message, metadata).await;
-        self.0.lock().unwrap().push(format!("{name} {}", if result.is_ok() { "ok" } else { "failed" }));
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("{name} {}", if result.is_ok() { "ok" } else { "failed" }));
         result
     }
 }
@@ -97,22 +102,51 @@ fn interceptors_run_in_order_around_the_handler_and_can_refuse() {
     // A tuple runs in order: the journal sees every attempt, then
     // authentication refuses or lets it through to the second journal.
     let commands = Intercepted::new(
-        Gateway { rename: RenameHandler, count: CountHandler },
+        Gateway {
+            rename: RenameHandler,
+            count: CountHandler,
+        },
         (Journal::default(), Authenticate, Journal::default()),
     );
 
-    assert_eq!(block_on(commands.send_with(Rename("post".into()), token("secret"))), Ok("post by ana".into()));
-    assert_eq!(block_on(commands.send_with(Rename("post".into()), token("wrong"))), Err(Error::Unauthorized));
+    assert_eq!(
+        block_on(commands.send_with(Rename("post".into()), token("secret"))),
+        Ok("post by ana".into())
+    );
+    assert_eq!(
+        block_on(commands.send_with(Rename("post".into()), token("wrong"))),
+        Err(Error::Unauthorized)
+    );
     assert_eq!(block_on(commands.send(Rename("post".into()))), Err(Error::Unauthorized));
 
     let (outer, _, inner) = commands.interceptor();
-    assert_eq!(*outer.0.lock().unwrap(), ["Rename in", "Rename ok", "Rename in", "Rename failed", "Rename in", "Rename failed"]);
-    assert_eq!(*inner.0.lock().unwrap(), ["Rename in", "Rename ok"], "only what authentication let through");
+    assert_eq!(
+        *outer.0.lock().unwrap(),
+        [
+            "Rename in",
+            "Rename ok",
+            "Rename in",
+            "Rename failed",
+            "Rename in",
+            "Rename failed"
+        ]
+    );
+    assert_eq!(
+        *inner.0.lock().unwrap(),
+        ["Rename in", "Rename ok"],
+        "only what authentication let through"
+    );
 }
 
 #[test]
 fn an_interceptor_for_every_message_wraps_queries_too() {
-    let queries = Intercepted::new(Gateway { rename: RenameHandler, count: CountHandler }, Journal::default());
+    let queries = Intercepted::new(
+        Gateway {
+            rename: RenameHandler,
+            count: CountHandler,
+        },
+        Journal::default(),
+    );
     assert_eq!(block_on(queries.query(Count)), Ok(7));
     fn is_query_gateway<G: QueryGateway<Count>>(_: &G) {}
     is_query_gateway(&queries);

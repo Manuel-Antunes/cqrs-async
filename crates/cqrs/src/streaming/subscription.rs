@@ -166,14 +166,19 @@ impl<E: DomainEvent, S: EventStore<E>> State<E, S> {
                         // this page fills are kept until it is yielded.
                         let fills = |position| page.binary_search_by_key(&position, |event| event.position).is_ok();
                         self.cursor.settle(&horizon, fills);
-                        self.ready.extend(page.into_iter().map(|event| (Arc::new(event), horizon)));
+                        self.ready
+                            .extend(page.into_iter().map(|event| (Arc::new(event), horizon)));
                         continue;
                     }
                     Err(error) => return self.fail(error),
                 }
             }
 
-            let wait = if self.cursor.gaps().is_empty() { self.options.poll_interval } else { GAP_RECHECK };
+            let wait = if self.cursor.gaps().is_empty() {
+                self.options.poll_interval
+            } else {
+                GAP_RECHECK
+            };
             match tokio::time::timeout(wait, self.live.recv()).await {
                 Ok(Ok(event)) if self.cursor.covers(event.position) => {}
                 Ok(Ok(event)) if event.position == self.cursor.position() + 1 || self.cursor.is_gap(event.position) => {

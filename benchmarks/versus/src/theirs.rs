@@ -103,15 +103,22 @@ impl Theirs {
     /// postgres-es' `db/init.sql` (events, snapshots, one view table), then
     /// the framework: every load replays, or a snapshot every `snapshots`.
     pub async fn new(pool: PgPool, snapshots: Option<usize>) -> Self {
-        sqlx08::raw_sql(SCHEMA).execute(&pool).await.expect("creating the tables");
+        sqlx08::raw_sql(SCHEMA)
+            .execute(&pool)
+            .await
+            .expect("creating the tables");
         let repository = PostgresEventRepository::new(pool.clone());
         let store = match snapshots {
             Some(size) => PersistedEventStore::new_snapshot_store(repository, size),
             None => PersistedEventStore::new_event_store(repository),
         };
         let cqrs = Arc::new(OnceLock::new());
-        let queries: Vec<Box<dyn Query<TheirAccount>>> =
-            vec![Box::new(views(&pool)), Box::new(TransferPolicy { cqrs: Arc::clone(&cqrs) })];
+        let queries: Vec<Box<dyn Query<TheirAccount>>> = vec![
+            Box::new(views(&pool)),
+            Box::new(TransferPolicy {
+                cqrs: Arc::clone(&cqrs),
+            }),
+        ];
         let framework = Arc::new(CqrsFramework::new(store, queries, ()));
         cqrs.set(Arc::clone(&framework)).ok().expect("set once");
         Self { pool, cqrs: framework }
@@ -135,7 +142,10 @@ impl System for Theirs {
     async fn settle(&self) {}
 
     async fn views(&self) -> Balances {
-        let rows = sqlx08::query("SELECT view_id, payload FROM account_view").fetch_all(&self.pool).await.expect("views");
+        let rows = sqlx08::query("SELECT view_id, payload FROM account_view")
+            .fetch_all(&self.pool)
+            .await
+            .expect("views");
         rows.iter()
             .map(|row| {
                 let view: AccountView = serde_json::from_value(row.get("payload")).expect("a view");
@@ -156,10 +166,16 @@ impl System for Theirs {
 
     /// Their replay: every event of the aggregate type through the query.
     async fn rebuild(&self) -> u64 {
-        sqlx08::query("TRUNCATE account_view").execute(&self.pool).await.expect("truncating");
+        sqlx08::query("TRUNCATE account_view")
+            .execute(&self.pool)
+            .await
+            .expect("truncating");
         let replay = QueryReplay::new(PostgresEventRepository::new(self.pool.clone()), views(&self.pool));
         replay.replay_all().await.expect("replaying");
-        let count: i64 = sqlx08::query_scalar("SELECT count(*) FROM events").fetch_one(&self.pool).await.expect("count");
+        let count: i64 = sqlx08::query_scalar("SELECT count(*) FROM events")
+            .fetch_one(&self.pool)
+            .await
+            .expect("count");
         count as u64
     }
 

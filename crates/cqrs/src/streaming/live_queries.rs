@@ -5,9 +5,7 @@ use futures_util::{StreamExt, TryStreamExt, future::Either, stream};
 use tokio::sync::watch;
 
 use super::{ProcessorHandle, ProcessorStatus};
-use crate::{TokenStore,
-    Dispatch, DomainEvent, EventFeed, Message, QuerySubscriptions, RefreshedBy, StoreError,
-};
+use crate::{Dispatch, DomainEvent, EventFeed, Message, QuerySubscriptions, RefreshedBy, StoreError, TokenStore};
 
 /// Refreshes re-run the query at most once per this many events that were
 /// already waiting: a burst of changes costs one query, not one per event.
@@ -77,9 +75,7 @@ impl ProjectionProgress for LocalProgress {
     async fn reached(&self, position: u64) {
         let mut status = self.0.clone();
         // Closed: the processor stopped; do not leave subscribers hanging.
-        let _ = status
-            .wait_for(|status| status.covers(position))
-            .await;
+        let _ = status.wait_for(|status| status.covers(position)).await;
     }
 }
 
@@ -168,10 +164,7 @@ where
     G: Dispatch<Q> + 'static,
     F: EventFeed<E> + Clone + 'static,
 {
-    fn subscribe(
-        &self,
-        query: Q,
-    ) -> impl Stream<Item = Result<Q::Output, Q::Error>> + Send + use<Q, G, F, E, P> {
+    fn subscribe(&self, query: Q) -> impl Stream<Item = Result<Q::Output, Q::Error>> + Send + use<Q, G, F, E, P> {
         let queries = Arc::clone(&self.queries);
         let events = self.events.clone();
         let projection = self.projection.clone();
@@ -192,8 +185,7 @@ where
                 .try_filter(move |event| ready(relevant.refreshed_by(event)))
                 .ready_chunks(BURST)
                 .then(move |burst| {
-                    let (queries, query, projection) =
-                        (Arc::clone(&queries), query.clone(), projection.clone());
+                    let (queries, query, projection) = (Arc::clone(&queries), query.clone(), projection.clone());
                     async move {
                         // A failed read ends the subscription with its error.
                         let burst = burst.into_iter().collect::<Result<Vec<_>, _>>()?;
@@ -213,8 +205,7 @@ where
 
 /// Drops results equal to the previous one (RxJS's
 /// `distinctUntilChanged`); errors always pass.
-fn distinct<T: PartialEq + Clone, Er>()
--> impl FnMut(Result<T, Er>) -> std::future::Ready<Option<Result<T, Er>>> {
+fn distinct<T: PartialEq + Clone, Er>() -> impl FnMut(Result<T, Er>) -> std::future::Ready<Option<Result<T, Er>>> {
     let mut last: Option<T> = None;
     move |item| {
         ready(match item {

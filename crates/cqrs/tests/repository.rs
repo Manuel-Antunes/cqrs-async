@@ -3,10 +3,7 @@
 
 use std::cell::Cell;
 
-use cqrs::{
-    Aggregate, EventAppender, EventSourced, InMemoryEventStore, NotFound, StoreError,
-    testing::block_on,
-};
+use cqrs::{Aggregate, EventAppender, EventSourced, InMemoryEventStore, NotFound, StoreError, testing::block_on};
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 struct Added(u64);

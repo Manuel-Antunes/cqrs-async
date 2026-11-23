@@ -47,12 +47,19 @@ fn move_token<'q>(
 
 /// A cursor as its columns store it.
 fn columns(cursor: &Cursor) -> (Vec<i64>, Vec<i64>) {
-    cursor.gaps().iter().map(|gap| (gap.position as i64, gap.horizon as i64)).unzip()
+    cursor
+        .gaps()
+        .iter()
+        .map(|gap| (gap.position as i64, gap.horizon as i64))
+        .unzip()
 }
 
 /// A cursor from its columns.
 fn cursor(position: i64, gaps: &[i64], horizons: &[i64]) -> Cursor {
-    let gaps = gaps.iter().zip(horizons).map(|(&position, &horizon)| Gap { position: position as u64, horizon: horizon as u64 });
+    let gaps = gaps.iter().zip(horizons).map(|(&position, &horizon)| Gap {
+        position: position as u64,
+        horizon: horizon as u64,
+    });
     Cursor::new(position as u64, gaps)
 }
 
@@ -64,10 +71,13 @@ impl TokenStore for PostgresTokenStore {
             .fetch_one(&mut *tx)
             .await
             .map_err(backend)?;
-        let existing = sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM cqrs_tokens WHERE processor = $1"#, processor)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(backend)?;
+        let existing = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "count!" FROM cqrs_tokens WHERE processor = $1"#,
+            processor
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(backend)?;
         let count = if existing == 0 {
             let count = segments.max(1);
             sqlx::query!(
@@ -76,8 +86,8 @@ impl TokenStore for PostgresTokenStore {
                 count as i32,
             )
             .execute(&mut *tx)
-                .await
-                .map_err(backend)?;
+            .await
+            .map_err(backend)?;
             count
         } else {
             existing as u32
@@ -86,7 +96,14 @@ impl TokenStore for PostgresTokenStore {
         Ok(count)
     }
 
-    async fn claim(&self, processor: &str, segment: u32, owner: &str, now: u64, until: u64) -> Result<Option<Cursor>, StoreError> {
+    async fn claim(
+        &self,
+        processor: &str,
+        segment: u32,
+        owner: &str,
+        now: u64,
+        until: u64,
+    ) -> Result<Option<Cursor>, StoreError> {
         let lease_ms = until.saturating_sub(now) as f64;
         let token = sqlx::query!(
             "UPDATE cqrs_tokens \
@@ -108,9 +125,9 @@ impl TokenStore for PostgresTokenStore {
     async fn store(&self, processor: &str, segment: u32, owner: &str, cursor: &Cursor) -> Result<bool, StoreError> {
         let (gaps, horizons) = columns(cursor);
         let updated = move_token(processor, segment, owner, cursor.position(), &gaps, &horizons)
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(updated.rows_affected() == 1)
     }
 
@@ -136,7 +153,10 @@ impl TokenStore for PostgresTokenStore {
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
-        Ok(tokens.iter().map(|token| cursor(token.position, &token.gaps, &token.gap_horizons)).collect())
+        Ok(tokens
+            .iter()
+            .map(|token| cursor(token.position, &token.gaps, &token.gap_horizons))
+            .collect())
     }
 
     async fn reset(&self, processor: &str, _now: u64, replay_until: u64) -> Result<bool, StoreError> {
@@ -172,8 +192,8 @@ impl TokenStore for PostgresTokenStore {
             processor,
         )
         .fetch_one(&self.pool)
-            .await
-            .map_err(backend)?;
+        .await
+        .map_err(backend)?;
         Ok(until as u64)
     }
 }
@@ -192,11 +212,22 @@ impl TransactionalTokenStore for PostgresTokenStore {
 
     async fn store_in(&self, tx: &mut PgTransaction, token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
         let (gaps, horizons) = columns(token.cursor);
-        let moved = move_token(token.processor, token.segment, token.owner, token.cursor.position(), &gaps, &horizons)
+        let moved = move_token(
+            token.processor,
+            token.segment,
+            token.owner,
+            token.cursor.position(),
+            &gaps,
+            &horizons,
+        )
         .execute(&mut **tx)
         .await
         .map_err(backend)?;
-        Ok(if moved.rows_affected() == 1 { TokenUpdate::Stored } else { TokenUpdate::ClaimLost })
+        Ok(if moved.rows_affected() == 1 {
+            TokenUpdate::Stored
+        } else {
+            TokenUpdate::ClaimLost
+        })
     }
 
     async fn commit(&self, tx: PgTransaction) -> Result<(), StoreError> {

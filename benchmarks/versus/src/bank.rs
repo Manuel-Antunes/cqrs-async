@@ -10,10 +10,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum BankCommand {
     Open,
-    Deposit { amount: i64 },
-    Withdraw { amount: i64 },
+    Deposit {
+        amount: i64,
+    },
+    Withdraw {
+        amount: i64,
+    },
     /// Debits this account; a policy then credits `to`.
-    Transfer { to: String, amount: i64 },
+    Transfer {
+        to: String,
+        amount: i64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -86,9 +93,10 @@ impl Account {
                 Err(BankError::InsufficientFunds)
             }
             BankCommand::Withdraw { amount } => Ok(vec![AccountEvent::Withdrew { amount: *amount }]),
-            BankCommand::Transfer { to, amount } => {
-                Ok(vec![AccountEvent::TransferredOut { to: to.clone(), amount: *amount }])
-            }
+            BankCommand::Transfer { to, amount } => Ok(vec![AccountEvent::TransferredOut {
+                to: to.clone(),
+                amount: *amount,
+            }]),
         }
     }
 
@@ -123,15 +131,26 @@ mod tests {
     #[test]
     fn the_rules() {
         let mut account = Account::default();
-        assert_eq!(account.decide(&BankCommand::Deposit { amount: 1 }), Err(BankError::NotOpen));
+        assert_eq!(
+            account.decide(&BankCommand::Deposit { amount: 1 }),
+            Err(BankError::NotOpen)
+        );
         for event in account.decide(&BankCommand::Open).unwrap() {
             account.evolve(&event);
         }
         assert_eq!(account.decide(&BankCommand::Open), Err(BankError::AlreadyOpen));
-        assert_eq!(account.decide(&BankCommand::Withdraw { amount: 1 }), Err(BankError::InsufficientFunds));
+        assert_eq!(
+            account.decide(&BankCommand::Withdraw { amount: 1 }),
+            Err(BankError::InsufficientFunds)
+        );
         account.evolve(&AccountEvent::Deposited { amount: 10 });
         let to = "b".to_owned();
-        let out = account.decide(&BankCommand::Transfer { to: to.clone(), amount: 4 }).unwrap();
+        let out = account
+            .decide(&BankCommand::Transfer {
+                to: to.clone(),
+                amount: 4,
+            })
+            .unwrap();
         assert_eq!(out, [AccountEvent::TransferredOut { to, amount: 4 }]);
         account.evolve(&out[0]);
         assert_eq!(account.balance, 6);

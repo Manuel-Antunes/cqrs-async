@@ -44,56 +44,53 @@ mod criteria;
 mod cursor;
 mod dead_letter;
 mod event;
-mod interceptor;
+mod event_sourced;
 mod feed;
+mod interceptor;
 mod message;
 mod projection;
-mod event_sourced;
 mod snapshot;
 mod store;
+#[cfg(feature = "tokio")]
+mod streaming;
+pub mod testing;
 mod token;
 mod unit;
 #[cfg(feature = "json")]
 mod upcast;
-#[cfg(feature = "tokio")]
-mod streaming;
-pub mod testing;
 
 pub use aggregate::{Aggregate, EventAppender};
 pub use bus::{Bus, Cons, Here, Nil, Route, There};
 pub use command_handler::{
-    Appender, CommandHandler, DispatchIn, DispatchInVia, EventPublisher, Pending, Published, WithPublisher, dispatch_command,
+    Appender, CommandHandler, DispatchIn, DispatchInVia, EventPublisher, Pending, Published, WithPublisher,
+    dispatch_command,
 };
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
-pub use dead_letter::{
-    DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters,
-};
+pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
-pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
-pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
-pub use message::{
-    Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message,
-    ProcessingContext,
-    OutputOf, Query, QueryGateway,
-};
 pub use event_sourced::{
-    load, load_in, EventProcessor, EventSourced, HandlerFailure, Loaded, NotFound, ProcessingFailure,
-    Saved,
+    EventProcessor, EventSourced, HandlerFailure, Loaded, NotFound, ProcessingFailure, Saved, load, load_in,
+};
+pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
+pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
+pub use message::{
+    Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
+    ProcessingContext, Query, QueryGateway,
 };
 pub use projection::{Projection, TransactionalTokenStore};
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
 pub use store::{EventStore, ExpectedVersion, InMemoryEventStore, Recorded, StoreError, TaggedEvent};
-#[cfg(feature = "json")]
-pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};
-pub use unit::{Cqrs, CqrsBuilder};
-pub use token::{InMemoryTokenStore, TokenStore, TokenUpdate, TrackingToken, segment_of};
 #[cfg(feature = "tokio")]
 pub use streaming::{
-    Events, GlobalProgress, LiveEvents, LiveQueries, LocalProgress, ProcessorHandle,
-    CatchUp, Projected, ProjectionProgress, ProcessorStatus, QueryUpdateEmitter, ResetError, SubscriptionOptions, SubscriptionQueries, UpdatesOf, TrackingOptions,
-    TrackingProcessor, subscribe,
+    CatchUp, Events, GlobalProgress, LiveEvents, LiveQueries, LocalProgress, ProcessorHandle, ProcessorStatus,
+    Projected, ProjectionProgress, QueryUpdateEmitter, ResetError, SubscriptionOptions, SubscriptionQueries,
+    TrackingOptions, TrackingProcessor, UpdatesOf, subscribe,
 };
+pub use token::{InMemoryTokenStore, TokenStore, TokenUpdate, TrackingToken, segment_of};
+pub use unit::{Cqrs, CqrsBuilder};
+#[cfg(feature = "json")]
+pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};
 
 #[cfg(feature = "derive")]
 pub use cqrs_derive::{
@@ -104,9 +101,8 @@ pub use cqrs_derive::{
 /// Everything a domain or application module usually needs.
 pub mod prelude {
     pub use crate::{
-        Aggregate, Command, CommandGateway, DomainEvent, Appender, CommandHandler, EventAppender, EventEnvelope, EventFeed,
-        EventPublisher, WithPublisher,
-        EventHandler, Handler, HandlerError, Message, Query, QueryGateway,
-        QuerySubscriptions, RefreshedBy, TagResolver,
+        Aggregate, Appender, Command, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
+        EventFeed, EventHandler, EventPublisher, Handler, HandlerError, Message, Query, QueryGateway,
+        QuerySubscriptions, RefreshedBy, TagResolver, WithPublisher,
     };
 }

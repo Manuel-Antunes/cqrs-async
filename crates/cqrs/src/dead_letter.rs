@@ -3,7 +3,11 @@
 //! sequence (its aggregate), so they are never handled out of order, while
 //! the other sequences keep flowing.
 
-use std::{collections::BTreeMap, future::Future, sync::{Arc, Mutex}};
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
 use crate::{DomainEvent, EventEnvelope, EventHandler, ProcessingContext, StoreError, TransactionalTokenStore};
 
@@ -43,7 +47,11 @@ pub trait DeadLetterQueue<E>: Send + Sync {
     fn sequences(&self, processor: &str) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
 
     /// The oldest parked event of `sequence`.
-    fn first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send;
+    fn first(
+        &self,
+        processor: &str,
+        sequence: &str,
+    ) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send;
 
     /// Removes the oldest parked event of `sequence` (after it was handled).
     fn remove_first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
@@ -162,7 +170,11 @@ impl<E, Q: DeadLetterQueue<E>> DeadLetterQueue<E> for Arc<Q> {
         (**self).sequences(processor)
     }
 
-    fn first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send {
+    fn first(
+        &self,
+        processor: &str,
+        sequence: &str,
+    ) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send {
         (**self).first(processor, sequence)
     }
 
@@ -195,7 +207,12 @@ pub struct RetryOutcome {
 /// If the queue itself fails, or a unit of work cannot begin or commit.
 ///
 /// [`TrackingProcessor::retry_dead_letters`]: crate::TrackingProcessor::retry_dead_letters
-pub async fn retry_dead_letters<E, Q, T, H>(queue: &Q, processor: &str, units: &T, handler: &H) -> Result<RetryOutcome, StoreError>
+pub async fn retry_dead_letters<E, Q, T, H>(
+    queue: &Q,
+    processor: &str,
+    units: &T,
+    handler: &H,
+) -> Result<RetryOutcome, StoreError>
 where
     E: DomainEvent,
     Q: DeadLetterQueue<E>,
@@ -206,7 +223,11 @@ where
     for sequence in queue.sequences(processor).await? {
         while let Some(letter) = queue.first(processor, &sequence).await? {
             let mut tx = units.begin().await?;
-            if handler.handle(&letter.event, &mut ProcessingContext::new(&mut tx, false)).await.is_err() {
+            if handler
+                .handle(&letter.event, &mut ProcessingContext::new(&mut tx, false))
+                .await
+                .is_err()
+            {
                 outcome.still_parked += 1;
                 break; // dropping `tx` rolls back
             }

@@ -15,7 +15,10 @@ pub fn message_set(input: DeriveInput, attribute: &str, marker: &str) -> Result<
         return Err(Error::new_spanned(&input.generics, "a message enum cannot be generic"));
     }
     let Data::Enum(data) = &input.data else {
-        return Err(Error::new_spanned(name, format!("`{marker}s` is derived on an enum of {attribute}s")));
+        return Err(Error::new_spanned(
+            name,
+            format!("`{marker}s` is derived on an enum of {attribute}s"),
+        ));
     };
 
     let mut error: Option<Type> = None;
@@ -64,13 +67,19 @@ pub fn message_set(input: DeriveInput, attribute: &str, marker: &str) -> Result<
             _ => {
                 return Err(Error::new_spanned(
                     variant,
-                    format!("each variant holds one {attribute}: `{}({})`", variant.ident, variant.ident),
+                    format!(
+                        "each variant holds one {attribute}: `{}({})`",
+                        variant.ident, variant.ident
+                    ),
                 ));
             }
         }
     }
     if variants.is_empty() {
-        return Err(Error::new_spanned(name, format!("a message enum needs at least one {attribute}")));
+        return Err(Error::new_spanned(
+            name,
+            format!("a message enum needs at least one {attribute}"),
+        ));
     }
 
     let krate = krate();
@@ -89,9 +98,14 @@ pub fn message_set(input: DeriveInput, attribute: &str, marker: &str) -> Result<
     // Ports naming what a gateway (or a `Cqrs` unit) exposes: one bound per
     // message, so code depending on them stays generic without listing
     // them.
-    let gateway = if attribute == "queries" { quote!(QueryGateway) } else { quote!(CommandGateway) };
+    let gateway = if attribute == "queries" {
+        quote!(QueryGateway)
+    } else {
+        quote!(CommandGateway)
+    };
     let port = port.map(|port| {
-        let doc = format!("Routes every message of [`{name}`], and the enum itself: implemented by any gateway that does.");
+        let doc =
+            format!("Routes every message of [`{name}`], and the enum itself: implemented by any gateway that does.");
         quote! {
             #[doc = #doc]
             #vis trait #port: #(#krate::#gateway<#types> +)* #krate::#gateway<#name> {}
@@ -206,11 +220,17 @@ pub struct GatewayKind {
 
 /// Parses the struct's `#[gateway(...)]` attributes.
 pub fn gateway_kind(input: &DeriveInput) -> Result<GatewayKind> {
-    let mut kind = GatewayKind { commands: false, sets: Vec::new() };
+    let mut kind = GatewayKind {
+        commands: false,
+        sets: Vec::new(),
+    };
     let mut queries = false;
     for attr in input.attrs.iter().filter(|attr| attr.path().is_ident("gateway")) {
         if let Meta::Path(_) = attr.meta {
-            return Err(Error::new_spanned(attr, "expected `#[gateway(commands)]`, `#[gateway(commands = Enum)]` or `#[gateway(queries = Enum)]`"));
+            return Err(Error::new_spanned(
+                attr,
+                "expected `#[gateway(commands)]`, `#[gateway(commands = Enum)]` or `#[gateway(queries = Enum)]`",
+            ));
         }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("commands") {
@@ -229,7 +249,10 @@ pub fn gateway_kind(input: &DeriveInput) -> Result<GatewayKind> {
         })?;
     }
     if kind.commands && queries {
-        return Err(Error::new_spanned(&input.ident, "a gateway routes commands or queries, not both: keep them in two gateways"));
+        return Err(Error::new_spanned(
+            &input.ident,
+            "a gateway routes commands or queries, not both: keep them in two gateways",
+        ));
     }
     Ok(kind)
 }

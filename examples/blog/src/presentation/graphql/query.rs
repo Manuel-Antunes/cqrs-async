@@ -37,11 +37,7 @@ impl<A: BlogApi> QueryRoot<A> {
     /// Every published post, by id.
     async fn published_posts(&self, ctx: &Context<'_>) -> Result<Vec<PostNode>> {
         let api = ctx.data_unchecked::<A>();
-        let posts = api
-            .queries()
-            .query(ListPublished)
-            .await
-            .map_err(from_blog)?;
+        let posts = api.queries().query(ListPublished).await.map_err(from_blog)?;
         Ok(posts.into_iter().map(PostNode::from).collect())
     }
 }

@@ -7,8 +7,8 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher, EventSourced, InMemoryEventStore,
-    Loaded, NotFound, Published, StoreError, WithPublisher, testing::block_on,
+    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher, EventSourced,
+    InMemoryEventStore, Loaded, NotFound, Published, StoreError, WithPublisher, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -90,7 +90,11 @@ impl CommandHandler for OpenHandler {
     type Command = Open;
     type Event = CounterEvent;
 
-    async fn handle<P: EventPublisher<CounterEvent>>(&self, Open(id): &Open, events: &mut Appender<CounterEvent, P>) -> Result<u32, Error> {
+    async fn handle<P: EventPublisher<CounterEvent>>(
+        &self,
+        Open(id): &Open,
+        events: &mut Appender<CounterEvent, P>,
+    ) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
         events.commit(Loaded::new(Counter::initial(id))).await?;
         Ok(*id)
@@ -109,7 +113,13 @@ struct AddHandler {
 
 impl AddHandler {
     fn new(counters: &Counters) -> Self {
-        Self { counters: Arc::clone(counters), runs: AtomicU32::new(0), racing: false, retries: 8, forget_save: false }
+        Self {
+            counters: Arc::clone(counters),
+            runs: AtomicU32::new(0),
+            racing: false,
+            retries: 8,
+            forget_save: false,
+        }
     }
 }
 
@@ -121,7 +131,11 @@ impl CommandHandler for AddHandler {
         self.retries
     }
 
-    async fn handle<P: EventPublisher<CounterEvent>>(&self, command: &Add, events: &mut Appender<CounterEvent, P>) -> Result<u64, Error> {
+    async fn handle<P: EventPublisher<CounterEvent>>(
+        &self,
+        command: &Add,
+        events: &mut Appender<CounterEvent, P>,
+    ) -> Result<u64, Error> {
         let counter = self.counters.load(&command.id).await?.ok_or(NotFound(command.id))?;
         if self.runs.fetch_add(1, Ordering::Relaxed) == 0 && self.racing {
             let other = self.counters.load(&command.id).await?.unwrap();
@@ -173,7 +187,10 @@ fn an_existing_entity_is_required_unless_the_command_creates_it() {
     assert_eq!(block_on(gateway.send(Add { id: 7, n: 1 })), Err(Error::NotFound(7)));
     block_on(gateway.send(Open(7))).unwrap();
     // Creating twice: a conflict, not retried (re-running would conflict again).
-    assert!(matches!(block_on(gateway.send(Open(7))), Err(Error::Store(StoreError::Conflict { .. }))));
+    assert!(matches!(
+        block_on(gateway.send(Open(7))),
+        Err(Error::Store(StoreError::Conflict { .. }))
+    ));
 }
 
 #[test]
@@ -188,7 +205,10 @@ fn a_refused_decision_saves_nothing() {
 #[test]
 fn a_lost_race_runs_the_handler_again_on_the_fresh_entity() {
     let counters = counters();
-    let racing = AddHandler { racing: true, ..AddHandler::new(&counters) };
+    let racing = AddHandler {
+        racing: true,
+        ..AddHandler::new(&counters)
+    };
     let gateway = gateway(&counters, racing);
     block_on(gateway.send(Open(1))).unwrap();
 
@@ -202,10 +222,17 @@ fn a_lost_race_runs_the_handler_again_on_the_fresh_entity() {
 #[test]
 fn retries_run_out_with_a_conflict() {
     let counters = counters();
-    let racing = AddHandler { racing: true, retries: 0, ..AddHandler::new(&counters) };
+    let racing = AddHandler {
+        racing: true,
+        retries: 0,
+        ..AddHandler::new(&counters)
+    };
     let gateway = gateway(&counters, racing);
     block_on(gateway.send(Open(1))).unwrap();
-    assert!(matches!(block_on(gateway.send(Add { id: 1, n: 5 })), Err(Error::Store(StoreError::Conflict { .. }))));
+    assert!(matches!(
+        block_on(gateway.send(Add { id: 1, n: 5 })),
+        Err(Error::Store(StoreError::Conflict { .. }))
+    ));
     assert_eq!(total(&counters, 1), 10, "only the competing change");
 }
 
@@ -228,7 +255,11 @@ fn a_save_after_another_save_is_not_retried() {
     impl CommandHandler for Twice {
         type Command = Add;
         type Event = CounterEvent;
-        async fn handle<P: EventPublisher<CounterEvent>>(&self, command: &Add, events: &mut Appender<CounterEvent, P>) -> Result<u64, Error> {
+        async fn handle<P: EventPublisher<CounterEvent>>(
+            &self,
+            command: &Add,
+            events: &mut Appender<CounterEvent, P>,
+        ) -> Result<u64, Error> {
             let stale = self.0.load(&command.id).await?.unwrap();
             let fresh = self.0.load(&command.id).await?.unwrap();
             events.append(CounterEvent::Added(1));
@@ -241,7 +272,10 @@ fn a_save_after_another_save_is_not_retried() {
     let counters = counters();
     block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
     let twice = Twice(Arc::clone(&counters)).with_publisher(Arc::clone(&counters));
-    assert!(matches!(block_on(cqrs::Handler::handle(&twice, Add { id: 1, n: 1 })), Err(Error::Store(StoreError::Conflict { .. }))));
+    assert!(matches!(
+        block_on(cqrs::Handler::handle(&twice, Add { id: 1, n: 1 })),
+        Err(Error::Store(StoreError::Conflict { .. }))
+    ));
     assert_eq!(total(&counters, 1), 1, "the first save, once");
 }
 
@@ -250,7 +284,10 @@ fn a_save_after_another_save_is_not_retried() {
 #[should_panic(expected = "never committed")]
 fn forgetting_to_save_panics_in_debug_builds() {
     let counters = counters();
-    let forgetful = AddHandler { forget_save: true, ..AddHandler::new(&counters) };
+    let forgetful = AddHandler {
+        forget_save: true,
+        ..AddHandler::new(&counters)
+    };
     let gateway = gateway(&counters, forgetful);
     block_on(gateway.send(Open(1))).unwrap();
     let _ = block_on(gateway.send(Add { id: 1, n: 5 }));
@@ -264,11 +301,20 @@ fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
     let gateway = gateway(&counters, AddHandler::new(&counters));
     block_on(gateway.send_with(Open(1), correlation.clone())).unwrap();
     // Through a bus too, and kept across a re-run after a lost race.
-    let bus = cqrs::Bus::new().register(AddHandler { racing: true, ..AddHandler::new(&counters) }.with_publisher(Arc::clone(&counters)));
+    let bus = cqrs::Bus::new().register(
+        AddHandler {
+            racing: true,
+            ..AddHandler::new(&counters)
+        }
+        .with_publisher(Arc::clone(&counters)),
+    );
     block_on(bus.send_with(Add { id: 1, n: 5 }, correlation.clone())).unwrap();
 
     let stored = counters.store().all();
-    let tagged: Vec<_> = stored.iter().map(|event| event.metadata.get("correlation_id").map(String::as_str)).collect();
+    let tagged: Vec<_> = stored
+        .iter()
+        .map(|event| event.metadata.get("correlation_id").map(String::as_str))
+        .collect();
     // Opened, the competing +10 (sent without metadata), then the +5.
     assert_eq!(tagged, [Some("req-42"), None, Some("req-42")]);
 }

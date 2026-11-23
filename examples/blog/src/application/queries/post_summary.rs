@@ -22,10 +22,7 @@ pub struct PostSummary {
 pub trait PostSummaryRepository: Send + Sync {
     /// The summary of one post, or `None` if the read model has not seen it
     /// (it may not exist, or its creation may not be projected yet).
-    fn find(
-        &self,
-        id: PostId,
-    ) -> impl Future<Output = Result<Option<PostSummary>, StoreError>> + Send;
+    fn find(&self, id: PostId) -> impl Future<Output = Result<Option<PostSummary>, StoreError>> + Send;
 
     /// Published posts, ordered by id.
     fn published(&self) -> impl Future<Output = Result<Vec<PostSummary>, StoreError>> + Send;

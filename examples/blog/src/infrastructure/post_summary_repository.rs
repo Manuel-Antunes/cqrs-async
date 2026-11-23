@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 use cqrs::StoreError;
 
 use crate::{
-    application::queries::{PostSummaryRepository, PostSummary},
+    application::queries::{PostSummary, PostSummaryRepository},
     domain::PostId,
 };
 
@@ -31,7 +31,12 @@ impl PostSummaryRepository for InMemoryPostSummaryRepository {
     }
 
     async fn published(&self) -> Result<Vec<PostSummary>, StoreError> {
-        Ok(self.rows().values().filter(|summary| summary.published).cloned().collect())
+        Ok(self
+            .rows()
+            .values()
+            .filter(|summary| summary.published)
+            .cloned()
+            .collect())
     }
 
     async fn save(&self, summary: PostSummary) -> Result<(), StoreError> {

@@ -108,7 +108,7 @@
 use std::future::Future;
 
 use crate::{
-    AppendCondition, Aggregate, Command, DomainEvent, ErrorOf, EventCriteria, EventEnvelope, EventStore,
+    Aggregate, AppendCondition, Command, DomainEvent, ErrorOf, EventCriteria, EventEnvelope, EventStore,
     ExpectedVersion, Handler, Loaded, Message, Metadata, OutputOf, StoreError,
 };
 
@@ -207,7 +207,11 @@ impl<E, P> Appender<E, P> {
     /// # Errors
     ///
     /// The store's.
-    pub async fn source<S: EventStore<E>>(&mut self, store: &S, criteria: EventCriteria) -> Result<Vec<EventEnvelope<E>>, StoreError>
+    pub async fn source<S: EventStore<E>>(
+        &mut self,
+        store: &S,
+        criteria: EventCriteria,
+    ) -> Result<Vec<EventEnvelope<E>>, StoreError>
     where
         E: DomainEvent,
     {
@@ -286,7 +290,14 @@ impl<E, P> Appender<E, P> {
                 Ok(())
             }
             Err(error) => {
-                if matches!(error, StoreError::ConditionFailed | StoreError::Conflict { expected: ExpectedVersion::Exact(_), .. }) {
+                if matches!(
+                    error,
+                    StoreError::ConditionFailed
+                        | StoreError::Conflict {
+                            expected: ExpectedVersion::Exact(_),
+                            ..
+                        }
+                ) {
                     self.lost_race = true;
                 }
                 Err(error)
@@ -342,7 +353,11 @@ pub trait EventPublisher<E: DomainEvent>: Send + Sync {
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
 impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for &T {
-    fn commit<A: Aggregate<Event = E>>(&self, entity: Loaded<A>, pending: Pending<E>) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
+    fn commit<A: Aggregate<Event = E>>(
+        &self,
+        entity: Loaded<A>,
+        pending: Pending<E>,
+    ) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
         (**self).commit(entity, pending)
     }
 }
@@ -351,7 +366,11 @@ impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for &T {
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
 impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for std::sync::Arc<T> {
-    fn commit<A: Aggregate<Event = E>>(&self, entity: Loaded<A>, pending: Pending<E>) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
+    fn commit<A: Aggregate<Event = E>>(
+        &self,
+        entity: Loaded<A>,
+        pending: Pending<E>,
+    ) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
         (**self).commit(entity, pending)
     }
 }
@@ -434,7 +453,12 @@ where
 pub trait DispatchIn<M: Message, X>: Send + Sync {
     /// Hands `message` and `metadata` to the handler, committing through
     /// `publisher`.
-    fn dispatch_in(&self, message: M, metadata: Metadata, publisher: &X) -> impl Future<Output = Result<M::Output, M::Error>> + Send;
+    fn dispatch_in(
+        &self,
+        message: M,
+        metadata: Metadata,
+        publisher: &X,
+    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send;
 }
 
 /// An enum of commands, routed variant by variant through a gateway of
@@ -442,7 +466,12 @@ pub trait DispatchIn<M: Message, X>: Send + Sync {
 pub trait DispatchInVia<G: ?Sized, X>: Message {
     /// Hands the variant's command, `metadata` and `publisher` to `gateway`,
     /// wrapping its output in the enum's output.
-    fn dispatch_in_via(self, gateway: &G, metadata: Metadata, publisher: &X) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+    fn dispatch_in_via(
+        self,
+        gateway: &G,
+        metadata: Metadata,
+        publisher: &X,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
 /// A gateway of commands (or one command handler) with the publisher its
@@ -474,7 +503,11 @@ impl<G, X> Published<G, X> {
 
 /// A gateway of commands with its publisher sends them.
 impl<M: Message, G: DispatchIn<M, X>, X: Send + Sync> crate::Dispatch<M> for Published<G, X> {
-    fn dispatch_with(&self, message: M, metadata: Metadata) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
+    fn dispatch_with(
+        &self,
+        message: M,
+        metadata: Metadata,
+    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
         self.inner.dispatch_in(message, metadata, &self.publisher)
     }
 }
@@ -484,7 +517,10 @@ impl<M: Message, G: DispatchIn<M, X>, X: Send + Sync> crate::Dispatch<M> for Pub
 impl<H: CommandHandler, X: EventPublisher<H::Event>> Handler for Published<H, X> {
     type Message = H::Command;
 
-    fn handle(&self, command: H::Command) -> impl Future<Output = Result<OutputOf<H::Command>, ErrorOf<H::Command>>> + Send {
+    fn handle(
+        &self,
+        command: H::Command,
+    ) -> impl Future<Output = Result<OutputOf<H::Command>, ErrorOf<H::Command>>> + Send {
         dispatch_command(&self.inner, command, Metadata::new(), &self.publisher)
     }
 

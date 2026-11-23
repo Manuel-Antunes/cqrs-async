@@ -87,10 +87,7 @@ impl<A: Aggregate> AggregateFixture<A> {
 
     /// Runs a decision on the aggregate built so far. Its events are applied
     /// to the state only if it succeeds, as the engine does.
-    pub fn when<T, Er>(
-        mut self,
-        decide: impl FnOnce(&A, &mut Vec<A::Event>) -> Result<T, Er>,
-    ) -> Then<A, T, Er> {
+    pub fn when<T, Er>(mut self, decide: impl FnOnce(&A, &mut Vec<A::Event>) -> Result<T, Er>) -> Then<A, T, Er> {
         let mut events = Vec::new();
         let result = decide(&self.aggregate, &mut events);
         if result.is_err() {

@@ -11,8 +11,7 @@ use std::{
 
 use cqrs::{
     EventEnvelope, EventHandler, EventStore, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
-    ProcessingContext,
-    QueryGateway, QuerySubscriptions, QueryUpdateEmitter, StreamId, SubscriptionQueries,
+    ProcessingContext, QueryGateway, QuerySubscriptions, QueryUpdateEmitter, StreamId, SubscriptionQueries,
 };
 use futures_util::StreamExt;
 
@@ -46,7 +45,12 @@ struct Totals {
 #[cqrs::projection(namespace = "totals")]
 impl EventHandler for Totals {
     async fn handle(&self, event: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
-        *self.sums.lock().unwrap().entry(event.stream.id().to_owned()).or_default() += event.payload.0;
+        *self
+            .sums
+            .lock()
+            .unwrap()
+            .entry(event.stream.id().to_owned())
+            .or_default() += event.payload.0;
         Ok(())
     }
 
@@ -107,20 +111,32 @@ impl EventHandler for Ticks {
 
 async fn tick(events: &Events<Ticked, Arc<InMemoryEventStore<Ticked>>>, clock: &str, n: u64) {
     let stream = StreamId::new("clock", clock.to_owned());
-    events.store().append(&stream, ExpectedVersion::Any, vec![Ticked(n)], &Metadata::new()).await.unwrap();
+    events
+        .store()
+        .append(&stream, ExpectedVersion::Any, vec![Ticked(n)], &Metadata::new())
+        .await
+        .unwrap();
 }
 
 async fn within<T>(future: impl Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(5), future).await.expect("timed out")
+    tokio::time::timeout(Duration::from_secs(5), future)
+        .await
+        .expect("timed out")
 }
 
 #[tokio::test]
 async fn subscriptions_get_the_current_result_then_the_updates_for_their_query() {
     let events = Events::new(Arc::new(InMemoryEventStore::new()));
     let updates = Arc::new(Updates::default());
-    let totals = Arc::new(Totals { sums: Mutex::default(), updates: Arc::clone(&updates) });
+    let totals = Arc::new(Totals {
+        sums: Mutex::default(),
+        updates: Arc::clone(&updates),
+    });
     let queries = SubscriptionQueries::new(
-        Queries { total: TotalOfHandler(Arc::clone(&totals)), grand: GrandTotalHandler(Arc::clone(&totals)) },
+        Queries {
+            total: TotalOfHandler(Arc::clone(&totals)),
+            grand: GrandTotalHandler(Arc::clone(&totals)),
+        },
         Arc::clone(&updates),
     );
     tick(&events, "a", 1).await;
@@ -136,7 +152,11 @@ async fn subscriptions_get_the_current_result_then_the_updates_for_their_query()
 
     tick(&events, "a", 2).await;
     tick(&events, "b", 5).await;
-    assert_eq!(within(a.next()).await, Some(Ok(Some(3))), "only updates for its own clock");
+    assert_eq!(
+        within(a.next()).await,
+        Some(Ok(Some(3))),
+        "only updates for its own clock"
+    );
     assert_eq!(within(b.next()).await, Some(Ok(Some(5))));
     assert_eq!(within(grand.next()).await, Some(Ok(3)));
     assert_eq!(within(grand.next()).await, Some(Ok(8)));
@@ -154,11 +174,16 @@ async fn subscriptions_get_the_current_result_then_the_updates_for_their_query()
 async fn a_processing_group_of_projections_shares_one_token_and_one_unit_of_work() {
     let events = Events::new(Arc::new(InMemoryEventStore::new()));
     let updates = Arc::new(Updates::default());
-    let totals = Arc::new(Totals { sums: Mutex::default(), updates: Arc::clone(&updates) });
+    let totals = Arc::new(Totals {
+        sums: Mutex::default(),
+        updates: Arc::clone(&updates),
+    });
     let positions = Arc::new(QueryUpdateEmitter::<GrandTotal, u64>::new());
     let mut seen = Box::pin(positions.subscribe(GrandTotal));
 
-    let group = events.processor("group", (Arc::clone(&totals), Ticks(Arc::clone(&positions)))).spawn();
+    let group = events
+        .processor("group", (Arc::clone(&totals), Ticks(Arc::clone(&positions))))
+        .spawn();
     for n in 1..=3 {
         tick(&events, "a", n).await;
     }
@@ -170,9 +195,15 @@ async fn a_processing_group_of_projections_shares_one_token_and_one_unit_of_work
 
     // Reset: the group's members clear, then the replay rebuilds.
     group.stop().await;
-    events.processor("group", (Arc::clone(&totals), Ticks(Arc::clone(&positions)))).reset().await.unwrap();
+    events
+        .processor("group", (Arc::clone(&totals), Ticks(Arc::clone(&positions))))
+        .reset()
+        .await
+        .unwrap();
     assert!(totals.sums.lock().unwrap().is_empty());
-    let group = events.processor("group", (Arc::clone(&totals), Ticks(positions))).spawn();
+    let group = events
+        .processor("group", (Arc::clone(&totals), Ticks(positions)))
+        .spawn();
     within(group.caught_up(3)).await;
     assert_eq!(totals.sums.lock().unwrap()["a"], 6);
     group.stop().await;

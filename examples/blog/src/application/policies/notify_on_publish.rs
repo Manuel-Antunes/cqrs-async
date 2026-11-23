@@ -7,8 +7,7 @@ use crate::domain::PostEvent;
 /// Port to whatever delivers notifications (e-mail, chat, ...).
 pub trait Notifier: Send + Sync {
     /// Delivers `message` to the readers.
-    fn notify(&self, message: String)
-    -> impl Future<Output = Result<(), NotificationError>> + Send;
+    fn notify(&self, message: String) -> impl Future<Output = Result<(), NotificationError>> + Send;
 }
 
 /// The notification could not be delivered.
@@ -42,11 +41,13 @@ impl<N: Notifier> EventHandler for NotifyOnPublish<N> {
     const REPLAY: bool = false;
 
     /// Announces the post if `event` published it.
-    async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<PostEvent>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         if let PostEvent::Published = event.payload {
-            self.notifier
-                .notify(format!("{} published", event.stream))
-                .await?;
+            self.notifier.notify(format!("{} published", event.stream)).await?;
         }
         Ok(())
     }

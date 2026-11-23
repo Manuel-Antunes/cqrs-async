@@ -13,7 +13,6 @@ fn assert_send<T: Send>(value: T) -> T {
     value
 }
 
-
 /// Creates a post and publishes it right away, returning its id.
 ///
 /// Depends only on the ports it uses, like a controller or a saga would: any
@@ -35,7 +34,6 @@ where
     gateway.send(PublishPost { id }).await?;
     Ok(id)
 }
-
 
 #[test]
 fn a_command_commits_events_and_the_projection_answers_queries() {
@@ -98,11 +96,7 @@ fn unknown_aggregates_are_reported() {
 fn concurrent_writers_cannot_overwrite_each_other() {
     block_on(async {
         let (blog, _, _) = in_memory();
-        let id = blog
-            .commands()
-            .send(CreatePost { title: "v1".into() })
-            .await
-            .unwrap();
+        let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
         let posts = blog.publisher();
 
         // Two writers load the same version and decide...
@@ -115,13 +109,7 @@ fn concurrent_writers_cannot_overwrite_each_other() {
         // ...the first one wins, the second gets a conflict.
         posts.append(first, renamed).await.unwrap();
         let error = posts.append(second, published).await.err().unwrap();
-        assert!(matches!(
-            error,
-            StoreError::Conflict {
-                actual: Some(2),
-                ..
-            }
-        ));
+        assert!(matches!(error, StoreError::Conflict { actual: Some(2), .. }));
 
         let stored = posts.load(&id).await.unwrap().unwrap();
         assert_eq!(stored.title(), "v2");
@@ -134,11 +122,7 @@ fn concurrent_writers_cannot_overwrite_each_other() {
 fn a_failing_handler_neither_undoes_the_commit_nor_blocks_the_others() {
     block_on(async {
         let (blog, summaries, notifier) = in_memory();
-        let id = blog
-            .commands()
-            .send(CreatePost { title: "t".into() })
-            .await
-            .unwrap();
+        let id = blog.commands().send(CreatePost { title: "t".into() }).await.unwrap();
         notifier.set_down(true);
 
         let posts = blog.publisher();
@@ -163,24 +147,23 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
     use std::sync::Arc;
     block_on(async {
         let (blog, summaries, _) = in_memory();
-        let id = blog
-            .commands()
-            .send(CreatePost { title: "a".into() })
-            .await
-            .unwrap();
+        let id = blog.commands().send(CreatePost { title: "a".into() }).await.unwrap();
         blog.commands()
-            .send(RetitlePost {
-                id,
-                title: "b".into(),
-            })
+            .send(RetitlePost { id, title: "b".into() })
             .await
             .unwrap();
 
         // A replay: cleared, then every event again, in order.
         let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::new(PostUpdates::default()));
-        projection.reset(&mut ProcessingContext::new(&mut (), false)).await.unwrap();
+        projection
+            .reset(&mut ProcessingContext::new(&mut (), false))
+            .await
+            .unwrap();
         for event in blog.publisher().store().all() {
-            projection.handle(&event, &mut ProcessingContext::new(&mut (), true)).await.unwrap();
+            projection
+                .handle(&event, &mut ProcessingContext::new(&mut (), true))
+                .await
+                .unwrap();
         }
         assert_eq!(summaries.find(id).await.unwrap().unwrap().title, "b");
     });
@@ -194,12 +177,7 @@ fn handlers_can_be_called_directly_without_any_bus() {
     block_on(async {
         // A handler and the publisher it commits through: a handler too.
         let handler = CreatePostHandler::new().with_publisher(EventSourced::<Post, _>::new(InMemoryEventStore::new()));
-        let id = handler
-            .handle(CreatePost {
-                title: "direct".into(),
-            })
-            .await
-            .unwrap();
+        let id = handler.handle(CreatePost { title: "direct".into() }).await.unwrap();
         assert_eq!(id, PostId(1));
     });
 }
@@ -208,9 +186,7 @@ fn handlers_can_be_called_directly_without_any_bus() {
 fn components_depend_on_gateway_ports() {
     block_on(async {
         let (blog, summaries, _) = in_memory();
-        let id = create_and_publish(blog.commands(), "via port")
-            .await
-            .unwrap();
+        let id = create_and_publish(blog.commands(), "via port").await.unwrap();
         assert!(summaries.find(id).await.unwrap().unwrap().published);
     });
 }
@@ -230,7 +206,10 @@ fn the_zero_macro_bus_infers_the_handler() {
         let summaries = Arc::new(InMemoryPostSummaryRepository::default());
         let publisher = Arc::new(EventSourced::<Post, _, _>::with_processor(
             Arc::clone(&store),
-            (PostSummaryProjection::new(summaries.clone(), Arc::new(PostUpdates::default())),),
+            (PostSummaryProjection::new(
+                summaries.clone(),
+                Arc::new(PostUpdates::default()),
+            ),),
         ));
         let posts = Arc::new(EventSourcedPostRepository::new(store));
         let bus = Bus::new()
@@ -238,12 +217,7 @@ fn the_zero_macro_bus_infers_the_handler() {
             .register(PublishPostHandler::new(posts).with_publisher(publisher))
             .register(FindPostHandler::new(summaries));
 
-        let id = bus
-            .send(CreatePost {
-                title: "hlist".into(),
-            })
-            .await
-            .unwrap();
+        let id = bus.send(CreatePost { title: "hlist".into() }).await.unwrap();
         bus.send(PublishPost { id }).await.unwrap();
         let found = bus.query(FindPost { id }).await.unwrap().unwrap();
         assert!(found.published);
@@ -261,7 +235,10 @@ fn the_command_and_query_enums_route_each_variant_to_its_handler() {
             panic!("a CreatePost answers with its id");
         };
         let publish = PostCommand::from(PublishPost { id });
-        assert_eq!(blog.commands().send(publish).await, Ok(PostCommandOutput::PublishPost(())));
+        assert_eq!(
+            blog.commands().send(publish).await,
+            Ok(PostCommandOutput::PublishPost(()))
+        );
         // Errors come back as the enum's error.
         let again = blog.commands().send(PostCommand::from(PublishPost { id })).await;
         assert_eq!(again, Err(BlogError::Domain(PostError::AlreadyPublished)));
@@ -271,6 +248,9 @@ fn the_command_and_query_enums_route_each_variant_to_its_handler() {
             panic!("the post is projected in-process");
         };
         assert!(summary.published);
-        assert_eq!(serde_json::to_string(&PostCommand::from(PublishPost { id })).unwrap(), r#"{"PublishPost":{"id":1}}"#);
+        assert_eq!(
+            serde_json::to_string(&PostCommand::from(PublishPost { id })).unwrap(),
+            r#"{"PublishPost":{"id":1}}"#
+        );
     });
 }

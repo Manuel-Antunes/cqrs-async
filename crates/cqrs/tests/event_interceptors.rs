@@ -14,8 +14,8 @@ use std::{
 };
 
 use cqrs::{
-    DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, EventStore, Events, ExpectedVersion, HandlerError,
-    InMemoryEventStore, Intercepted, Metadata, ProcessingContext, StreamId,
+    DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, EventStore, Events, ExpectedVersion,
+    HandlerError, InMemoryEventStore, Intercepted, Metadata, ProcessingContext, StreamId,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -28,10 +28,21 @@ type Log = Arc<Mutex<Vec<String>>>;
 struct Around(&'static str, Log);
 
 impl<E: DomainEvent, Tx: Send> EventInterceptor<E, Tx> for Around {
-    async fn intercept<N: EventChain<Tx>>(&self, event: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>, next: N) -> Result<(), HandlerError> {
-        self.1.lock().unwrap().push(format!("{} before {}", self.0, event.position));
+    async fn intercept<N: EventChain<Tx>>(
+        &self,
+        event: &EventEnvelope<E>,
+        context: &mut ProcessingContext<'_, Tx>,
+        next: N,
+    ) -> Result<(), HandlerError> {
+        self.1
+            .lock()
+            .unwrap()
+            .push(format!("{} before {}", self.0, event.position));
         let result = next.proceed(context).await;
-        self.1.lock().unwrap().push(format!("{} after {}", self.0, event.position));
+        self.1
+            .lock()
+            .unwrap()
+            .push(format!("{} after {}", self.0, event.position));
         result
     }
 }
@@ -40,7 +51,12 @@ impl<E: DomainEvent, Tx: Send> EventInterceptor<E, Tx> for Around {
 struct EvenOnly;
 
 impl<Tx: Send> EventInterceptor<Ticked, Tx> for EvenOnly {
-    async fn intercept<N: EventChain<Tx>>(&self, event: &EventEnvelope<Ticked>, context: &mut ProcessingContext<'_, Tx>, next: N) -> Result<(), HandlerError> {
+    async fn intercept<N: EventChain<Tx>>(
+        &self,
+        event: &EventEnvelope<Ticked>,
+        context: &mut ProcessingContext<'_, Tx>,
+        next: N,
+    ) -> Result<(), HandlerError> {
         if event.payload.0 % 2 == 1 {
             return Ok(());
         }
@@ -53,7 +69,12 @@ impl<Tx: Send> EventInterceptor<Ticked, Tx> for EvenOnly {
 struct FailsOnce(AtomicBool);
 
 impl<E: DomainEvent, Tx: Send> EventInterceptor<E, Tx> for FailsOnce {
-    async fn intercept<N: EventChain<Tx>>(&self, _: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>, next: N) -> Result<(), HandlerError> {
+    async fn intercept<N: EventChain<Tx>>(
+        &self,
+        _: &EventEnvelope<E>,
+        context: &mut ProcessingContext<'_, Tx>,
+        next: N,
+    ) -> Result<(), HandlerError> {
         next.proceed(context).await?;
         if !self.0.swap(true, Ordering::Relaxed) {
             return Err(HandlerError::msg("failed after the change"));
@@ -88,37 +109,56 @@ type Store = Arc<InMemoryEventStore<Ticked>>;
 async fn tick(events: &Events<Ticked, Store>, ticks: impl IntoIterator<Item = u64>) -> u64 {
     let ticks: Vec<Ticked> = ticks.into_iter().map(Ticked).collect();
     let stream = StreamId::new("clock", "1");
-    let appended = events.store().append(&stream, ExpectedVersion::Any, ticks, &Metadata::new()).await.unwrap();
+    let appended = events
+        .store()
+        .append(&stream, ExpectedVersion::Any, ticks, &Metadata::new())
+        .await
+        .unwrap();
     appended.last().unwrap().position
 }
 
 async fn within<T>(future: impl Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(5), future).await.expect("timed out")
+    tokio::time::timeout(Duration::from_secs(5), future)
+        .await
+        .expect("timed out")
 }
 
 #[tokio::test]
 async fn event_interceptors_run_in_order_and_can_skip_an_event() {
     let events = Events::new(Store::default());
     let log = Log::default();
-    let interceptors = (Around("outer", Arc::clone(&log)), Around("inner", Arc::clone(&log)), EvenOnly);
-    let processor = events.processor("ticks", Intercepted::new(Handler(Arc::clone(&log)), interceptors)).spawn();
+    let interceptors = (
+        Around("outer", Arc::clone(&log)),
+        Around("inner", Arc::clone(&log)),
+        EvenOnly,
+    );
+    let processor = events
+        .processor("ticks", Intercepted::new(Handler(Arc::clone(&log)), interceptors))
+        .spawn();
     let last = tick(&events, [1, 2]).await;
     within(processor.caught_up(last)).await;
     processor.stop().await;
 
     let log = log.lock().unwrap();
-    assert_eq!(*log, [
-        "outer before 1",
-        "inner before 1",
-        "inner after 1", // skipped: never handled
-        "outer after 1",
-        "outer before 2",
-        "inner before 2",
-        "handled 2",
-        "inner after 2",
-        "outer after 2",
-    ]);
-    assert_eq!(events.tokens().positions("ticks"), [2], "the skipped event counts as handled");
+    assert_eq!(
+        *log,
+        [
+            "outer before 1",
+            "inner before 1",
+            "inner after 1", // skipped: never handled
+            "outer after 1",
+            "outer before 2",
+            "inner before 2",
+            "handled 2",
+            "inner after 2",
+            "outer after 2",
+        ]
+    );
+    assert_eq!(
+        events.tokens().positions("ticks"),
+        [2],
+        "the skipped event counts as handled"
+    );
 }
 
 #[tokio::test]

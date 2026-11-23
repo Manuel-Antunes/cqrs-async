@@ -77,13 +77,19 @@ impl StoredEvent {
         payload: &str,
         upcaster: &impl Upcaster,
     ) -> Result<(E, String, u32), StoreError> {
-        let invalid = |error: serde_json::Error| StoreError::Backend(format!("cannot decode {event_type} v{version}: {error}"));
+        let invalid =
+            |error: serde_json::Error| StoreError::Backend(format!("cannot decode {event_type} v{version}: {error}"));
         if !upcaster.applies(&event_type, version) {
             let event = serde_json::from_str(payload).map_err(invalid)?;
             return Ok((event, event_type, version));
         }
         let payload = serde_json::from_str(payload).map_err(invalid)?;
-        Self { event_type, version, payload }.decode(upcaster)
+        Self {
+            event_type,
+            version,
+            payload,
+        }
+        .decode(upcaster)
     }
 }
 
@@ -151,7 +157,11 @@ pub struct Upcast<F> {
 /// Converts the payload of `event_type` events at version `from` with
 /// `convert`; they come out at version `from + 1`.
 pub fn upcast<F: Fn(&mut Value) + Send + Sync>(event_type: &'static str, from: u32, convert: F) -> Upcast<F> {
-    Upcast { event_type, from, convert }
+    Upcast {
+        event_type,
+        from,
+        convert,
+    }
 }
 
 impl<F: Fn(&mut Value) + Send + Sync> Upcaster for Upcast<F> {
@@ -175,11 +185,15 @@ mod tests {
 
     #[test]
     fn events_no_step_applies_to_decode_straight_from_text() {
-        let chain = (upcast("created", 1, |p| p["tags"] = json!([])), upcast("created", 2, |p| p["draft"] = json!(true)));
+        let chain = (
+            upcast("created", 1, |p| p["tags"] = json!([])),
+            upcast("created", 2, |p| p["draft"] = json!(true)),
+        );
         assert!(chain.applies("created", 1) && chain.applies("created", 2));
         assert!(!chain.applies("created", 3) && !chain.applies("published", 1) && !().applies("created", 1));
 
-        let (current, _, version): (Value, _, _) = StoredEvent::decode_text("created".into(), 3, r#"{"a":1}"#, &chain).unwrap();
+        let (current, _, version): (Value, _, _) =
+            StoredEvent::decode_text("created".into(), 3, r#"{"a":1}"#, &chain).unwrap();
         assert_eq!((current, version), (json!({ "a": 1 }), 3));
         let (old, _, version): (Value, _, _) = StoredEvent::decode_text("created".into(), 1, "{}", &chain).unwrap();
         assert_eq!((old, version), (json!({ "tags": [], "draft": true }), 3));
@@ -191,11 +205,19 @@ mod tests {
             upcast("created", 1, |p| p["tags"] = json!([])),
             upcast("created", 2, |p| p["draft"] = json!(true)),
         );
-        let mut old = StoredEvent { event_type: "created".into(), version: 1, payload: json!({}) };
+        let mut old = StoredEvent {
+            event_type: "created".into(),
+            version: 1,
+            payload: json!({}),
+        };
         chain.upcast(&mut old);
         assert_eq!((old.version, old.payload), (3, json!({ "tags": [], "draft": true })));
 
-        let mut other = StoredEvent { event_type: "published".into(), version: 1, payload: json!({}) };
+        let mut other = StoredEvent {
+            event_type: "published".into(),
+            version: 1,
+            payload: json!({}),
+        };
         chain.upcast(&mut other);
         assert_eq!((other.version, other.payload), (1, json!({})));
     }

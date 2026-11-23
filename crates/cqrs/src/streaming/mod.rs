@@ -26,14 +26,13 @@ use futures_core::Stream;
 use tokio::sync::broadcast;
 
 pub use live_queries::{GlobalProgress, LiveQueries, LocalProgress, ProjectionProgress};
-pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf};
 pub use processor::{ProcessorHandle, ProcessorStatus, ResetError, TrackingOptions, TrackingProcessor};
 pub use subscription::{SubscriptionOptions, subscribe};
+pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf};
 
 use crate::{
-    Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor,
-    EventSourced, EventStore, HandlerError, InMemoryTokenStore, ProcessingFailure,
-    StoreError, TransactionalTokenStore,
+    Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, EventSourced, EventStore,
+    HandlerError, InMemoryTokenStore, ProcessingFailure, StoreError, TransactionalTokenStore,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -49,7 +48,11 @@ pub type LiveEvents<E> = broadcast::Sender<Arc<EventEnvelope<E>>>;
 /// committed. `E: Clone` because the event is lent; it is copied once, not
 /// once per receiver.
 impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
-    async fn handle(&self, event: &EventEnvelope<E>, _: &mut crate::ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<E>,
+        _: &mut crate::ProcessingContext<'_, Tx>,
+    ) -> Result<(), HandlerError> {
         // Nobody listening is not an error: the event is in the store anyway.
         let _ = self.send(Arc::new(event.clone()));
         Ok(())

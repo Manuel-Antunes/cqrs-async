@@ -324,11 +324,8 @@ tuple_event_handler!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
 pub trait Dispatch<M: Message>: Send + Sync {
     /// Hands `message` and its `metadata` to the handler responsible for
     /// `M`. Wrappers forward both, so metadata is never lost on the way.
-    fn dispatch_with(
-        &self,
-        message: M,
-        metadata: Metadata,
-    ) -> impl Future<Output = Result<M::Output, M::Error>> + Send;
+    fn dispatch_with(&self, message: M, metadata: Metadata)
+    -> impl Future<Output = Result<M::Output, M::Error>> + Send;
 
     /// Hands `message` to the handler responsible for `M`, without metadata.
     fn dispatch(&self, message: M) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
@@ -363,7 +360,11 @@ impl<M: Message, G: Dispatch<M>> Dispatch<M> for Arc<G> {
 pub trait DispatchVia<G: ?Sized>: Message {
     /// Hands the variant's message and `metadata` to `gateway`, wrapping
     /// its answer in the matching variant of the output enum.
-    fn dispatch_via(self, gateway: &G, metadata: Metadata) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+    fn dispatch_via(
+        self,
+        gateway: &G,
+        metadata: Metadata,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
 /// A nameable port for sending one command type: what other components
@@ -379,11 +380,7 @@ pub trait CommandGateway<C: Command>: Dispatch<C> {
     /// Sends the command with `metadata` (Axon's `send(command, metadata)`):
     /// a command handler stores it with every event it saves, so the events
     /// carry the correlation id, user, etc. of the request that caused them.
-    fn send_with(
-        &self,
-        command: C,
-        metadata: Metadata,
-    ) -> impl Future<Output = Result<C::Output, C::Error>> + Send {
+    fn send_with(&self, command: C, metadata: Metadata) -> impl Future<Output = Result<C::Output, C::Error>> + Send {
         self.dispatch_with(command, metadata)
     }
 }

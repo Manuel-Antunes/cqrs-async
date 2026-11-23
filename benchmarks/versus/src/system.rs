@@ -3,7 +3,7 @@
 
 use std::future::Future;
 
-use crate::bank::{BankCommand, BankError, Balances};
+use crate::bank::{Balances, BankCommand, BankError};
 
 pub trait System: Send + Sync + 'static {
     /// One attempt at `command`: a lost race comes back as

@@ -223,7 +223,10 @@ where
             return Err(ResetError::Running);
         }
         let mut tx = self.tokens.begin().await?;
-        self.handler.reset(&mut ProcessingContext::new(&mut tx, false)).await.map_err(ResetError::Handler)?;
+        self.handler
+            .reset(&mut ProcessingContext::new(&mut tx, false))
+            .await
+            .map_err(ResetError::Handler)?;
         Ok(self.tokens.commit(tx).await?)
     }
 
@@ -321,7 +324,12 @@ where
                             && (reader.is_none() || cursor.includes(&read_up_to.lock().expect("reader poisoned")));
                         let inbox = routed.then(|| {
                             let (sender, inbox) = mpsc::channel(self.options.segment_buffer.max(1));
-                            let route = Route { sender, from: cursor.clone(), sent: 0, done: Arc::clone(&done) };
+                            let route = Route {
+                                sender,
+                                from: cursor.clone(),
+                                sent: 0,
+                                done: Arc::clone(&done),
+                            };
                             routes.lock().expect("routes poisoned").insert(segment, route);
                             inbox
                         });
@@ -352,7 +360,13 @@ where
 
             // Start the shared reader once there is something to route, from
             // what every routed segment saw.
-            let start = Cursor::common(routes.lock().expect("routes poisoned").values().map(|route| &route.from));
+            let start = Cursor::common(
+                routes
+                    .lock()
+                    .expect("routes poisoned")
+                    .values()
+                    .map(|route| &route.from),
+            );
             if let (None, Some(start)) = (&reader, start) {
                 start.clone_into(&mut read_up_to.lock().expect("reader poisoned"));
                 let (stop_reader, reader_stop) = watch::channel(false);
@@ -562,7 +576,11 @@ where
                     None => break 'subscribe,
                 };
                 let segment = segment_of(&event.stream, count);
-                let sender = routes.lock().expect("routes poisoned").get(&segment).map(|route| route.sender.clone());
+                let sender = routes
+                    .lock()
+                    .expect("routes poisoned")
+                    .get(&segment)
+                    .map(|route| route.sender.clone());
                 if let Some(sender) = sender {
                     // Fast path: room in the queue, no timer. A full queue is
                     // backpressure; only a stall means stuck.
@@ -611,7 +629,9 @@ where
             .map(|(segment, _)| *segment)
             .collect();
         for segment in idle {
-            let Some(seen) = progress.advance(segment, cursor) else { continue };
+            let Some(seen) = progress.advance(segment, cursor) else {
+                continue;
+            };
             if !self.store_position(segment, owner, &seen).await {
                 routes.lock().expect("routes poisoned").remove(&segment);
             }
@@ -662,7 +682,12 @@ where
             return false;
         }
         for (event, _) in batch {
-            if self.dead_letters.contains(&self.name, &event.stream.to_string()).await.unwrap_or(true) {
+            if self
+                .dead_letters
+                .contains(&self.name, &event.stream.to_string())
+                .await
+                .unwrap_or(true)
+            {
                 return true;
             }
         }
@@ -677,14 +702,24 @@ where
         segment: u32,
         owner: &str,
     ) -> Result<TokenUpdate, HandlerError> {
-        let Some((last, cursor)) = batch.last() else { return Ok(TokenUpdate::Untouched) };
+        let Some((last, cursor)) = batch.last() else {
+            return Ok(TokenUpdate::Untouched);
+        };
         let replay_until = self.replay_until.load(Ordering::Relaxed);
         let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
         for (event, _) in batch {
             let replay = event.position <= replay_until;
-            self.handler.handle_in(event, &mut ProcessingContext::new(&mut tx, replay)).await?;
+            self.handler
+                .handle_in(event, &mut ProcessingContext::new(&mut tx, replay))
+                .await?;
         }
-        let token = TrackingToken { processor: &self.name, segment, owner, replay: last.position <= replay_until, cursor };
+        let token = TrackingToken {
+            processor: &self.name,
+            segment,
+            owner,
+            replay: last.position <= replay_until,
+            cursor,
+        };
         if let TokenUpdate::ClaimLost = self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
             return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls back
         }
@@ -735,10 +770,19 @@ where
         let parking = self.options.dead_letter_after.is_some();
         if parking && self.dead_letters.contains(&self.name, &sequence).await.unwrap_or(false) {
             let cause = "an earlier event of this aggregate is parked".to_owned();
-            return self.park(event, sequence, cause, stop).await.then_some(TokenUpdate::Untouched);
+            return self
+                .park(event, sequence, cause, stop)
+                .await
+                .then_some(TokenUpdate::Untouched);
         }
 
-        let token = TrackingToken { processor: &self.name, segment, owner, replay, cursor };
+        let token = TrackingToken {
+            processor: &self.name,
+            segment,
+            owner,
+            replay,
+            cursor,
+        };
         let mut backoff = Backoff::new(&self.options);
         let mut attempts = 0;
         loop {
@@ -753,7 +797,10 @@ where
                     tracing::warn!(processor = %self.name, position = event.position, attempts, %cause, "event handler failed");
                     if self.options.dead_letter_after.is_some_and(|after| attempts >= after) {
                         progress.fail(segment, None);
-                        return self.park(event, sequence, cause, stop).await.then_some(TokenUpdate::Untouched);
+                        return self
+                            .park(event, sequence, cause, stop)
+                            .await
+                            .then_some(TokenUpdate::Untouched);
                     }
                     progress.fail(segment, Some(cause));
                     if backoff.wait(stop).await {
@@ -767,9 +814,15 @@ where
     /// One attempt: `event` handled and the token stored in one unit of
     /// work from the token store, committed together; then the handler's
     /// post-commit step. A lost claim rolls the unit back.
-    async fn handle_in_unit_of_work(&self, event: &EventEnvelope<E>, token: TrackingToken<'_>) -> Result<TokenUpdate, HandlerError> {
+    async fn handle_in_unit_of_work(
+        &self,
+        event: &EventEnvelope<E>,
+        token: TrackingToken<'_>,
+    ) -> Result<TokenUpdate, HandlerError> {
         let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
-        self.handler.handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay)).await?;
+        self.handler
+            .handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay))
+            .await?;
         match self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
             // Another instance owns the segment: dropping `tx` rolls back.
             TokenUpdate::ClaimLost => return Ok(TokenUpdate::ClaimLost),
@@ -781,7 +834,13 @@ where
     }
 
     /// Parks `event`, retrying the queue itself if it fails. `false`: stopped.
-    async fn park(&self, event: &Arc<EventEnvelope<E>>, sequence: String, cause: String, stop: &mut watch::Receiver<bool>) -> bool {
+    async fn park(
+        &self,
+        event: &Arc<EventEnvelope<E>>,
+        sequence: String,
+        cause: String,
+        stop: &mut watch::Receiver<bool>,
+    ) -> bool {
         let mut backoff = Backoff::new(&self.options);
         loop {
             let letter = DeadLetter {
@@ -878,14 +937,15 @@ impl Progress {
         state.0 = state.0.union(seen);
         let cursor = state.0.clone();
         let lowest = lowest(&segments);
-        self.status.send_if_modified(|status| match status.cursors.get_mut(index) {
-            Some(published) => {
-                cursor.clone_into(published);
-                status.position = lowest;
-                true
-            }
-            None => false,
-        });
+        self.status
+            .send_if_modified(|status| match status.cursors.get_mut(index) {
+                Some(published) => {
+                    cursor.clone_into(published);
+                    status.position = lowest;
+                    true
+                }
+                None => false,
+            });
         Some(cursor)
     }
 
@@ -905,7 +965,11 @@ impl Progress {
 
 /// The lowest watermark of the owned segments (0 when none).
 fn lowest(segments: &BTreeMap<u32, (Cursor, Option<String>)>) -> u64 {
-    segments.values().map(|(cursor, _)| cursor.watermark()).min().unwrap_or(0)
+    segments
+        .values()
+        .map(|(cursor, _)| cursor.watermark())
+        .min()
+        .unwrap_or(0)
 }
 
 /// Controls a spawned [`TrackingProcessor`] instance.

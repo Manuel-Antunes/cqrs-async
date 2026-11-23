@@ -16,17 +16,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use blog::application::queries::FindPost;
 use blog::{
+    application::projections::PostSummaryProjection,
     application::{
         BlogError,
         commands::{CreatePost, RetitlePost},
     },
     domain::PostId,
-    application::projections::PostSummaryProjection,
     infrastructure::InMemoryPostSummaryRepository,
     presentation::{BlogApi, graphql, http},
 };
-use blog::application::queries::FindPost;
 use cqrs::{CommandGateway, QuerySubscriptions};
 use cqrs_benchmarks::{
     live::{Busy, Live, Noop, settle, start_blog},
@@ -54,7 +54,12 @@ impl Report {
     fn add(&mut self, scenario: impl Into<String>, metric: &'static str, value: f64, unit: &'static str) {
         let scenario = scenario.into();
         println!("{scenario:<58} {metric:<14} {value:>14.1} {unit}");
-        self.rows.push(Row { scenario, metric, value, unit });
+        self.rows.push(Row {
+            scenario,
+            metric,
+            value,
+            unit,
+        });
     }
 
     fn markdown(&self, label: &str) -> String {
@@ -349,7 +354,10 @@ async fn live_queries(report: &mut Report, scale: &Scale) {
                 for round in 1..=rounds {
                     for &id in &chunk {
                         app.commands()
-                            .send(RetitlePost { id, title: format!("v{round}") })
+                            .send(RetitlePost {
+                                id,
+                                title: format!("v{round}"),
+                            })
                             .await
                             .unwrap();
                     }
@@ -383,7 +391,10 @@ async fn processors(report: &mut Report, scale: &Scale) {
         seed_posts(&*live.store, events, 1).await;
         let started = Instant::now();
         let handle = if projection {
-            live.track("bench", PostSummaryProjection::new(Arc::new(InMemoryPostSummaryRepository::default()), Arc::default()))
+            live.track(
+                "bench",
+                PostSummaryProjection::new(Arc::new(InMemoryPostSummaryRepository::default()), Arc::default()),
+            )
         } else {
             live.track("bench", Noop)
         };
@@ -407,7 +418,10 @@ async fn segments(report: &mut Report, scale: &Scale) {
     seed_posts(&*live.store, events, 1).await; // one event per aggregate: spread evenly
     let last = live.last_position().await;
     for segments in [1_u32, 4, 14] {
-        let options = cqrs::TrackingOptions { segments, ..cqrs::TrackingOptions::default() };
+        let options = cqrs::TrackingOptions {
+            segments,
+            ..cqrs::TrackingOptions::default()
+        };
         let started = Instant::now();
         let handle = live
             .events()
@@ -553,11 +567,16 @@ async fn postgres(report: &mut Report, scale: &Scale) {
     for writers in [1_u64, 4, 16, 64] {
         let schema = format!("bench_{}_{writers}", std::process::id());
         let admin = sqlx::PgPool::connect(&url).await.unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}")))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}"
+        )))
+        .execute(&admin)
+        .await
+        .ok();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA IF NOT EXISTS {schema}")))
             .execute(&admin)
             .await
-            .ok();
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA IF NOT EXISTS {schema}"))).execute(&admin).await.unwrap();
+            .unwrap();
         let options: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(64)
@@ -598,6 +617,10 @@ async fn postgres(report: &mut Report, scale: &Scale) {
         report.add(&name, "throughput", appends / elapsed.as_secs_f64(), "appends/s");
         report.add(&name, "latency p50", p50, "µs");
         report.add(&name, "latency p99", p99, "µs");
-        assert_eq!(store.last_position().await.unwrap(), (per_writer * writers), "gapless under load");
+        assert_eq!(
+            store.last_position().await.unwrap(),
+            (per_writer * writers),
+            "gapless under load"
+        );
     }
 }

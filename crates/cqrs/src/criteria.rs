@@ -23,7 +23,10 @@ pub struct Tag {
 impl Tag {
     /// The tag `key=value`.
     pub fn new(key: impl Into<Cow<'static, str>>, value: impl fmt::Display) -> Self {
-        Self { key: key.into(), value: value.to_string() }
+        Self {
+            key: key.into(),
+            value: value.to_string(),
+        }
     }
 }
 
@@ -94,7 +97,12 @@ pub struct EventCriteria {
 impl EventCriteria {
     /// Events with all of `tags`, of any type.
     pub fn tagged(tags: impl IntoIterator<Item = Tag>) -> Self {
-        Self { criteria: vec![Criterion { types: Vec::new(), tags: tags.into_iter().collect() }] }
+        Self {
+            criteria: vec![Criterion {
+                types: Vec::new(),
+                tags: tags.into_iter().collect(),
+            }],
+        }
     }
 
     /// Narrows every alternative to events of `types`.
@@ -142,7 +150,10 @@ impl AppendCondition {
     /// of their positions.
     #[must_use]
     pub fn and(self, other: Self) -> Self {
-        Self { criteria: self.criteria.or(other.criteria), after: self.after.min(other.after) }
+        Self {
+            criteria: self.criteria.or(other.criteria),
+            after: self.after.min(other.after),
+        }
     }
 
     /// [`and`](Self::and) of two optional conditions.

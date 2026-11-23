@@ -15,14 +15,12 @@ use std::{
 };
 
 use cqrs::{
-    ProcessingContext,
-    Aggregate, EventEnvelope, EventHandler,
-    EventSourced, EventStore, ExpectedVersion, HandlerError, InMemoryTokenStore,
-    InMemoryEventStore, LiveEvents, Metadata, StreamId, SubscriptionOptions,
+    Aggregate, EventEnvelope, EventHandler, EventSourced, EventStore, ExpectedVersion, HandlerError,
+    InMemoryEventStore, InMemoryTokenStore, LiveEvents, Metadata, ProcessingContext, StreamId, SubscriptionOptions,
     TrackingProcessor, subscribe,
 };
-use tokio::sync::broadcast;
 use futures_util::StreamExt;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 struct Ticked(u32);
@@ -38,10 +36,7 @@ impl Aggregate for Clock {
     type Event = Ticked;
 
     fn initial(id: &u32) -> Self {
-        Self {
-            id: *id,
-            ticks: 0,
-        }
+        Self { id: *id, ticks: 0 }
     }
 
     fn id(&self) -> &u32 {
@@ -100,8 +95,7 @@ impl World {
     }
 
     fn subscribe(&self, after: u64) -> impl futures_core::Stream<Item = u64> + use<> {
-        subscribe(Arc::clone(&self.store), &self.live, after, options())
-            .map(|event| event.unwrap().position)
+        subscribe(Arc::clone(&self.store), &self.live, after, options()).map(|event| event.unwrap().position)
     }
 }
 

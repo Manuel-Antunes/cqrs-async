@@ -156,7 +156,9 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
                 return Ok(Vec::new());
             }
             let events: Vec<TaggedEvent<E>> = events.into_iter().map(TaggedEvent::new).collect();
-            let recorded = self.append_tagged(stream, expected, &events, metadata, condition).await?;
+            let recorded = self
+                .append_tagged(stream, expected, &events, metadata, condition)
+                .await?;
             debug_assert_eq!(recorded.len(), events.len(), "one record per event, in order");
             Ok(events
                 .into_iter()
@@ -340,7 +342,11 @@ impl<E> Inner<E> {
                 (criterion.types.is_empty() || criterion.types.contains(&event.event_type.as_str()))
                     && criterion.tags.iter().all(|tag| self.tags[*index].contains(tag))
             };
-            let shortest = criterion.tags.iter().map(|tag| self.tagged.get(tag).map_or(&[][..], Vec::as_slice)).min_by_key(|list| list.len());
+            let shortest = criterion
+                .tags
+                .iter()
+                .map(|tag| self.tagged.get(tag).map_or(&[][..], Vec::as_slice))
+                .min_by_key(|list| list.len());
             match shortest {
                 Some(list) => {
                     let start = list.partition_point(|index| *index < from);
@@ -429,7 +435,11 @@ impl<E: DomainEvent + Clone> EventStore<E> for InMemoryEventStore<E> {
         criteria: &EventCriteria,
     ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, u64), StoreError>> + Send {
         let inner = self.lock();
-        let matching = inner.matching(criteria, 0).into_iter().map(|index| inner.log[index].clone()).collect();
+        let matching = inner
+            .matching(criteria, 0)
+            .into_iter()
+            .map(|index| inner.log[index].clone())
+            .collect();
         ready(Ok((matching, inner.log.len() as u64)))
     }
 
@@ -467,7 +477,12 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
                 return Err(StoreError::ConditionFailed);
             }
         }
-        let Inner { log, streams, tags, tagged } = &mut *inner;
+        let Inner {
+            log,
+            streams,
+            tags,
+            tagged,
+        } = &mut *inner;
         let indices = streams.entry(stream.clone()).or_default();
         let actual = indices.last().map(|&index| log[index].sequence);
 
@@ -488,7 +503,14 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
         let first = (actual.unwrap_or(0) + 1, log.len() as u64 + 1);
         let numbered = (first.0..).zip(first.1..).zip(events);
         let mut recorded = Vec::with_capacity(events.len());
-        for ((sequence, position), TaggedEvent { event: payload, tags: event_tags }) in numbered {
+        for (
+            (sequence, position),
+            TaggedEvent {
+                event: payload,
+                tags: event_tags,
+            },
+        ) in numbered
+        {
             let index = log.len();
             for tag in event_tags {
                 tagged.entry(tag.clone()).or_default().push(index);
@@ -505,7 +527,11 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
                 metadata: metadata.clone(),
                 payload: payload.clone(),
             });
-            recorded.push(Recorded { position, sequence, recorded_at });
+            recorded.push(Recorded {
+                position,
+                sequence,
+                recorded_at,
+            });
         }
         Ok(recorded)
     }

@@ -8,8 +8,9 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,     EventSourced, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext,
-    ProcessorHandle, Published, SnapshotStore, StoreError, StreamId, TrackingOptions, WithPublisher,
+    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventSourced,
+    EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext, ProcessorHandle, Published,
+    SnapshotStore, StoreError, StreamId, TrackingOptions, WithPublisher,
 };
 use cqrs_postgres::{PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore};
 use serde::{Deserialize, Serialize};
@@ -101,7 +102,11 @@ struct AccountViews;
 
 #[cqrs::projection(namespace = "views")]
 impl EventHandler for AccountViews {
-    async fn handle(&self, event: &EventEnvelope<AccountEvent>, context: &mut ProcessingContext<'_, PgTransaction>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<AccountEvent>,
+        context: &mut ProcessingContext<'_, PgTransaction>,
+    ) -> Result<(), HandlerError> {
         sqlx::query(
             "INSERT INTO account_views (id, balance, events) VALUES ($1, $2, 1) ON CONFLICT (id) DO UPDATE \
              SET balance = account_views.balance + EXCLUDED.balance, events = account_views.events + 1",
@@ -114,7 +119,9 @@ impl EventHandler for AccountViews {
     }
 
     async fn reset(&self, context: &mut ProcessingContext<'_, PgTransaction>) -> Result<(), HandlerError> {
-        sqlx::query("TRUNCATE account_views").execute(&mut **context.transaction()).await?;
+        sqlx::query("TRUNCATE account_views")
+            .execute(&mut **context.transaction())
+            .await?;
         Ok(())
     }
 }
@@ -126,9 +133,16 @@ struct TransferPolicy<B> {
 
 #[cqrs::projection(namespace = "transfers")]
 impl<B: CommandGateway<Execute> + 'static> EventHandler for TransferPolicy<B> {
-    async fn handle(&self, event: &EventEnvelope<AccountEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<AccountEvent>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         if let AccountEvent::TransferredOut { to, amount } = &event.payload {
-            let deposit = Execute { account: to.clone(), command: BankCommand::Deposit { amount: *amount } };
+            let deposit = Execute {
+                account: to.clone(),
+                command: BankCommand::Deposit { amount: *amount },
+            };
             while self.bank.send(deposit.clone()).await == Err(BankError::Conflict) {}
         }
         Ok(())
@@ -150,8 +164,15 @@ pub struct Ours<N> {
 /// 8 segments; events per unit of work from `CQRS_VERSUS_BATCH` (default
 /// 100; 1 handles each event in its own transaction).
 fn options() -> TrackingOptions {
-    let batch_size = std::env::var("CQRS_VERSUS_BATCH").ok().and_then(|value| value.parse().ok()).unwrap_or(100);
-    TrackingOptions { segments: 8, batch_size, ..TrackingOptions::default() }
+    let batch_size = std::env::var("CQRS_VERSUS_BATCH")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100);
+    TrackingOptions {
+        segments: 8,
+        batch_size,
+        ..TrackingOptions::default()
+    }
 }
 
 /// Starts `processor` and waits until it owns all its segments.
@@ -183,18 +204,30 @@ where
 {
     async fn build(pool: PgPool, snapshots: impl FnOnce(Repo<()>) -> Repo<N>) -> Self {
         cqrs_postgres::migrate(&pool).await.expect("migrating");
-        sqlx::query("CREATE TABLE account_views (id text PRIMARY KEY, balance bigint NOT NULL, events bigint NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("creating the view");
+        sqlx::query(
+            "CREATE TABLE account_views (id text PRIMARY KEY, balance bigint NOT NULL, events bigint NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("creating the view");
         let events = Events::new(Store::new(pool.clone())).with_tokens(PostgresTokenStore::new(pool.clone()));
         let accounts = Arc::new(snapshots(events.event_sourced()));
-        let execute = ExecuteHandler { accounts: EventSourcedAccounts(accounts) };
+        let execute = ExecuteHandler {
+            accounts: EventSourcedAccounts(accounts),
+        };
         let bank = Arc::new(Bank { execute }.with_publisher(events.clone()));
         let views = started(events.projection(AccountViews).with_options(options()).spawn()).await;
-        let policy = TransferPolicy { bank: Arc::clone(&bank) };
+        let policy = TransferPolicy {
+            bank: Arc::clone(&bank),
+        };
         let transfers = started(events.projection(policy).with_options(options()).spawn()).await;
-        Self { pool, events, bank, views: Mutex::new(Some(views)), transfers: Mutex::new(Some(transfers)) }
+        Self {
+            pool,
+            events,
+            bank,
+            views: Mutex::new(Some(views)),
+            transfers: Mutex::new(Some(transfers)),
+        }
     }
 }
 
@@ -204,7 +237,12 @@ where
     N: SnapshotStore<OurAccount> + 'static,
 {
     async fn execute(&self, account: &str, command: BankCommand) -> Result<(), BankError> {
-        self.bank.send(Execute { account: account.to_owned(), command }).await
+        self.bank
+            .send(Execute {
+                account: account.to_owned(),
+                command,
+            })
+            .await
     }
 
     async fn settle(&self) {
@@ -222,17 +260,22 @@ where
     }
 
     async fn views(&self) -> Balances {
-        let rows: Vec<(String, i64, i64)> =
-            sqlx::query_as("SELECT id, balance, events FROM account_views").fetch_all(&self.pool).await.expect("views");
-        rows.into_iter().map(|(id, balance, events)| (id, (balance, events))).collect()
+        let rows: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id, balance, events FROM account_views")
+            .fetch_all(&self.pool)
+            .await
+            .expect("views");
+        rows.into_iter()
+            .map(|(id, balance, events)| (id, (balance, events)))
+            .collect()
     }
 
     async fn truth(&self) -> Balances {
-        let rows: Vec<(String, serde_json::Value)> =
-            sqlx::query_as("SELECT stream_id, payload FROM cqrs_events WHERE stream_type = 'account' ORDER BY position")
-                .fetch_all(&self.pool)
-                .await
-                .expect("events");
+        let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+            "SELECT stream_id, payload FROM cqrs_events WHERE stream_type = 'account' ORDER BY position",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .expect("events");
         fold(rows)
     }
 
@@ -252,7 +295,11 @@ where
         let stream = StreamId::of::<OurAccount>(&account.to_owned());
         for chunk in (0..deposits).collect::<Vec<_>>().chunks(1_000) {
             let batch = chunk.iter().map(|_| AccountEvent::Deposited { amount: 1 }).collect();
-            self.events.store().append(&stream, ExpectedVersion::Any, batch, &Metadata::new()).await.expect("seeding");
+            self.events
+                .store()
+                .append(&stream, ExpectedVersion::Any, batch, &Metadata::new())
+                .await
+                .expect("seeding");
         }
     }
 

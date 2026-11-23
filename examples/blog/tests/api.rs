@@ -9,7 +9,10 @@ use std::{sync::Arc, time::Duration};
 use async_graphql::{Request, Response, Variables};
 use blog::{
     Running,
-    application::{commands::PostCommands, queries::{PostQueries, PostSubscriptions}},
+    application::{
+        commands::PostCommands,
+        queries::{PostQueries, PostSubscriptions},
+    },
     presentation::{
         BlogApi,
         graphql::{self, BlogSchema},
@@ -109,9 +112,15 @@ async fn errors_carry_a_code_clients_can_branch_on() {
     let create = "mutation($title: String!) { createPost(title: $title) }";
     let publish = "mutation($id: ID!) { publishPost(id: $id) }";
 
-    assert_eq!(error_code(&schema, create, json!({ "title": "  " })).await, "DOMAIN_RULE");
+    assert_eq!(
+        error_code(&schema, create, json!({ "title": "  " })).await,
+        "DOMAIN_RULE"
+    );
     assert_eq!(error_code(&schema, publish, json!({ "id": "42" })).await, "NOT_FOUND");
-    assert_eq!(error_code(&schema, publish, json!({ "id": "abc" })).await, "BAD_USER_INPUT");
+    assert_eq!(
+        error_code(&schema, publish, json!({ "id": "abc" })).await,
+        "BAD_USER_INPUT"
+    );
 
     let id = self::create(&schema, "Once").await;
     self::publish(&schema, &id).await;
@@ -152,9 +161,7 @@ async fn post_events_resumes_after_a_known_position() {
     let (running, schema) = app();
     create(&schema, "a").await;
     create(&schema, "b").await;
-    let mut events = schema.execute_stream(Request::new(
-        r#"subscription { postEvents(after: "1") { position } }"#,
-    ));
+    let mut events = schema.execute_stream(Request::new(r#"subscription { postEvents(after: "1") { position } }"#));
     let response = within(events.next()).await.unwrap();
     assert_eq!(
         response.data.into_json().unwrap(),
@@ -180,19 +187,14 @@ async fn post_published_only_reports_new_publications() {
     publish(&schema, &fresh).await;
 
     let response = within(next).await.unwrap().unwrap();
-    assert_eq!(
-        response.data.into_json().unwrap(),
-        json!({ "postPublished": fresh })
-    );
+    assert_eq!(response.data.into_json().unwrap(), json!({ "postPublished": fresh }));
     running.stop().await;
 }
 
 #[tokio::test]
 async fn subscribers_are_independent_and_ordered_under_concurrent_writers() {
     let (running, schema) = app();
-    let subscribe = || {
-        schema.execute_stream(Request::new("subscription { postEvents { position } }"))
-    };
+    let subscribe = || schema.execute_stream(Request::new("subscription { postEvents { position } }"));
     let (mut a, mut b) = (subscribe(), subscribe());
 
     // 20 posts created concurrently, from 20 tasks.
@@ -279,7 +281,11 @@ async fn subscribing_to_a_post_has_the_query_shape_and_follows_its_changes() {
 #[tokio::test]
 async fn subscribing_to_a_post_that_does_not_exist_yet_starts_with_null() {
     let (running, schema) = app();
-    let mut post = Box::pin(subscribe(&schema, r#"subscription { post(id: "1") { title } }"#, json!({})));
+    let mut post = Box::pin(subscribe(
+        &schema,
+        r#"subscription { post(id: "1") { title } }"#,
+        json!({}),
+    ));
     assert_eq!(next_data(&mut post).await, json!({ "post": null }));
     create(&schema, "Born later").await;
     assert_eq!(next_data(&mut post).await, json!({ "post": { "title": "Born later" } }));
@@ -289,7 +295,11 @@ async fn subscribing_to_a_post_that_does_not_exist_yet_starts_with_null() {
 #[tokio::test]
 async fn the_published_list_ignores_drafts_and_updates_on_publication() {
     let (running, schema) = app();
-    let mut published = Box::pin(subscribe(&schema, "subscription { publishedPosts { id title } }", json!({})));
+    let mut published = Box::pin(subscribe(
+        &schema,
+        "subscription { publishedPosts { id title } }",
+        json!({}),
+    ));
     assert_eq!(next_data(&mut published).await, json!({ "publishedPosts": [] }));
 
     let id = create(&schema, "Soon").await; // a draft: not refreshed at all
@@ -351,8 +361,14 @@ async fn invalid_filters_fail_the_subscription_with_a_code() {
         r#"subscription { postEvents(after: "-1") { position } }"#,
         r#"subscription { post(id: "x") { id } }"#,
     ] {
-        let response = within(Box::pin(subscribe(&schema, query, json!({}))).next()).await.unwrap();
-        let code = response.errors[0].extensions.as_ref().and_then(|e| e.get("code")).cloned();
+        let response = within(Box::pin(subscribe(&schema, query, json!({}))).next())
+            .await
+            .unwrap();
+        let code = response.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|e| e.get("code"))
+            .cloned();
         assert_eq!(code.unwrap().into_json().unwrap(), "BAD_USER_INPUT", "{query}");
     }
     running.stop().await;
@@ -382,10 +398,15 @@ async fn over_http_and_websocket() {
     assert_eq!(ack["type"], "connection_ack");
     for (id, query) in [
         ("events", "subscription { postEvents { postId kind title } }"),
-        ("published", "subscription { postEvents(kinds: [PUBLISHED]) { postId kind } }"),
+        (
+            "published",
+            "subscription { postEvents(kinds: [PUBLISHED]) { postId kind } }",
+        ),
     ] {
         socket
-            .send(send(json!({ "id": id, "type": "subscribe", "payload": { "query": query } })))
+            .send(send(
+                json!({ "id": id, "type": "subscribe", "payload": { "query": query } }),
+            ))
             .await
             .unwrap();
     }
@@ -435,7 +456,11 @@ async fn over_http_and_websocket() {
     );
 
     // GraphiQL is served for browsers.
-    let page = raw_http(address, "GET /graphql HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").await;
+    let page = raw_http(
+        address,
+        "GET /graphql HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n",
+    )
+    .await;
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains("graphiql"));
 
@@ -498,7 +523,10 @@ async fn the_request_correlation_id_is_stored_with_the_events_it_causes() {
     assert!(response.get("errors").is_none(), "{response}");
 
     let stored = running.app.events().store().all();
-    let correlation: Vec<_> = stored.iter().map(|event| event.metadata.get("correlation_id").cloned()).collect();
+    let correlation: Vec<_> = stored
+        .iter()
+        .map(|event| event.metadata.get("correlation_id").cloned())
+        .collect();
     assert_eq!(correlation, [Some("req-7".to_owned())]);
     server.abort();
     running.stop().await;
@@ -523,8 +551,18 @@ async fn interceptors_audit_every_command_and_measure_the_projection() {
     running.settled().await;
 
     let entries = running.audit.entries();
-    let summary: Vec<_> = entries.iter().map(|e| (e.command, e.correlation_id.as_deref(), e.succeeded)).collect();
-    assert_eq!(summary, [("CreatePost", Some("req-9"), true), ("PublishPost", None, true), ("PublishPost", None, false)]);
+    let summary: Vec<_> = entries
+        .iter()
+        .map(|e| (e.command, e.correlation_id.as_deref(), e.succeeded))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("CreatePost", Some("req-9"), true),
+            ("PublishPost", None, true),
+            ("PublishPost", None, false)
+        ]
+    );
     assert_eq!(running.metrics.handled(), 2, "created and published, each applied once");
     server.abort();
     running.stop().await;

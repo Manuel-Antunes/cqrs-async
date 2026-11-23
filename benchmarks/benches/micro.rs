@@ -2,7 +2,10 @@
 //!
 //! `cargo bench -p cqrs-benchmarks --bench micro`
 
-use std::{hint::black_box, sync::atomic::{AtomicU64, Ordering}};
+use std::{
+    hint::black_box,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use blog::{
     application::BlogError,
@@ -83,8 +86,7 @@ mod persistence {
     /// the snapshot plus at most 99 events, instead of all of them.
     #[divan::bench]
     fn load_with_snapshot_100k_events(bencher: divan::Bencher) {
-        let posts = PlainPosts::new(InMemoryEventStore::new())
-            .with_snapshots(InMemorySnapshots::default(), 100);
+        let posts = PlainPosts::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 100);
         let mut post = cqrs::Loaded::new(Post::initial(&PostId(1)));
         for n in 0..100_000 {
             let mut events = Vec::new();
@@ -125,8 +127,7 @@ mod persistence {
                 id
             })
             .bench_local_values(|id| {
-                let published: Result<(), BlogError> =
-                    now(posts.update(&id, |post, events| post.publish(events)));
+                let published: Result<(), BlogError> = now(posts.update(&id, |post, events| post.publish(events)));
                 published.unwrap();
             });
     }
@@ -150,8 +151,8 @@ mod interceptors {
         infrastructure::{InMemoryPostSummaryRepository, Measured, ProjectionMetrics},
     };
     use cqrs::{
-        DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, HandlerError, Intercepted, Interceptor, Message,
-        Metadata, ProcessingContext, StreamId,
+        DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, HandlerError, Intercepted, Interceptor,
+        Message, Metadata, ProcessingContext, StreamId,
     };
 
     type Summaries = PostSummaryProjection<InMemoryPostSummaryRepository>;
@@ -221,11 +222,20 @@ mod interceptors {
             event_version: 1,
             recorded_at: SystemTime::now(),
             metadata: Metadata::new(),
-            payload: PostEvent::Created { id: PostId(1), title: "a".into() },
+            payload: PostEvent::Created {
+                id: PostId(1),
+                title: "a".into(),
+            },
         };
         now(summaries.handle(&created, &mut context(&mut ()))).unwrap();
         let payload = PostEvent::Retitled { title: "b".into() };
-        EventEnvelope { position: 2, sequence: 2, event_type: payload.event_type().into(), payload, ..created }
+        EventEnvelope {
+            position: 2,
+            sequence: 2,
+            event_type: payload.event_type().into(),
+            payload,
+            ..created
+        }
     }
 
     /// The blog's projection applying an event (redelivered, so skipped
@@ -265,14 +275,22 @@ mod unit {
     /// A gateway of commands with its publisher (baseline).
     #[divan::bench]
     fn command_gateway(bencher: divan::Bencher) {
-        let gateway = PingCommands { ping: PingCommandHandler }.with_publisher(NoStore);
+        let gateway = PingCommands {
+            ping: PingCommandHandler,
+        }
+        .with_publisher(NoStore);
         bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
     }
 
     /// The same gateway, given its publisher and held by a unit.
     #[divan::bench]
     fn command_through_unit(bencher: divan::Bencher) {
-        let unit = Cqrs::from_publisher(NoStore).commands(PingCommands { ping: PingCommandHandler }).queries(()).build();
+        let unit = Cqrs::from_publisher(NoStore)
+            .commands(PingCommands {
+                ping: PingCommandHandler,
+            })
+            .queries(())
+            .build();
         bencher.bench_local(|| now(unit.commands().send(Ping(black_box(1)))).unwrap());
     }
 }

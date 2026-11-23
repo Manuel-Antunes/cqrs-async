@@ -38,12 +38,12 @@
 
 use std::sync::Arc;
 
-use crate::{Intercepted, Published, WithPublisher};
 #[cfg(feature = "tokio")]
 use crate::{
     DomainEvent, EventFeed, EventHandler, EventStore, Events, LocalProgress, ProcessorHandle, Projected, Projection,
     ProjectionProgress, SubscriptionQueries, TrackingOptions, TransactionalTokenStore,
 };
+use crate::{Intercepted, Published, WithPublisher};
 
 /// An application's CQRS unit: the publisher `P` its handlers commit
 /// through, the command gateway `C`, the query gateway `Q` and its events
@@ -171,7 +171,9 @@ where
     /// committed before the call: queries then see every change made
     /// before it. A failing read of the head returns at once.
     pub async fn settled(&self) {
-        let Ok(head) = self.events.last_position().await else { return };
+        let Ok(head) = self.events.last_position().await else {
+            return;
+        };
         for progress in &self.processing.all {
             progress.reached(head).await;
         }
@@ -221,26 +223,68 @@ impl<P, Q, E, U> CqrsBuilder<P, (), Q, E, U> {
     /// (`PostCommandGateway::new(posts)`): the unit gives it the publisher
     /// ([`WithPublisher`]), so it sends commands from here on.
     pub fn commands<G>(self, gateway: G) -> CqrsBuilder<P, Published<G, Arc<P>>, Q, E, U> {
-        let CqrsBuilder { publisher, queries, events, updates, processing, .. } = self;
+        let CqrsBuilder {
+            publisher,
+            queries,
+            events,
+            updates,
+            processing,
+            ..
+        } = self;
         let commands = gateway.with_publisher(Arc::clone(&publisher));
-        CqrsBuilder { publisher, commands, queries, events, updates, processing }
+        CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        }
     }
 }
 
 impl<P, C, Q, E, U> CqrsBuilder<P, C, Q, E, U> {
     /// Every command goes through `interceptor` (a tuple chains several).
     pub fn intercept<I>(self, interceptor: I) -> CqrsBuilder<P, Intercepted<C, I>, Q, E, U> {
-        let CqrsBuilder { publisher, commands, queries, events, updates, processing } = self;
+        let CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        } = self;
         let commands = Intercepted::new(commands, interceptor);
-        CqrsBuilder { publisher, commands, queries, events, updates, processing }
+        CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        }
     }
 }
 
 impl<P, C, E, U> CqrsBuilder<P, C, (), E, U> {
     /// The query gateway (built over the read models it answers from).
     pub fn queries<Q>(self, queries: Q) -> CqrsBuilder<P, C, Q, E, U> {
-        let CqrsBuilder { publisher, commands, events, updates, processing, .. } = self;
-        CqrsBuilder { publisher, commands, queries, events, updates, processing }
+        let CqrsBuilder {
+            publisher,
+            commands,
+            events,
+            updates,
+            processing,
+            ..
+        } = self;
+        CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        }
     }
 }
 
@@ -249,8 +293,22 @@ impl<P, C, Q, U> CqrsBuilder<P, C, Q, (), U> {
     /// with the `tokio` feature's `Events`, the unit can start processors
     /// and serve subscriptions.
     pub fn events<E>(self, events: E) -> CqrsBuilder<P, C, Q, E, U> {
-        let CqrsBuilder { publisher, commands, queries, updates, processing, .. } = self;
-        CqrsBuilder { publisher, commands, queries, events, updates, processing }
+        let CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            updates,
+            processing,
+            ..
+        } = self;
+        CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        }
     }
 }
 
@@ -305,10 +363,18 @@ where
     where
         H: Projection + EventHandler<Ev, T::Transaction> + 'static,
     {
-        let handle = self.events.projection(handler).with_options(self.processing.options).spawn();
+        let handle = self
+            .events
+            .projection(handler)
+            .with_options(self.processing.options)
+            .spawn();
         let progress = LocalProgress::of(&handle);
         self.processing.all.push(progress.clone());
-        self.processing.handles.get_mut().expect("processors poisoned").push(handle);
+        self.processing
+            .handles
+            .get_mut()
+            .expect("processors poisoned")
+            .push(handle);
         progress
     }
 }
@@ -321,16 +387,43 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
     /// the projections emit through `updates` (Axon's subscription
     /// queries).
     pub fn subscriptions<U>(self, updates: Arc<U>) -> CqrsBuilder<P, C, Q, E, Arc<U>> {
-        let CqrsBuilder { publisher, commands, queries, events, processing, .. } = self;
-        CqrsBuilder { publisher, commands, queries, events, updates, processing }
+        let CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            processing,
+            ..
+        } = self;
+        CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+        }
     }
 }
 
 impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
     /// The unit.
     pub fn build(self) -> Cqrs<P, C, Q, E> {
-        let CqrsBuilder { publisher, commands, queries, events, processing, .. } = self;
-        Cqrs { publisher, commands, queries, events, processing }
+        let CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            processing,
+            ..
+        } = self;
+        Cqrs {
+            publisher,
+            commands,
+            queries,
+            events,
+            processing,
+        }
     }
 }
 
@@ -345,9 +438,25 @@ where
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
-    ) -> Cqrs<P, C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T>> {
-        let CqrsBuilder { publisher, commands, queries, events, updates, processing, .. } = self;
-        let queries = SubscriptionQueries::new(queries, updates).after_projection(events.clone(), processing.projections.clone());
-        Cqrs { publisher, commands, queries, events, processing }
+    ) -> Cqrs<P, C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T>>
+    {
+        let CqrsBuilder {
+            publisher,
+            commands,
+            queries,
+            events,
+            updates,
+            processing,
+            ..
+        } = self;
+        let queries =
+            SubscriptionQueries::new(queries, updates).after_projection(events.clone(), processing.projections.clone());
+        Cqrs {
+            publisher,
+            commands,
+            queries,
+            events,
+            processing,
+        }
     }
 }

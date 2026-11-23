@@ -9,9 +9,8 @@ use std::{
 };
 
 use cqrs::{
-    ProcessingContext,
     EventEnvelope, EventHandler, EventStore, Events, ExpectedVersion, HandlerError, InMemoryEventStore,
-    InMemoryTokenStore, Metadata, ResetError, StreamId,
+    InMemoryTokenStore, Metadata, ProcessingContext, ResetError, StreamId,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -56,7 +55,11 @@ impl EventHandler<Ticked> for Mailer {
 
 async fn tick(events: &Events<Ticked, Store, Arc<InMemoryTokenStore>>, n: u64) {
     let stream = StreamId::new("clock", n.to_string());
-    events.store().append(&stream, ExpectedVersion::NoStream, vec![Ticked(n)], &Metadata::new()).await.unwrap();
+    events
+        .store()
+        .append(&stream, ExpectedVersion::NoStream, vec![Ticked(n)], &Metadata::new())
+        .await
+        .unwrap();
 }
 
 async fn eventually(check: impl Fn() -> bool) {
@@ -77,7 +80,10 @@ async fn a_reset_replays_into_a_cleared_projection_and_skips_side_effects() {
     for n in 1..=3 {
         tick(&events, n).await;
     }
-    let running = (events.track("projection", Arc::clone(&projection)), events.track("mailer", Arc::clone(&mailer)));
+    let running = (
+        events.track("projection", Arc::clone(&projection)),
+        events.track("mailer", Arc::clone(&mailer)),
+    );
     eventually(|| projection.seen.lock().unwrap().len() == 3 && mailer.sent.lock().unwrap().len() == 3).await;
 
     // Refused while running: nothing touched.
@@ -87,7 +93,11 @@ async fn a_reset_replays_into_a_cleared_projection_and_skips_side_effects() {
 
     running.0.stop().await;
     running.1.stop().await;
-    events.processor("projection", Arc::clone(&projection)).reset().await.unwrap();
+    events
+        .processor("projection", Arc::clone(&projection))
+        .reset()
+        .await
+        .unwrap();
     events.processor("mailer", Arc::clone(&mailer)).reset().await.unwrap();
     assert_eq!(*projection.resets.lock().unwrap(), 1);
     assert!(projection.seen.lock().unwrap().is_empty(), "cleared before the replay");
@@ -97,7 +107,11 @@ async fn a_reset_replays_into_a_cleared_projection_and_skips_side_effects() {
     tick(&events, 4).await;
     eventually(|| projection.seen.lock().unwrap().len() == 4 && mailer.sent.lock().unwrap().len() == 4).await;
     assert_eq!(*projection.seen.lock().unwrap(), [1, 2, 3, 4], "rebuilt from the start");
-    assert_eq!(*mailer.sent.lock().unwrap(), [1, 2, 3, 4], "the replayed 1..=3 are not sent again");
+    assert_eq!(
+        *mailer.sent.lock().unwrap(),
+        [1, 2, 3, 4],
+        "the replayed 1..=3 are not sent again"
+    );
 }
 
 #[tokio::test]
@@ -120,5 +134,9 @@ async fn a_processing_group_replays_its_projection_but_not_its_side_effects() {
     tick(&events, 4).await;
     eventually(|| projection.seen.lock().unwrap().len() == 4 && mailer.sent.lock().unwrap().len() == 4).await;
     assert_eq!(*projection.seen.lock().unwrap(), [1, 2, 3, 4], "the projection replays");
-    assert_eq!(*mailer.sent.lock().unwrap(), [1, 2, 3, 4], "the mailer only gets the new event");
+    assert_eq!(
+        *mailer.sent.lock().unwrap(),
+        [1, 2, 3, 4],
+        "the mailer only gets the new event"
+    );
 }

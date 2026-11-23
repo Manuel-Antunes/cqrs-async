@@ -65,21 +65,34 @@ pub fn aggregate_root(input: DeriveInput) -> Result<TokenStream2> {
         }
     }
     let id_field = marked
-        .or_else(|| fields.named.iter().find(|field| field.ident.as_ref().is_some_and(|ident| ident == "id")))
+        .or_else(|| {
+            fields
+                .named
+                .iter()
+                .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "id"))
+        })
         .ok_or_else(|| Error::new_spanned(name, "no id: add a field `id`, or mark one `#[aggregate(id)]`"))?;
     let id = id_field.ident.as_ref().expect("named field");
     let id_type = &id_field.ty;
 
     let krate = krate();
-    let type_name = attributes.name.unwrap_or_else(|| LitStr::new(&snake_case(&name.to_string()), name.span()));
-    let apply = attributes.apply.unwrap_or_else(|| format_ident!("apply", span = name.span()));
+    let type_name = attributes
+        .name
+        .unwrap_or_else(|| LitStr::new(&snake_case(&name.to_string()), name.span()));
+    let apply = attributes
+        .apply
+        .unwrap_or_else(|| format_ident!("apply", span = name.span()));
     let initial = match attributes.initial {
         Some(path) => quote!(#path(id)),
         None => {
-            let others = fields.named.iter().filter(|field| field.ident.as_ref() != Some(id)).map(|field| {
-                let ident = &field.ident;
-                quote!(#ident: ::core::default::Default::default())
-            });
+            let others = fields
+                .named
+                .iter()
+                .filter(|field| field.ident.as_ref() != Some(id))
+                .map(|field| {
+                    let ident = &field.ident;
+                    quote!(#ident: ::core::default::Default::default())
+                });
             quote!(Self { #id: ::core::clone::Clone::clone(id), #(#others,)* })
         }
     };

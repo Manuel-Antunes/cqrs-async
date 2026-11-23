@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cqrs::{EventEnvelope, Handler, RefreshedBy};
 
-use super::{PostSummaryRepository, PostSummary};
+use super::{PostSummary, PostSummaryRepository};
 use crate::{
     application::BlogError,
     domain::{PostEvent, PostId},

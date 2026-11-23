@@ -11,7 +11,10 @@ use crate::krate;
 pub fn query_updates(input: DeriveInput) -> Result<TokenStream2> {
     let name = &input.ident;
     let Data::Struct(data) = &input.data else {
-        return Err(Error::new_spanned(name, "`QueryUpdates` is derived on a struct of emitters"));
+        return Err(Error::new_spanned(
+            name,
+            "`QueryUpdates` is derived on a struct of emitters",
+        ));
     };
     let Fields::Named(fields) = &data.fields else {
         return Err(Error::new_spanned(name, "`QueryUpdates` needs named fields"));
@@ -34,7 +37,10 @@ pub fn query_updates(input: DeriveInput) -> Result<TokenStream2> {
         });
     }
     if impls.is_empty() {
-        return Err(Error::new_spanned(name, "no emitter: add `QueryUpdateEmitter<Query>` fields"));
+        return Err(Error::new_spanned(
+            name,
+            "no emitter: add `QueryUpdateEmitter<Query>` fields",
+        ));
     }
     Ok(quote!(#(#impls)*))
 }
@@ -45,7 +51,12 @@ fn emitted_query(ty: &Type) -> Result<&Type> {
     let Type::Path(path) = ty else {
         return Err(error());
     };
-    let segment = path.path.segments.last().filter(|segment| segment.ident == "QueryUpdateEmitter").ok_or_else(error)?;
+    let segment = path
+        .path
+        .segments
+        .last()
+        .filter(|segment| segment.ident == "QueryUpdateEmitter")
+        .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(error());
     };

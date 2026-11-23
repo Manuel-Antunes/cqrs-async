@@ -7,16 +7,10 @@
 //! [`EventSourced::load`]. Command handlers commit through the
 //! [`EventPublisher`](crate::EventPublisher) port, which it implements.
 
-use std::{
-    any::type_name,
-    fmt,
-    future::Future,
-    marker::PhantomData,
-    ops::Deref,
-};
+use std::{any::type_name, fmt, future::Future, marker::PhantomData, ops::Deref};
 
 use crate::{
-    AppendCondition, Aggregate, Appender, DomainEvent, EventCriteria, EventEnvelope, EventHandler, EventPublisher,
+    Aggregate, AppendCondition, Appender, DomainEvent, EventCriteria, EventEnvelope, EventHandler, EventPublisher,
     EventStore, ExpectedVersion, HandlerError, Metadata, Pending, SnapshotStore, StoreError, StreamId,
 };
 
@@ -56,7 +50,11 @@ impl<A: Aggregate> Loaded<A> {
         for event in events {
             aggregate.evolve(&event.payload);
         }
-        Some(Self { aggregate, version: None, condition: Some(condition) })
+        Some(Self {
+            aggregate,
+            version: None,
+            condition: Some(condition),
+        })
     }
 
     /// What its next commit expects of its stream: built from criteria, its
@@ -111,10 +109,7 @@ pub struct Saved<A: Aggregate> {
 /// to 8 elements: a fixed, typed fan-out with no `Vec<Box<dyn _>>`.
 pub trait EventProcessor<E: DomainEvent>: Send + Sync {
     /// Hands `events` (one commit, in order) to every handler of the group.
-    fn process(
-        &self,
-        events: &[EventEnvelope<E>],
-    ) -> impl Future<Output = Result<(), ProcessingFailure>> + Send;
+    fn process(&self, events: &[EventEnvelope<E>]) -> impl Future<Output = Result<(), ProcessingFailure>> + Send;
 }
 
 /// Handlers that failed. Each handler is isolated: one failing does not stop
@@ -159,7 +154,10 @@ async fn run_handler<E: DomainEvent, H: EventHandler<E>>(
     for event in events {
         // The events are committed already: each one's post-commit step
         // follows its handling, as in a processor's unit of work.
-        if let Err(error) = handler.handle(event, &mut crate::ProcessingContext::new(&mut (), false)).await {
+        if let Err(error) = handler
+            .handle(event, &mut crate::ProcessingContext::new(&mut (), false))
+            .await
+        {
             failures.push(HandlerFailure {
                 handler: type_name::<H>(),
                 position: event.position,
@@ -396,7 +394,11 @@ where
     /// # Errors
     ///
     /// The store's.
-    pub async fn load_in<X>(&self, id: &A::Id, events: &mut Appender<A::Event, X>) -> Result<Option<Loaded<A>>, StoreError> {
+    pub async fn load_in<X>(
+        &self,
+        id: &A::Id,
+        events: &mut Appender<A::Event, X>,
+    ) -> Result<Option<Loaded<A>>, StoreError> {
         let Some(criteria) = A::criteria(id) else {
             return self.load(id).await;
         };
@@ -413,7 +415,11 @@ where
     /// # Errors
     ///
     /// The store's.
-    pub async fn source<X>(&self, criteria: EventCriteria, events: &mut Appender<A::Event, X>) -> Result<Vec<EventEnvelope<A::Event>>, StoreError> {
+    pub async fn source<X>(
+        &self,
+        criteria: EventCriteria,
+        events: &mut Appender<A::Event, X>,
+    ) -> Result<Vec<EventEnvelope<A::Event>>, StoreError> {
         events.source(&self.store, criteria).await
     }
 
@@ -485,7 +491,11 @@ where
             // what others append after them.
             condition.after = committed.last().map_or(condition.after, |event| event.position);
             let processing = self.processor.process(&committed).await;
-            return Ok(Saved { aggregate: loaded, events: committed, processing });
+            return Ok(Saved {
+                aggregate: loaded,
+                events: committed,
+                processing,
+            });
         }
         let before = loaded.version.unwrap_or(0);
         loaded.version = committed.last().map(|event| event.sequence);
@@ -533,7 +543,11 @@ where
     for event in &events {
         aggregate.evolve(&event.payload);
     }
-    Ok(Some(Loaded { aggregate, version: Some(version), condition: None }))
+    Ok(Some(Loaded {
+        aggregate,
+        version: Some(version),
+        condition: None,
+    }))
 }
 
 /// [`load`] within a command: for an aggregate built from
@@ -543,7 +557,11 @@ where
 /// # Errors
 ///
 /// The store's.
-pub async fn load_in<A, S, P>(store: &S, id: &A::Id, events: &mut Appender<A::Event, P>) -> Result<Option<Loaded<A>>, StoreError>
+pub async fn load_in<A, S, P>(
+    store: &S,
+    id: &A::Id,
+    events: &mut Appender<A::Event, P>,
+) -> Result<Option<Loaded<A>>, StoreError>
 where
     A: Aggregate,
     S: EventStore<A::Event>,
@@ -560,7 +578,12 @@ where
 /// Appends `pending` to `entity`'s stream in `store`, expecting the version
 /// it was loaded at, then hands the commit to `processor`: what every
 /// publisher does. The last position, if anything was appended.
-pub(crate) async fn publish<A, S, P>(store: &S, processor: &P, entity: Loaded<A>, pending: Pending<A::Event>) -> Result<Option<u64>, StoreError>
+pub(crate) async fn publish<A, S, P>(
+    store: &S,
+    processor: &P,
+    entity: Loaded<A>,
+    pending: Pending<A::Event>,
+) -> Result<Option<u64>, StoreError>
 where
     A: Aggregate,
     S: EventStore<A::Event>,
@@ -569,7 +592,9 @@ where
     let expected = entity.expected();
     let condition = AppendCondition::both(entity.condition, pending.condition);
     let stream = StreamId::of::<A>(entity.aggregate.id());
-    let committed = store.append_if(&stream, expected, pending.events, &pending.metadata, condition.as_ref()).await?;
+    let committed = store
+        .append_if(&stream, expected, pending.events, &pending.metadata, condition.as_ref())
+        .await?;
     // Processing failures do not undo the commit: a tracking processor
     // retries; inline ones are the caller's to watch.
     let _ = processor.process(&committed).await;

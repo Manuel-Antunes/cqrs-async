@@ -12,10 +12,7 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote, quote_spanned};
-use syn::{
-    Data, DeriveInput, Error, Ident, LitInt, LitStr, Result, Type, parse_macro_input,
-    spanned::Spanned,
-};
+use syn::{Data, DeriveInput, Error, Ident, LitInt, LitStr, Result, Type, parse_macro_input, spanned::Spanned};
 
 /// Path to the `cqrs` crate, even when a consumer renamed the dependency.
 fn krate() -> TokenStream2 {
@@ -51,7 +48,11 @@ fn krate() -> TokenStream2 {
 /// ```
 #[proc_macro_derive(Commands, attributes(commands))]
 pub fn derive_commands(input: TokenStream) -> TokenStream {
-    into_stream(message_set::message_set(parse_macro_input!(input), "commands", "Command"))
+    into_stream(message_set::message_set(
+        parse_macro_input!(input),
+        "commands",
+        "Command",
+    ))
 }
 
 /// The query counterpart of `#[derive(Commands)]`: `#[queries(error = E)]`,
@@ -116,7 +117,10 @@ pub fn derive_query_updates(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
-    into_stream(projection::projection(parse_macro_input!(arguments), parse_macro_input!(item)))
+    into_stream(projection::projection(
+        parse_macro_input!(arguments),
+        parse_macro_input!(item),
+    ))
 }
 
 #[proc_macro_derive(AggregateRoot, attributes(aggregate))]
@@ -137,7 +141,9 @@ pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn command_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
     if !arguments.is_empty() {
-        return Error::new(Span::call_site(), "`#[command_handler]` takes no arguments").into_compile_error().into();
+        return Error::new(Span::call_site(), "`#[command_handler]` takes no arguments")
+            .into_compile_error()
+            .into();
     }
     into_stream(handlers::command_handler(parse_macro_input!(item)))
 }
@@ -147,7 +153,9 @@ pub fn command_handler(arguments: TokenStream, item: TokenStream) -> TokenStream
 #[proc_macro_attribute]
 pub fn query_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
     if !arguments.is_empty() {
-        return Error::new(Span::call_site(), "`#[query_handler]` takes no arguments").into_compile_error().into();
+        return Error::new(Span::call_site(), "`#[query_handler]` takes no arguments")
+            .into_compile_error()
+            .into();
     }
     into_stream(handlers::query_handler(parse_macro_input!(item)))
 }
@@ -241,7 +249,9 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
             for variant in &data.variants {
                 let ident = &variant.ident;
                 let attrs = event_attrs(&variant.attrs)?;
-                let label = attrs.name.unwrap_or_else(|| LitStr::new(&ident.to_string(), ident.span()));
+                let label = attrs
+                    .name
+                    .unwrap_or_else(|| LitStr::new(&ident.to_string(), ident.span()));
                 types.push(quote!(Self::#ident { .. } => #label));
                 any_version |= attrs.version.is_some();
                 let version = attrs.version.or_else(|| container.version.clone());
@@ -260,7 +270,10 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
                 .name
                 .clone()
                 .unwrap_or_else(|| LitStr::new(&name.to_string(), name.span()));
-            (quote!(#label), container.version.as_ref().map(|version| quote!(#version)))
+            (
+                quote!(#label),
+                container.version.as_ref().map(|version| quote!(#version)),
+            )
         }
         Data::Union(_) => {
             return Err(Error::new_spanned(name, "events cannot be unions"));
@@ -352,7 +365,12 @@ fn tagged_fields(krate: &TokenStream2, fields: &syn::Fields) -> Result<Option<(T
         let key = match &attr.meta {
             syn::Meta::Path(_) => match &field.ident {
                 Some(ident) => LitStr::new(&ident.to_string(), ident.span()),
-                None => return Err(Error::new_spanned(attr, "a tuple field needs a key: `#[tag = \"key\"]`")),
+                None => {
+                    return Err(Error::new_spanned(
+                        attr,
+                        "a tuple field needs a key: `#[tag = \"key\"]`",
+                    ));
+                }
             },
             syn::Meta::NameValue(value) => syn::parse2(value.value.to_token_stream())?,
             syn::Meta::List(_) => return Err(Error::new_spanned(attr, "expected `#[tag]` or `#[tag = \"key\"]`")),
@@ -373,7 +391,9 @@ fn tagged_fields(krate: &TokenStream2, fields: &syn::Fields) -> Result<Option<(T
             quote!({ #(#parts,)* .. })
         }
         syn::Fields::Unnamed(_) => {
-            let parts = bindings.iter().map(|binding| binding.as_ref().map_or_else(|| quote!(_), |binding| quote!(#binding)));
+            let parts = bindings
+                .iter()
+                .map(|binding| binding.as_ref().map_or_else(|| quote!(_), |binding| quote!(#binding)));
             quote!((#(#parts),*))
         }
         syn::Fields::Unit => return Ok(None),
@@ -426,11 +446,7 @@ pub fn derive_query(input: TokenStream) -> TokenStream {
 fn message(input: DeriveInput, attribute: &str, marker: &str) -> Result<TokenStream2> {
     let mut output: Option<Type> = None;
     let mut error: Option<Type> = None;
-    for attr in input
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident(attribute))
-    {
+    for attr in input.attrs.iter().filter(|attr| attr.path().is_ident(attribute)) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("output") {
                 output = Some(meta.value()?.parse()?);
@@ -445,9 +461,7 @@ fn message(input: DeriveInput, attribute: &str, marker: &str) -> Result<TokenStr
     let Some(error) = error else {
         return Err(Error::new_spanned(
             &input.ident,
-            format!(
-                "missing `#[{attribute}(error = Type)]`: the error is part of the message's contract"
-            ),
+            format!("missing `#[{attribute}(error = Type)]`: the error is part of the message's contract"),
         ));
     };
     let output = output.map_or_else(|| quote!(()), |ty| ty.to_token_stream());
@@ -502,10 +516,7 @@ pub fn derive_gateway(input: TokenStream) -> TokenStream {
 /// on the struct's generics.
 fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     let Data::Struct(data) = &input.data else {
-        return Err(Error::new_spanned(
-            &input.ident,
-            "`Gateway` is derived on structs",
-        ));
+        return Err(Error::new_spanned(&input.ident, "`Gateway` is derived on structs"));
     };
 
     let krate = krate();
@@ -530,7 +541,11 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
             |ident| quote!(#ident),
         );
         let handler = &field.ty;
-        let handler_trait = if kind.commands { quote!(CommandHandler) } else { quote!(Handler) };
+        let handler_trait = if kind.commands {
+            quote!(CommandHandler)
+        } else {
+            quote!(Handler)
+        };
 
         // A forgotten `#[gateway(skip)]` otherwise only shows up as a
         // confusing E0119. The check is only sound for types that do not use
@@ -552,7 +567,9 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
             let message = quote!(<#handler as #krate::CommandHandler>::Command);
             let mut generics = with_publisher.clone();
             let where_clause = generics.make_where_clause();
-            where_clause.predicates.push(syn::parse_quote!(#handler: #krate::CommandHandler));
+            where_clause
+                .predicates
+                .push(syn::parse_quote!(#handler: #krate::CommandHandler));
             where_clause.predicates.push(syn::parse_quote!(
                 __X: #krate::EventPublisher<<#handler as #krate::CommandHandler>::Event>
             ));
@@ -609,10 +626,7 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     }
 
     if impls.is_empty() {
-        return Err(Error::new_spanned(
-            name,
-            "a gateway needs at least one handler field",
-        ));
+        return Err(Error::new_spanned(name, "a gateway needs at least one handler field"));
     }
 
     // `#[gateway(commands = Enum)]` / `#[gateway(queries = Enum)]`: the
@@ -621,8 +635,12 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
         if kind.commands {
             let mut generics = with_publisher.clone();
             let where_clause = generics.make_where_clause();
-            where_clause.predicates.push(syn::parse_quote!(#set: #krate::DispatchInVia<Self, __X>));
-            where_clause.predicates.push(syn::parse_quote!(__X: ::core::marker::Send + ::core::marker::Sync));
+            where_clause
+                .predicates
+                .push(syn::parse_quote!(#set: #krate::DispatchInVia<Self, __X>));
+            where_clause
+                .predicates
+                .push(syn::parse_quote!(__X: ::core::marker::Send + ::core::marker::Sync));
             where_clause.predicates.push(syn::parse_quote!(
                 #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
             ));
@@ -646,7 +664,9 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
         }
         let mut generics = input.generics.clone();
         let where_clause = generics.make_where_clause();
-        where_clause.predicates.push(syn::parse_quote!(#set: #krate::DispatchVia<Self>));
+        where_clause
+            .predicates
+            .push(syn::parse_quote!(#set: #krate::DispatchVia<Self>));
         where_clause.predicates.push(syn::parse_quote!(
             #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
         ));
@@ -673,11 +693,7 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
 /// configuration kept next to the handlers).
 fn skipped(field: &syn::Field) -> Result<bool> {
     let mut skip = false;
-    for attr in field
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("gateway"))
-    {
+    for attr in field.attrs.iter().filter(|attr| attr.path().is_ident("gateway")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip") {
                 skip = true;

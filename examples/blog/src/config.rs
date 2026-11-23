@@ -124,5 +124,11 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscription
         .subscriptions(updates)
         .build();
 
-    Running { app: Arc::new(app), summaries, notifier, audit, metrics }
+    Running {
+        app: Arc::new(app),
+        summaries,
+        notifier,
+        audit,
+        metrics,
+    }
 }

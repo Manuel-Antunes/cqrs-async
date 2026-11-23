@@ -37,11 +37,7 @@ impl<A> Default for SubscriptionRoot<A> {
 impl<A: BlogApi> SubscriptionRoot<A> {
     /// The post now (`null` if it does not exist yet), then again each time
     /// it changes. Same shape as `Query.post`.
-    async fn post(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<impl Stream<Item = Result<Option<PostNode>>> + use<A>> {
+    async fn post(&self, ctx: &Context<'_>, id: ID) -> Result<impl Stream<Item = Result<Option<PostNode>>> + use<A>> {
         let query = FindPost { id: post_id(&id)? };
         let updates = ctx.data_unchecked::<A>().queries().subscribe(query);
         Ok(updates.map(|post| post.map(|post| post.map(PostNode::from)).map_err(from_blog)))
@@ -49,10 +45,7 @@ impl<A: BlogApi> SubscriptionRoot<A> {
 
     /// The published posts now, then again each time the list changes.
     /// Same shape as `Query.publishedPosts`.
-    async fn published_posts(
-        &self,
-        ctx: &Context<'_>,
-    ) -> impl Stream<Item = Result<Vec<PostNode>>> + use<A> {
+    async fn published_posts(&self, ctx: &Context<'_>) -> impl Stream<Item = Result<Vec<PostNode>>> + use<A> {
         let updates = ctx.data_unchecked::<A>().queries().subscribe(ListPublished);
         updates.map(|posts| {
             posts
@@ -75,7 +68,11 @@ impl<A: BlogApi> SubscriptionRoot<A> {
     ) -> Result<impl Stream<Item = Result<PostEventNode>> + use<A>> {
         let after = after.as_ref().map(position).transpose()?.unwrap_or(0);
         // Validated up front: a bad argument fails the subscription at once.
-        let stream = post_id.as_ref().map(self::post_id).transpose()?.map(|id| id.to_string());
+        let stream = post_id
+            .as_ref()
+            .map(self::post_id)
+            .transpose()?
+            .map(|id| id.to_string());
         let events = ctx.data_unchecked::<A>().events().subscribe(after);
         Ok(events
             .try_filter(move |event| {
@@ -90,16 +87,14 @@ impl<A: BlogApi> SubscriptionRoot<A> {
     }
 
     /// The id of each post published from now on.
-    async fn post_published(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<impl Stream<Item = Result<ID>> + use<A>> {
+    async fn post_published(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Result<ID>> + use<A>> {
         let events = ctx.data_unchecked::<A>().events();
         let now = events.last_position().await.map_err(from_store)?;
         Ok(events.subscribe(now).filter_map(|event| {
             ready(match event {
-                Ok(event) => matches!(event.payload, PostEvent::Published)
-                    .then(|| Ok(ID(event.stream.id().to_owned()))),
+                Ok(event) => {
+                    matches!(event.payload, PostEvent::Published).then(|| Ok(ID(event.stream.id().to_owned())))
+                }
                 Err(error) => Some(Err(from_store(error))),
             })
         }))

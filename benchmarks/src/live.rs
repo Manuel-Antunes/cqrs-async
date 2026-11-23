@@ -4,13 +4,15 @@
 use std::sync::Arc;
 
 use blog::{
-    application::{commands::PostCommands, queries::{PostQueries, PostSubscriptions}},
+    application::{
+        commands::PostCommands,
+        queries::{PostQueries, PostSubscriptions},
+    },
     domain::{Post, PostEvent},
 };
 use cqrs::{
-    ProcessingContext,
-    EventEnvelope, EventFeed, EventHandler, EventSourced, Events, HandlerError,
-    InMemoryEventStore, ProcessorHandle, StoreError,
+    EventEnvelope, EventFeed, EventHandler, EventSourced, Events, HandlerError, InMemoryEventStore, ProcessingContext,
+    ProcessorHandle, StoreError,
 };
 use futures_util::Stream;
 
@@ -81,7 +83,11 @@ impl EventHandler<PostEvent> for Noop {
 pub struct Busy(pub u32);
 
 impl EventHandler<PostEvent> for Busy {
-    async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<PostEvent>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         let mut x = event.position;
         for _ in 0..self.0 {
             x = std::hint::black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));

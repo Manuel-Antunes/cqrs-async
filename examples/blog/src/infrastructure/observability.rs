@@ -14,7 +14,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cqrs::{DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, Interceptor, Message, Metadata, ProcessingContext};
+use cqrs::{
+    DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, Interceptor, Message, Metadata,
+    ProcessingContext,
+};
 
 /// One audited command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +55,11 @@ impl<M: Message> Interceptor<M> for Audit {
         let correlation_id = metadata.get("correlation_id").cloned();
         let result = next(message, metadata).await;
         let command = std::any::type_name::<M>().rsplit("::").next().unwrap_or_default();
-        let entry = AuditEntry { command, correlation_id, succeeded: result.is_ok() };
+        let entry = AuditEntry {
+            command,
+            correlation_id,
+            succeeded: result.is_ok(),
+        };
         self.0.0.lock().expect("audit log poisoned").push(entry);
         result
     }
