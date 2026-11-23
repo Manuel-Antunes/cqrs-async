@@ -9,8 +9,8 @@ use std::{future::Future, sync::Arc};
 
 use cqrs::{
     Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
-    EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext, ProcessorHandle, Published,
-    SnapshotStore, StoreError, StreamId, TrackingOptions, WithPublisher,
+    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext,
+    ProcessorHandle, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
 use cqrs_postgres::{PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore};
 use serde::{Deserialize, Serialize};
@@ -66,12 +66,13 @@ impl<N: SnapshotStore<OurAccount>> Accounts for EventSourcedAccounts<N> {
     }
 }
 
-pub struct ExecuteHandler<R> {
+pub struct ExecuteHandler<R, P> {
     accounts: R,
+    events: P,
 }
 
 #[cqrs::command_handler]
-impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
+impl<R: Accounts, P: EventPublisher<AccountEvent>> CommandHandler for ExecuteHandler<R, P> {
     async fn handle(&self, command: &Execute, events: &mut Appender<AccountEvent>) -> Result<(), BankError> {
         let account = match self.accounts.find(&command.account).await? {
             Some(account) => account,
@@ -80,7 +81,7 @@ impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
         for event in account.state.decide(&command.command)? {
             events.append(event);
         }
-        events.commit(account).await?;
+        events.commit(account, &self.events).await?;
         Ok(())
     }
 
@@ -92,8 +93,8 @@ impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
 
 #[derive(cqrs::Gateway)]
 #[gateway(commands)]
-pub struct Bank<R> {
-    execute: ExecuteHandler<R>,
+pub struct Bank<R, P> {
+    execute: ExecuteHandler<R, P>,
 }
 
 /// `account_views`, one row per account, written in the processor's
@@ -156,7 +157,7 @@ type Repo<N> = AggregateLoader<OurAccount, Store, N>;
 pub struct Ours<N> {
     pool: PgPool,
     events: OurEvents,
-    bank: Arc<Published<Bank<EventSourcedAccounts<N>>, OurEvents>>,
+    bank: Arc<Bank<EventSourcedAccounts<N>, OurEvents>>,
     views: Mutex<Option<ProcessorHandle>>,
     transfers: Mutex<Option<ProcessorHandle>>,
 }
@@ -215,8 +216,9 @@ where
         let accounts = Arc::new(snapshots(AggregateLoader::new(events.store().clone())));
         let execute = ExecuteHandler {
             accounts: EventSourcedAccounts(accounts),
+            events: events.clone(),
         };
-        let bank = Arc::new(Bank { execute }.with_publisher(events.clone()));
+        let bank = Arc::new(Bank { execute });
         let views = started(events.projection(AccountViews).with_options(options()).spawn()).await;
         let policy = TransferPolicy {
             bank: Arc::clone(&bank),

@@ -201,15 +201,15 @@ handler for the batch; the failure is handed to the publisher's
 
 Axon 5 hands command handlers the same `ProcessingContext`; events
 appended during the handler are published when the unit commits, at the
-end. Here, a command handler's context is its `Appender<E, P>`, which
-carries the publisher `P` its gateway was given:
+end. Here, a command handler's context is its `Appender<E>`; the publisher
+is the handler's own (a constructor argument):
 
 | Axon 5 | Here |
 |---|---|
 | `EventAppender.forContext(context).append(e)` | `events.append(e)` (the domain sees `impl EventAppender<E>`) |
 | correlation data | `events.metadata()`, stored with every event of the run |
 | DCB `AppendCondition` from what the handler sourced | `events.source(..)`, `loader.load_in(..)`: conditions accumulate in the appender |
-| `EventAppender` publishing through the context | `events.commit(entity)`: appends right away through the context's publisher, like NestJS's `aggregate.commit()` |
+| `EventAppender` publishing through the context | `events.commit(entity, &self.events)`: appends right away through the handler's publisher, like NestJS's `aggregate.commit()` |
 | retry on concurrency failure | the gateway re-runs the handler with a new appender, if no commit of the run succeeded |
 
 The difference is the commit point. Each `commit` is one atomic append to one

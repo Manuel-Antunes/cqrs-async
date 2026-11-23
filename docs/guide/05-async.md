@@ -20,7 +20,7 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries> {
     let notifier = Arc::new(InMemoryNotifier::default());
 
     let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
-        .commands(PostCommandGateway::new(posts))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(PostSummaryProjection::new(Arc::clone(&summaries)))
         .policy(NotifyOnPublish::new(Arc::clone(&notifier)))
@@ -34,8 +34,8 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries> {
   unit cannot be built without deciding where tokens live.
 - **The unit makes its events** (`Events`): the store, a live broadcast of
   committed events, and the token store. They are also the **publisher**:
-  a commit appends to the store, then broadcasts. `.commands(gateway)`
-  gives that publisher to the gateway.
+  a commit appends to the store, then broadcasts. `.commands(|events| ..)`
+  hands that publisher to the closure that builds the gateway.
 - **The repository and the gateways are the same as in part 4**; only the
   stores handed to the unit changed.
 - **`.projection(p)` and `.policy(p)`** each start a `TrackingProcessor`
@@ -81,7 +81,7 @@ committed so far, and `stop()` stops them.
 
 ```rust
 pub struct Running<C, Q> {
-    pub app: Arc<Cqrs<PostEvents, C, Q, PostEvents>>,
+    pub app: Arc<Cqrs<C, Q, PostEvents>>,
     pub summaries: Arc<InMemoryPostSummaryRepository>,
     pub notifier: Arc<InMemoryNotifier>,
 }

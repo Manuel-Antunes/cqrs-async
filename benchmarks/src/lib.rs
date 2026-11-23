@@ -58,12 +58,15 @@ pub mod ping {
     #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
     pub struct Pinged;
 
-    /// Handles [`Ping`] as a command handler: through an appender with a
-    /// publisher, committing nothing.
-    pub struct PingCommandHandler;
+    /// Handles [`Ping`] as a command handler: through an appender, holding
+    /// a publisher, committing nothing.
+    pub struct PingCommandHandler<P> {
+        /// Where a commit would go (never used).
+        pub events: P,
+    }
 
     #[cqrs::command_handler]
-    impl cqrs::CommandHandler for PingCommandHandler {
+    impl<P: cqrs::EventPublisher<Pinged>> cqrs::CommandHandler for PingCommandHandler<P> {
         async fn handle(&self, ping: &Ping, _: &mut cqrs::Appender<Pinged>) -> Result<u64, ()> {
             Ok(ping.0 + 1)
         }
@@ -72,9 +75,9 @@ pub mod ping {
     /// A gateway of commands with one route.
     #[derive(cqrs::Gateway)]
     #[gateway(commands)]
-    pub struct PingCommands {
+    pub struct PingCommands<P> {
         /// The only handler.
-        pub ping: PingCommandHandler,
+        pub ping: PingCommandHandler<P>,
     }
 
     /// A publisher that stores nothing.

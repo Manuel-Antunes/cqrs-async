@@ -8,8 +8,7 @@ use std::sync::{
 
 use cqrs::{
     Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher,
-    InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, Published, StoreError, WithPublisher,
-    testing::block_on,
+    InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, StoreError, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -119,19 +118,15 @@ impl EventPublisher<CounterEvent> for Engine {
 
 type Counters = Arc<Engine>;
 
-struct OpenHandler;
+struct OpenHandler(Counters);
 
 impl CommandHandler for OpenHandler {
     type Command = Open;
     type Event = CounterEvent;
 
-    async fn handle<P: EventPublisher<CounterEvent>>(
-        &self,
-        Open(id): &Open,
-        events: &mut Appender<CounterEvent, P>,
-    ) -> Result<u32, Error> {
+    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
-        events.commit(Loaded::new(Counter::initial(id))).await?;
+        events.commit(Loaded::new(Counter::initial(id)), &self.0).await?;
         Ok(*id)
     }
 }
@@ -166,11 +161,7 @@ impl CommandHandler for AddHandler {
         self.retries
     }
 
-    async fn handle<P: EventPublisher<CounterEvent>>(
-        &self,
-        command: &Add,
-        events: &mut Appender<CounterEvent, P>,
-    ) -> Result<u64, Error> {
+    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
         let counter = self.counters.load(&command.id).await?.ok_or(NotFound(command.id))?;
         if self.runs.fetch_add(1, Ordering::Relaxed) == 0 && self.racing {
             let other = self.counters.load(&command.id).await?.unwrap();
@@ -179,7 +170,7 @@ impl CommandHandler for AddHandler {
         counter.add(command.n, events)?;
         let total = counter.total + command.n;
         if !self.forget_save {
-            events.commit(counter).await?;
+            events.commit(counter, &self.counters).await?;
         }
         Ok(total)
     }
@@ -202,8 +193,11 @@ fn counters() -> Counters {
 }
 
 /// The gateway, committing through the counters' engine.
-fn gateway(counters: &Counters, add: AddHandler) -> Published<Gateway, Counters> {
-    Gateway { open: OpenHandler, add }.with_publisher(Arc::clone(counters))
+fn gateway(counters: &Counters, add: AddHandler) -> Gateway {
+    Gateway {
+        open: OpenHandler(Arc::clone(counters)),
+        add,
+    }
 }
 
 fn total(counters: &Counters, id: u32) -> u64 {
@@ -254,7 +248,7 @@ fn a_lost_race_runs_the_handler_again_on_the_fresh_entity() {
     // First run decides on total 0, loses to the competing +10; the rerun
     // decides on 10 and returns 15.
     assert_eq!(block_on(gateway.send(Add { id: 1, n: 5 })), Ok(15));
-    assert_eq!(gateway.inner().add.runs.load(Ordering::Relaxed), 2);
+    assert_eq!(gateway.add.runs.load(Ordering::Relaxed), 2);
     assert_eq!(total(&counters, 1), 15);
 }
 
@@ -294,25 +288,25 @@ fn a_save_after_another_save_is_not_retried() {
     impl CommandHandler for Twice {
         type Command = Add;
         type Event = CounterEvent;
-        async fn handle<P: EventPublisher<CounterEvent>>(
-            &self,
-            command: &Add,
-            events: &mut Appender<CounterEvent, P>,
-        ) -> Result<u64, Error> {
+        async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
             let stale = self.0.load(&command.id).await?.unwrap();
             let fresh = self.0.load(&command.id).await?.unwrap();
             events.append(CounterEvent::Added(1));
-            events.commit(fresh).await?;
+            events.commit(fresh, &self.0).await?;
             events.append(CounterEvent::Added(1));
-            events.commit(stale).await?;
+            events.commit(stale, &self.0).await?;
             Ok(0)
         }
     }
     let counters = counters();
     block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
-    let twice = Twice(Arc::clone(&counters)).with_publisher(Arc::clone(&counters));
+    let twice = Twice(Arc::clone(&counters));
     assert!(matches!(
-        block_on(cqrs::Handler::handle(&twice, Add { id: 1, n: 1 })),
+        block_on(cqrs::dispatch_command(
+            &twice,
+            Add { id: 1, n: 1 },
+            cqrs::Metadata::new()
+        )),
         Err(Error::Store(StoreError::Conflict { .. }))
     ));
     assert_eq!(total(&counters, 1), 1, "the first save, once");
@@ -339,15 +333,17 @@ fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
 
     let gateway = gateway(&counters, AddHandler::new(&counters));
     block_on(gateway.send_with(Open(1), correlation.clone())).unwrap();
-    // Through a bus too, and kept across a re-run after a lost race.
-    let bus = cqrs::Bus::new().register(
-        AddHandler {
-            racing: true,
-            ..AddHandler::new(&counters)
-        }
-        .with_publisher(Arc::clone(&counters)),
-    );
-    block_on(bus.send_with(Add { id: 1, n: 5 }, correlation.clone())).unwrap();
+    // Called directly too, and kept across a re-run after a lost race.
+    let racing = AddHandler {
+        racing: true,
+        ..AddHandler::new(&counters)
+    };
+    block_on(cqrs::dispatch_command(
+        &racing,
+        Add { id: 1, n: 5 },
+        correlation.clone(),
+    ))
+    .unwrap();
 
     let stored = counters.store().all();
     let tagged: Vec<_> = stored

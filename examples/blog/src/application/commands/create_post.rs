@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cqrs::{Aggregate, Appender, CommandHandler, Loaded};
+use cqrs::{Aggregate, Appender, CommandHandler, EventPublisher, Loaded};
 
 use crate::{
     application::BlogError,
@@ -17,35 +17,32 @@ pub struct CreatePost {
 
 /// Handles [`CreatePost`]: picks the next id, lets the domain create the post
 /// and commits it, expecting it not to exist yet.
-pub struct CreatePostHandler {
+pub struct CreatePostHandler<P> {
     /// Ids are sequential per process: enough for the example, as a
     /// collision would surface as a [`BlogError::Conflict`], never as an
     /// overwrite.
     next_id: AtomicU64,
+    /// Where the commit goes.
+    events: P,
 }
 
-impl CreatePostHandler {
-    /// A handler whose ids start at 1.
-    pub fn new() -> Self {
+impl<P> CreatePostHandler<P> {
+    /// A handler whose ids start at 1, committing through `events`.
+    pub fn new(events: P) -> Self {
         Self {
             next_id: AtomicU64::new(1),
+            events,
         }
     }
 }
 
 #[cqrs::command_handler]
-impl CommandHandler for CreatePostHandler {
+impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
     async fn handle(&self, command: &CreatePost, events: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
         let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let post = Loaded::new(Post::initial(&id));
         post.create(command.title.as_str(), events)?;
-        events.commit(post).await?;
+        events.commit(post, &self.events).await?;
         Ok(id)
-    }
-}
-
-impl Default for CreatePostHandler {
-    fn default() -> Self {
-        Self::new()
     }
 }

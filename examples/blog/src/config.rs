@@ -17,10 +17,7 @@
 
 use std::sync::Arc;
 
-use cqrs::{
-    Cqrs, EventProcessor, Events, InMemoryEventStore, InMemorySnapshots, InMemoryTokenStore, InlinePublisher,
-    Intercepted,
-};
+use cqrs::{Cqrs, Events, InMemoryEventStore, InMemorySnapshots, InMemoryTokenStore, InlinePublisher, Intercepted};
 
 use crate::{
     application::{
@@ -56,11 +53,23 @@ fn posts_over(store: &PostStore) -> EventSourcedPostRepository<PostStore, InMemo
 // The types are inferred by the builder: naming them is what this avoids.
 #[allow(clippy::type_complexity)]
 pub fn in_memory() -> (
-    Cqrs<InlinePublisher<PostEvent, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
+    Cqrs<impl PostCommands, impl PostQueries>,
     Arc<InMemoryPostSummaryRepository>,
     Arc<InMemoryNotifier>,
 ) {
-    let store = PostStore::default();
+    in_memory_with(PostStore::default())
+}
+
+/// [`in_memory`] over `store`, which the caller keeps: to read the log, or
+/// to build repositories and publishers of its own over it.
+#[allow(clippy::type_complexity)]
+pub fn in_memory_with(
+    store: PostStore,
+) -> (
+    Cqrs<impl PostCommands, impl PostQueries>,
+    Arc<InMemoryPostSummaryRepository>,
+    Arc<InMemoryNotifier>,
+) {
     let posts = Arc::new(posts_over(&store));
     let summaries = Arc::new(InMemoryPostSummaryRepository::default());
     let notifier = Arc::new(InMemoryNotifier::default());
@@ -69,8 +78,8 @@ pub fn in_memory() -> (
         PostSummaryProjection::new(Arc::clone(&summaries), Arc::default()),
         NotifyOnPublish::new(Arc::clone(&notifier)),
     );
-    let blog = Cqrs::from_publisher(InlinePublisher::new(store).with_processor(processors))
-        .commands(PostCommandGateway::new(posts))
+    let blog = Cqrs::from_publisher(InlinePublisher::<PostEvent, _, _>::new(store).with_processor(processors))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
     (blog, summaries, notifier)
@@ -84,7 +93,7 @@ pub type PostEvents = Events<PostEvent, PostStore, Arc<InMemoryTokenStore>>;
 /// The running application: what [`start`] returns.
 pub struct Running<C, Q> {
     /// The blog's unit, as the API serves it.
-    pub app: Arc<Cqrs<PostEvents, C, Q, PostEvents>>,
+    pub app: Arc<Cqrs<C, Q, PostEvents>>,
     /// The read model the projection keeps.
     pub summaries: Arc<InMemoryPostSummaryRepository>,
     /// Where the notification policy delivers.
@@ -128,7 +137,7 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscription
 
     let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
-        .commands(PostCommandGateway::new(posts))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))

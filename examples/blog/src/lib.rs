@@ -134,4 +134,4 @@ pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
 
-pub use config::{PostEvents, PostStore, Running, in_memory, start};
+pub use config::{PostEvents, PostStore, Running, in_memory, in_memory_with, start};

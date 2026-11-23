@@ -67,11 +67,10 @@ impl<A: BlogApi> BlogApi for Arc<A> {
     }
 }
 
-/// A CQRS unit exposing these ports is the API: whatever its publisher,
-/// gateways, interceptors and stores.
-impl<P, C, Q, E> BlogApi for Cqrs<P, C, Q, E>
+/// A CQRS unit exposing these ports is the API: whatever its gateways,
+/// interceptors and stores.
+impl<C, Q, E> BlogApi for Cqrs<C, Q, E>
 where
-    P: Send + Sync + 'static,
     C: PostCommands + 'static,
     Q: PostQueries + PostSubscriptions + 'static,
     E: EventFeed<PostEvent> + 'static,

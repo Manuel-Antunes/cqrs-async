@@ -134,7 +134,7 @@ pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[command_handler]
-/// impl<R: PostRepository, P: EventPublisher<Post>> CommandHandler for PublishPostHandler<R, P> {
+/// impl<R: PostRepository, P: EventPublisher<PostEvent>> CommandHandler for PublishPostHandler<R, P> {
 ///     async fn handle(&self, command: &PublishPost, events: &mut Appender<PostEvent>) -> Result<(), BlogError> { ... }
 /// }
 /// ```
@@ -523,10 +523,6 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     let name = &input.ident;
     let kind = message_set::gateway_kind(&input)?;
     let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
-    // A gateway of commands is generic over the publisher it is given.
-    let mut with_publisher = input.generics.clone();
-    with_publisher.params.push(syn::parse_quote!(__X));
-    let (publisher_impl_generics, _, _) = with_publisher.split_for_impl();
     let mut impls = Vec::new();
 
     for (index, field) in data.fields.iter().enumerate() {
@@ -565,30 +561,26 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
 
         if kind.commands {
             let message = quote!(<#handler as #krate::CommandHandler>::Command);
-            let mut generics = with_publisher.clone();
+            let mut generics = input.generics.clone();
             let where_clause = generics.make_where_clause();
             where_clause
                 .predicates
                 .push(syn::parse_quote!(#handler: #krate::CommandHandler));
             where_clause.predicates.push(syn::parse_quote!(
-                __X: #krate::EventPublisher<<#handler as #krate::CommandHandler>::Event>
-            ));
-            where_clause.predicates.push(syn::parse_quote!(
                 #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
             ));
             impls.push(quote_spanned! {handler.span()=>
                 #[automatically_derived]
-                impl #publisher_impl_generics #krate::DispatchIn<#message, __X> for #name #ty_generics #where_clause {
-                    fn dispatch_in(
+                impl #impl_generics #krate::Dispatch<#message> for #name #ty_generics #where_clause {
+                    fn dispatch_with(
                         &self,
                         message: #message,
                         metadata: #krate::Metadata,
-                        publisher: &__X,
                     ) -> impl ::core::future::Future<Output = ::core::result::Result<
                         #krate::OutputOf<#message>,
                         #krate::ErrorOf<#message>,
                     >> + ::core::marker::Send {
-                        #krate::dispatch_command(&self.#access, message, metadata, publisher)
+                        #krate::dispatch_command(&self.#access, message, metadata)
                     }
                 }
             });
@@ -632,36 +624,6 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     // `#[gateway(commands = Enum)]` / `#[gateway(queries = Enum)]`: the
     // enum itself, each variant routed through the impls above.
     for set in &kind.sets {
-        if kind.commands {
-            let mut generics = with_publisher.clone();
-            let where_clause = generics.make_where_clause();
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(#set: #krate::DispatchInVia<Self, __X>));
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(__X: ::core::marker::Send + ::core::marker::Sync));
-            where_clause.predicates.push(syn::parse_quote!(
-                #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
-            ));
-            impls.push(quote_spanned! {set.span()=>
-                #[automatically_derived]
-                impl #publisher_impl_generics #krate::DispatchIn<#set, __X> for #name #ty_generics #where_clause {
-                    fn dispatch_in(
-                        &self,
-                        message: #set,
-                        metadata: #krate::Metadata,
-                        publisher: &__X,
-                    ) -> impl ::core::future::Future<Output = ::core::result::Result<
-                        #krate::OutputOf<#set>,
-                        #krate::ErrorOf<#set>,
-                    >> + ::core::marker::Send {
-                        <#set as #krate::DispatchInVia<Self, __X>>::dispatch_in_via(message, self, metadata, publisher)
-                    }
-                }
-            });
-            continue;
-        }
         let mut generics = input.generics.clone();
         let where_clause = generics.make_where_clause();
         where_clause

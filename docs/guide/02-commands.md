@@ -97,7 +97,7 @@ impl From<StoreError> for BlogError {
 ```rust
 // src/application/commands/retitle_post.rs
 use std::sync::Arc;
-use cqrs::{Appender, CommandHandler, NotFound};
+use cqrs::{Appender, CommandHandler, EventPublisher, NotFound};
 use crate::{application::{BlogError, commands::PostRepository}, domain::{PostEvent, PostId}};
 
 /// Changes the title of a draft.
@@ -108,22 +108,23 @@ pub struct RetitlePost {
     pub title: String,
 }
 
-pub struct RetitlePostHandler<R> {
+pub struct RetitlePostHandler<R, P> {
     posts: Arc<R>,
+    events: P,        // where commits go: an EventPublisher<PostEvent>
 }
 
-impl<R> RetitlePostHandler<R> {
-    pub fn new(posts: Arc<R>) -> Self {
-        Self { posts }
+impl<R, P> RetitlePostHandler<R, P> {
+    pub fn new(posts: Arc<R>, events: P) -> Self {
+        Self { posts, events }
     }
 }
 
 #[cqrs::command_handler]
-impl<R: PostRepository> CommandHandler for RetitlePostHandler<R> {
+impl<R: PostRepository, P: EventPublisher<PostEvent>> CommandHandler for RetitlePostHandler<R, P> {
     async fn handle(&self, command: &RetitlePost, events: &mut Appender<PostEvent>) -> Result<(), BlogError> {
         let post = self.posts.find(command.id).await?.ok_or(NotFound(command.id))?;
         post.retitle(command.title.as_str(), events)?;
-        events.commit(post).await?;
+        events.commit(post, &self.events).await?;
         Ok(())
     }
 }
@@ -136,27 +137,26 @@ What each piece does:
   marker. Whoever sends `RetitlePost` gets `Result<(), BlogError>`, without
   knowing the handler.
 - **One handler struct per use case**, holding only the services it uses,
-  generic over their ports (`R: PostRepository`): the composition root
-  picks the implementations, and a test can pass doubles. No publisher
+  generic over their ports (`R: PostRepository`, `P: EventPublisher<PostEvent>`):
+  the composition root picks the implementations, and a test can pass doubles. The publisher
   among them.
 - **The appender is the command's context** (Axon 5's `EventAppender`
   with its processing context): the events the domain appends, the
   command's metadata (stored with every event), what the run read for
-  conditional commits, and the publisher the gateway was given. A fresh one
-  per run.
-- **find → decide → `events.commit(post)`** (NestJS's `hero.commit()`).
+  conditional commits. A fresh one per run.
+- **find → decide → `events.commit(post, &self.events)`** (NestJS's `hero.commit()`).
   `find` returns `Loaded<Post>`; you can read it (`&Post`) but not change
   it. `commit` consumes it and appends the pending events, expecting its
-  version, through the publisher.
+  version, through the handler's publisher.
 - **`#[cqrs::command_handler]`** reads `type Command = RetitlePost` and
-  `type Event = PostEvent` from the signature, and makes `handle` generic
-  over the publisher the appender carries. By hand:
+  `type Event = PostEvent` from the signature and touches nothing else. By
+  hand:
 
   ```rust
-  impl<R: PostRepository> CommandHandler for RetitlePostHandler<R> {
+  impl<R: PostRepository, P: EventPublisher<PostEvent>> CommandHandler for RetitlePostHandler<R, P> {
       type Command = RetitlePost;
       type Event = PostEvent;
-      async fn handle<P: EventPublisher<PostEvent>>(&self, command: &RetitlePost, events: &mut Appender<PostEvent, P>) -> .. { .. }
+      async fn handle(&self, command: &RetitlePost, events: &mut Appender<PostEvent>) -> .. { .. }
   }
   ```
 
@@ -178,17 +178,18 @@ pub struct CreatePost {
     pub title: String,
 }
 
-pub struct CreatePostHandler {
+pub struct CreatePostHandler<P> {
     next_id: AtomicU64,   // enough for the example: a collision is a Conflict, never an overwrite
+    events: P,
 }
 
 #[cqrs::command_handler]
-impl CommandHandler for CreatePostHandler {
+impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
     async fn handle(&self, command: &CreatePost, events: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
         let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let post = Loaded::new(Post::initial(&id));   // expects no stream yet
         post.create(command.title.as_str(), events)?;
-        events.commit(post).await?;
+        events.commit(post, &self.events).await?;
         Ok(id)
     }
 }
@@ -202,37 +203,35 @@ impl CommandHandler for CreatePostHandler {
 // src/application/commands/mod.rs
 #[derive(cqrs::Gateway)]
 #[gateway(commands)]
-pub struct PostCommandGateway<R> {
-    create: CreatePostHandler,
-    retitle: RetitlePostHandler<R>,
-    publish: PublishPostHandler<R>,
+pub struct PostCommandGateway<R, P> {
+    create: CreatePostHandler<P>,
+    retitle: RetitlePostHandler<R, P>,
+    publish: PublishPostHandler<R, P>,
 }
 
-impl<R> PostCommandGateway<R> {
-    pub fn new(posts: Arc<R>) -> Self {
+impl<R, P: Clone> PostCommandGateway<R, P> {
+    pub fn new(posts: Arc<R>, events: P) -> Self {
         Self {
-            create: CreatePostHandler::new(),
-            retitle: RetitlePostHandler::new(Arc::clone(&posts)),
-            publish: PublishPostHandler::new(posts),
+            create: CreatePostHandler::new(events.clone()),
+            retitle: RetitlePostHandler::new(Arc::clone(&posts), events.clone()),
+            publish: PublishPostHandler::new(posts, events),
         }
     }
 }
 ```
 
 `#[gateway(commands)]` routes each command to the field whose handler
-declares it, decided at compile time. The constructor takes only the
-services; the publisher comes from the `WithPublisher` trait, once:
+declares it, decided at compile time. The constructor takes the services
+and the publisher the handlers commit through:
 
 ```rust
-let commands = PostCommandGateway::new(posts).with_publisher(publisher);
+let commands = PostCommandGateway::new(posts, publisher);
 commands.send(PublishPost { id }).await?;
 ```
 
-Until it has one, the gateway sends nothing: `send` does not compile on a
-bare `PostCommandGateway`. Sending a command no field handles, sending a
-query as a command, or two fields for the same command are compile errors
-too. In the application, the CQRS unit gives the gateway its publisher
-(part 4).
+Sending a command no field handles, sending a query as a command, or two
+fields for the same command are compile errors. In the application, the CQRS
+unit hands the gateway its publisher (part 4).
 
 ### Sending any command (transports)
 
@@ -250,7 +249,7 @@ pub enum PostCommand {
 
 #[derive(cqrs::Gateway)]
 #[gateway(commands = PostCommand)]       // also accepts the enum
-pub struct PostCommandGateway<R> { .. }
+pub struct PostCommandGateway<R, P> { .. }
 
 let command: PostCommand = serde_json::from_str(r#"{"CreatePost": {"title": "Over the wire"}}"#)?;
 let PostCommandOutput::CreatePost(id) = gateway.send(command).await? else { unreachable!() };
@@ -265,15 +264,14 @@ store the repository reads (part 4 builds it for you):
 
 ```rust
 use std::sync::Arc;
-use cqrs::{CommandGateway, InMemoryEventStore, InlinePublisher, WithPublisher, testing::block_on};
+use cqrs::{CommandGateway, InMemoryEventStore, InlinePublisher, testing::block_on};
 
 #[test]
 fn a_post_is_created_retitled_and_published() {
     block_on(async {
         let store = Arc::new(InMemoryEventStore::new());
         let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));
-        let commands = PostCommandGateway::new(Arc::clone(&posts))
-            .with_publisher(InlinePublisher::new(store));
+        let commands = PostCommandGateway::new(Arc::clone(&posts), Arc::new(InlinePublisher::new(store)));
 
         let id = commands.send(CreatePost { title: "Draft".into() }).await.unwrap();
         commands.send(RetitlePost { id, title: "Final".into() }).await.unwrap();

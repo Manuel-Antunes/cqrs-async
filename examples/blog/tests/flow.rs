@@ -3,12 +3,15 @@
 //! Runs on `cqrs::testing::block_on`, no async runtime involved.
 
 use blog::{
+    PostStore,
     application::{BlogError, commands::*, queries::*},
     domain::{PostError, PostId},
-    in_memory,
+    in_memory, in_memory_with,
     infrastructure::EventSourcedPostRepository,
 };
-use cqrs::{Bus, CommandGateway, EventPublisher, Pending, QueryGateway, StoreError, testing::block_on};
+use cqrs::{
+    Bus, CommandGateway, EventPublisher, InlinePublisher, Pending, QueryGateway, StoreError, testing::block_on,
+};
 use std::sync::Arc;
 
 fn assert_send<T: Send>(value: T) -> T {
@@ -77,10 +80,11 @@ fn the_dispatch_futures_are_send() {
 #[test]
 fn domain_errors_reach_the_caller_and_nothing_is_stored() {
     block_on(async {
-        let (blog, summaries, _) = in_memory();
+        let store = PostStore::default();
+        let (blog, summaries, _) = in_memory_with(Arc::clone(&store));
         let error = blog.commands().send(CreatePost { title: " ".into() }).await;
         assert_eq!(error, Err(BlogError::Domain(PostError::EmptyTitle)));
-        assert!(blog.publisher().store().all().is_empty());
+        assert!(store.all().is_empty());
         assert!(summaries.published().await.unwrap().is_empty());
     });
 }
@@ -97,10 +101,12 @@ fn unknown_aggregates_are_reported() {
 #[test]
 fn concurrent_writers_cannot_overwrite_each_other() {
     block_on(async {
-        let (blog, _, _) = in_memory();
+        let store = PostStore::default();
+        let (blog, _, _) = in_memory_with(Arc::clone(&store));
         let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
-        let events = blog.publisher();
-        let posts = EventSourcedPostRepository::new(Arc::clone(events.store()));
+        // Two writers of their own, over the blog's store.
+        let events = InlinePublisher::new(Arc::clone(&store));
+        let posts = EventSourcedPostRepository::new(store);
 
         // Two writers load the same version and decide...
         let first = posts.find(id).await.unwrap().unwrap();
@@ -118,27 +124,6 @@ fn concurrent_writers_cannot_overwrite_each_other() {
         assert_eq!(stored.title(), "v2");
         assert!(!stored.is_published());
         assert_eq!(stored.version(), Some(2));
-    });
-}
-
-#[test]
-fn a_failing_handler_neither_undoes_the_commit_nor_blocks_the_others() {
-    block_on(async {
-        let (blog, summaries, notifier) = in_memory();
-        let id = blog.commands().send(CreatePost { title: "t".into() }).await.unwrap();
-        notifier.set_down(true);
-
-        let events = blog.publisher();
-        let posts = EventSourcedPostRepository::new(Arc::clone(events.store()));
-        let post = posts.find(id).await.unwrap().unwrap();
-        let mut decided = Vec::new();
-        post.publish(&mut decided).unwrap();
-        // The commit succeeds: its position is the second event's. The failed
-        // notification went to the publisher's `on_failure` policy (see
-        // cqrs/tests/inline_failures.rs for what that policy receives).
-        assert_eq!(events.commit(post, Pending::new(decided)).await, Ok(Some(2)));
-        assert!(summaries.find(id).await.unwrap().unwrap().published); // projection still ran
-        assert!(notifier.sent().is_empty());
     });
 }
 
@@ -164,7 +149,8 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
     use cqrs::{EventHandler, ProcessingContext};
     use std::sync::Arc;
     block_on(async {
-        let (blog, summaries, _) = in_memory();
+        let store = PostStore::default();
+        let (blog, summaries, _) = in_memory_with(Arc::clone(&store));
         let id = blog.commands().send(CreatePost { title: "a".into() }).await.unwrap();
         blog.commands()
             .send(RetitlePost { id, title: "b".into() })
@@ -177,7 +163,7 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
             .reset(&mut ProcessingContext::new(&mut (), false))
             .await
             .unwrap();
-        for event in blog.publisher().store().all() {
+        for event in store.all() {
             projection
                 .handle(&event, &mut ProcessingContext::new(&mut (), true))
                 .await
@@ -189,12 +175,14 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
-    use cqrs::{Handler, InMemoryEventStore, InlinePublisher, WithPublisher};
+    use cqrs::{InMemoryEventStore, Metadata, dispatch_command};
 
     block_on(async {
-        // A handler and the publisher it commits through: a handler too.
-        let handler = CreatePostHandler::new().with_publisher(InlinePublisher::new(InMemoryEventStore::new()));
-        let id = handler.handle(CreatePost { title: "direct".into() }).await.unwrap();
+        // A handler holds the publisher it commits through: call it as is.
+        let handler = CreatePostHandler::new(InlinePublisher::new(InMemoryEventStore::new()));
+        let id = dispatch_command(&handler, CreatePost { title: "direct".into() }, Metadata::new())
+            .await
+            .unwrap();
         assert_eq!(id, PostId(1));
     });
 }
@@ -214,7 +202,18 @@ fn the_zero_macro_bus_infers_the_handler() {
         application::{projections::PostSummaryProjection, queries::PostUpdates},
         infrastructure::InMemoryPostSummaryRepository,
     };
-    use cqrs::{InMemoryEventStore, InlinePublisher, WithPublisher};
+    use cqrs::{CommandHandler, ErrorOf, InMemoryEventStore, Metadata, OutputOf, dispatch_command};
+
+    /// Registers a command handler on a bus: the bus routes `Handler`s.
+    struct Run<H>(H);
+
+    impl<H: CommandHandler> cqrs::Handler for Run<H> {
+        type Message = H::Command;
+
+        async fn handle(&self, command: H::Command) -> Result<OutputOf<H::Command>, ErrorOf<H::Command>> {
+            dispatch_command(&self.0, command, Metadata::new()).await
+        }
+    }
 
     block_on(async {
         let store = Arc::new(InMemoryEventStore::new());
@@ -224,8 +223,8 @@ fn the_zero_macro_bus_infers_the_handler() {
         )));
         let posts = Arc::new(EventSourcedPostRepository::new(store));
         let bus = Bus::new()
-            .register(CreatePostHandler::new().with_publisher(Arc::clone(&publisher)))
-            .register(PublishPostHandler::new(posts).with_publisher(publisher))
+            .register(Run(CreatePostHandler::new(Arc::clone(&publisher))))
+            .register(Run(PublishPostHandler::new(posts, publisher)))
             .register(FindPostHandler::new(summaries));
 
         let id = bus.send(CreatePost { title: "hlist".into() }).await.unwrap();

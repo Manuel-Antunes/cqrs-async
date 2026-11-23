@@ -260,27 +260,26 @@ mod interceptors {
 /// The `Cqrs` unit adds no step: a command sent through `unit.commands()`
 /// is the gateway's call.
 mod unit {
-    use cqrs::{Cqrs, WithPublisher};
+    use cqrs::Cqrs;
     use cqrs_benchmarks::ping::{NoStore, PingCommandHandler, PingCommands};
 
     use super::*;
 
-    /// A gateway of commands with its publisher (baseline).
+    /// A gateway of commands whose handler holds its publisher (baseline).
     #[divan::bench]
     fn command_gateway(bencher: divan::Bencher) {
         let gateway = PingCommands {
-            ping: PingCommandHandler,
-        }
-        .with_publisher(NoStore);
+            ping: PingCommandHandler { events: NoStore },
+        };
         bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
     }
 
-    /// The same gateway, given its publisher and held by a unit.
+    /// The same gateway, built from the unit's publisher and held by it.
     #[divan::bench]
     fn command_through_unit(bencher: divan::Bencher) {
         let unit = Cqrs::from_publisher(NoStore)
-            .commands(PingCommands {
-                ping: PingCommandHandler,
+            .commands(|events| PingCommands {
+                ping: PingCommandHandler { events },
             })
             .queries(())
             .build();

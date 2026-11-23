@@ -71,7 +71,7 @@ let updates = Arc::new(PostUpdates::default());
 let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
 
 let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
-    .commands(PostCommandGateway::new(posts))
+    .commands(|events| PostCommandGateway::new(posts, events))
     .queries(PostQueryGateway::new(Arc::clone(&summaries)))
     .projection(projection)
     .policy(NotifyOnPublish::new(Arc::clone(&notifier)))

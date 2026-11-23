@@ -27,7 +27,7 @@ cqrs_postgres::migrate(&pool).await?;   // the library's tables; idempotent
 let store = PostgresEventStore::<PostEvent>::new(pool.clone(), "posts");
 let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));   // the adapter from part 2, unchanged
 Cqrs::new(store, PostgresTokenStore::new(pool.clone()))
-    .commands(PostCommandGateway::new(posts))
+    .commands(|events| PostCommandGateway::new(posts, events))
     // ...
 ```
 
@@ -217,7 +217,7 @@ pub type PgPostEvents = Events<PostEvent, PostgresEventStore<PostEvent>, Postgre
 
 pub async fn start_postgres(
     pool: PgPool,
-) -> Result<Cqrs<PgPostEvents, impl PostCommands, impl PostQueries + PostSubscriptions, PgPostEvents>, StoreError> {
+) -> Result<Cqrs<impl PostCommands, impl PostQueries + PostSubscriptions, PgPostEvents>, StoreError> {
     cqrs_postgres::migrate(&pool).await?;
     sqlx::raw_sql(READ_MODEL).execute(&pool).await.map_err(backend)?;
 
@@ -227,7 +227,7 @@ pub async fn start_postgres(
     let updates = Arc::new(PostUpdates::default());
 
     Ok(Cqrs::new(store, PostgresTokenStore::new(pool))
-        .commands(PostCommandGateway::new(posts))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .options(TrackingOptions { segments: 4, batch_size: 100, ..TrackingOptions::default() })
         .projection(PostSummaryProjection::new(summaries, Arc::clone(&updates)))

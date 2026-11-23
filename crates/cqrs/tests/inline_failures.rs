@@ -8,9 +8,9 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventStore,
-    HandlerError, InMemoryEventStore, InlinePublisher, Loaded, ProcessingContext, ProcessingFailure, StoreError,
-    WithPublisher, testing::block_on,
+    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventPublisher,
+    EventStore, HandlerError, InMemoryEventStore, InlinePublisher, Loaded, ProcessingContext, ProcessingFailure,
+    StoreError, testing::block_on,
 };
 use tracing::{
     Event, Level, Metadata, Subscriber,
@@ -47,21 +47,23 @@ struct Tick {
     id: u32,
 }
 
-struct TickHandler;
+struct TickHandler<P> {
+    events: P,
+}
 
 #[cqrs::command_handler]
-impl CommandHandler for TickHandler {
+impl<P: EventPublisher<Ticked>> CommandHandler for TickHandler<P> {
     async fn handle(&self, command: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
         let clock = Loaded::new(Clock::initial(&command.id));
         events.append(Ticked(1));
-        events.commit(clock).await
+        events.commit(clock, &self.events).await
     }
 }
 
 #[derive(cqrs::Gateway)]
 #[gateway(commands)]
-struct Commands {
-    tick: TickHandler,
+struct Commands<P> {
+    tick: TickHandler<P>,
 }
 
 /// An inline handler that can be switched off.
@@ -125,8 +127,11 @@ impl Subscriber for Captured {
 #[test]
 fn a_failing_inline_handler_is_logged_by_default_and_the_event_is_committed() {
     let store = Arc::new(InMemoryEventStore::new());
-    let commands = Commands { tick: TickHandler }
-        .with_publisher(InlinePublisher::new(Arc::clone(&store)).with_processor((notifier(true),)));
+    let commands = Commands {
+        tick: TickHandler {
+            events: InlinePublisher::new(Arc::clone(&store)).with_processor((notifier(true),)),
+        },
+    };
 
     let captured = Captured::default();
     tracing::subscriber::with_default(captured.clone(), || {
@@ -151,7 +156,9 @@ fn on_failure_hands_the_failure_to_the_application() {
     let events = InlinePublisher::new(Arc::clone(&store))
         .with_processor((notifier(true),))
         .on_failure(move |failure: &ProcessingFailure| sink.lock().unwrap().push(failure.failures.len()));
-    let commands = Commands { tick: TickHandler }.with_publisher(events);
+    let commands = Commands {
+        tick: TickHandler { events },
+    };
 
     block_on(commands.send(Tick { id: 1 })).unwrap();
 
@@ -167,7 +174,9 @@ fn a_healthy_handler_reports_nothing() {
     let events = InlinePublisher::new(Arc::clone(&store))
         .with_processor((notifier(false),))
         .on_failure(move |_: &ProcessingFailure| *sink.lock().unwrap() += 1);
-    let commands = Commands { tick: TickHandler }.with_publisher(events);
+    let commands = Commands {
+        tick: TickHandler { events },
+    };
 
     block_on(commands.send(Tick { id: 1 })).unwrap();
 

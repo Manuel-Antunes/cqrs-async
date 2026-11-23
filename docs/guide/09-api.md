@@ -28,12 +28,11 @@ these events. No resolver knows the store, the repository or the read
 model.
 
 Any CQRS unit that exposes those ports is the API, whatever its
-publisher, gateways, interceptors and stores:
+gateways, interceptors and stores:
 
 ```rust
-impl<P, C, Q, E> BlogApi for Cqrs<P, C, Q, E>
+impl<C, Q, E> BlogApi for Cqrs<C, Q, E>
 where
-    P: Send + Sync + 'static,
     C: PostCommands + 'static,
     Q: PostQueries + PostSubscriptions + 'static,
     E: EventFeed<PostEvent> + 'static,

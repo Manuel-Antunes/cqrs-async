@@ -45,12 +45,13 @@
 
 1. `blog.commands().send(PublishPost { id })`: the derived gateway picks the
    field whose handler's `type Command` is `PublishPost` (at compile time)
-   and calls it with a fresh `Appender<PostEvent, P>` carrying the
-   command's metadata and the gateway's publisher `P`.
+   and calls it with a fresh `Appender<PostEvent>` carrying the
+   command's metadata.
 2. The handler finds the post in its repository (`posts.find(id)` →
    `Loaded<Post>`: the state plus the version it was read at), calls
    `post.publish(events)` (the domain appends `PostEvent::Published` or
-   returns a `PostError`), and commits (`events.commit(post)`).
+   returns a `PostError`), and commits (`events.commit(post, &self.events)`, through the publisher the
+   handler was built with).
 3. The publisher (the unit's events service) appends to `post-42`
    expecting the loaded version. If the
    stream moved on, the append fails with `StoreError::Conflict` and,
@@ -100,7 +101,7 @@ application logic, and where it is stored is a port.
 | Event tags | `@EventTag`, `TagResolver` | — | `#[tag]` with `#[derive(TagResolver)]`, or `impl TagResolver` |
 | Dynamic consistency boundary | `EventCriteria`, `AppendCondition` | — | same names; `Appender::source`, `AggregateLoader::load_in` |
 | Repository | `Repository`, `EventSourcedRepository` | the user's own provider | the application's own port and adapter (as in NestJS), loading with an `AggregateLoader` |
-| Committing a decision | end of the `ProcessingContext` | `EventPublisher` injected, `aggregate.commit()` | `events.commit(entity)` in the handler; the `EventPublisher<E>` is injected into the gateway (`with_publisher`) |
+| Committing a decision | end of the `ProcessingContext` | `EventPublisher` injected, `aggregate.commit()` | `events.commit(entity, &self.events)` in the handler; the `EventPublisher<E>` is a constructor argument of the handler |
 | Event handling component | class with `@EventHandler` methods | `@EventsHandler` | `impl EventHandler<E, Tx>`: one `handle` that matches on the event enum |
 | Projection name | `@Namespace` | — | `#[cqrs::projection(namespace = "...")]` |
 | Unit of work | `ProcessingContext` | — | `ProcessingContext<'_, Tx>` + `TransactionalTokenStore` |

@@ -121,7 +121,7 @@ switched off to simulate an outage.
 All the wiring lives in one file, `src/config.rs`, the only one that
 names concrete adapters (as the cqrs-es demo's `config.rs` does). It
 creates the stores and the services, and builds the blog's **CQRS unit**:
-the publisher, the gateways and, later, the events and processors, with a
+the gateways and, later, the events and processors, with a
 typed builder:
 
 ```rust
@@ -129,7 +129,7 @@ typed builder:
 pub type PostStore = Arc<InMemoryEventStore<PostEvent>>;
 
 pub fn in_memory() -> (
-    Cqrs<InlinePublisher<PostEvent, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
+    Cqrs<impl PostCommands, impl PostQueries>,
     Arc<InMemoryPostSummaryRepository>,
     Arc<InMemoryNotifier>,
 ) {
@@ -142,7 +142,7 @@ pub fn in_memory() -> (
         NotifyOnPublish::new(Arc::clone(&notifier)),
     );
     let blog = Cqrs::from_publisher(InlinePublisher::new(store).with_processor(processors))
-        .commands(PostCommandGateway::new(posts))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
     (blog, summaries, notifier)
@@ -156,8 +156,8 @@ pub fn in_memory() -> (
   event, right after the commit. It is built by hand here
   (`Cqrs::from_publisher`) because it runs the handlers inline; from part 5
   on, `Cqrs::new(store, tokens)` makes it from the stores.
-- **`.commands(gateway)` gives the gateway the unit's publisher**
-  (`WithPublisher`). The gateways were built with their services only.
+- **`.commands(|events| ..)` hands the closure the unit's publisher**, which
+  the command handlers hold and commit through. The query gateway needs none.
 - **Each step changes the builder's type**, so the order is checked, and
   every type is inferred.
 - **The unit keeps the concrete types**, so calls through it are the
@@ -209,7 +209,7 @@ A projection is also easy to test alone, by replaying events into it:
 ```rust
 let projection = PostSummaryProjection::new(Arc::clone(&summaries));
 projection.reset(&mut ProcessingContext::new(&mut (), false)).await?;
-for event in blog.publisher().store().all() {
+for event in store.all() {          // the store `in_memory_with(store)` was given
     projection.handle(&event, &mut ProcessingContext::new(&mut (), true)).await?;
 }
 ```

@@ -51,8 +51,8 @@ routes. The unit wraps its whole command gateway with `.intercept`:
 ```rust
 let audit = Arc::new(AuditLog::default());
 let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
-    .commands(PostCommandGateway::new(posts))
-    .intercept(Audit(Arc::clone(&audit)))     // Intercepted<Published<PostCommandGateway<..>, ..>, Audit>
+    .commands(|events| PostCommandGateway::new(posts, events))
+    .intercept(Audit(Arc::clone(&audit)))     // Intercepted<PostCommandGateway<..>, Audit>
     // ...
     .build();
 
@@ -165,7 +165,7 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscription
 
     let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
-        .commands(PostCommandGateway::new(posts))
+        .commands(|events| PostCommandGateway::new(posts, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))

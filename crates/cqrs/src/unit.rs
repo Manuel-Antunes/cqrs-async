@@ -1,13 +1,13 @@
-//! The CQRS unit of an application (or of one module of it): its event
-//! publisher, its command and query gateways, its events and the
-//! processors that follow them, built in one place by a typed builder.
+//! The CQRS unit of an application (or of one module of it): its command and
+//! query gateways, its events and the processors that follow them, built in
+//! one place by a typed builder.
 //!
 //! ```text
 //! let store = Arc::new(InMemoryEventStore::new());
 //! let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));  // yours, over the store
 //!
 //! let app = Cqrs::new(store, InMemoryTokenStore::default())   // the stores; the unit makes its events
-//!     .commands(PostCommandGateway::new(posts))               // services only: the unit gives it the publisher
+//!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher
 //!     .intercept(Audit(log))
 //!     .queries(PostQueryGateway::new(summaries.clone()))
 //!     .projection(PostSummaryProjection::new(summaries, updates.clone()))
@@ -22,12 +22,12 @@
 //! The event store and the token store are the constructor's: a unit
 //! cannot be built without deciding where tokens live. The publisher is
 //! the events service the unit makes from them
-//! ([`Events`](crate::Events): append, then broadcast); the command gateway
-//! gets it through [`WithPublisher`](crate::WithPublisher), and its handlers
-//! commit with `events.commit(entity)`. [`Cqrs::from_publisher`] starts
-//! from a publisher built by hand instead (e.g. an
-//! [`InlinePublisher`](crate::InlinePublisher) feeding handlers inline, with no
-//! runtime).
+//! ([`Events`](crate::Events): append, then broadcast); `commands` hands it
+//! to the closure that builds the command gateway, whose handlers hold it
+//! and commit with `events.commit(entity, &self.events)`.
+//! [`Cqrs::from_publisher`] starts from a publisher built by hand instead
+//! (e.g. an [`InlinePublisher`](crate::InlinePublisher) feeding handlers
+//! inline, with no runtime).
 //!
 //! Each step changes the builder's type, so what can be called next is
 //! checked at compile time (`projection` needs events), and the unit it
@@ -38,20 +38,17 @@
 
 use std::sync::Arc;
 
+use crate::Intercepted;
 #[cfg(feature = "tokio")]
 use crate::{
     DomainEvent, EventFeed, EventHandler, EventStore, Events, LocalProgress, ProcessorHandle, Projected, Projection,
     ProjectionProgress, SubscriptionQueries, TrackingOptions, TransactionalTokenStore,
 };
-use crate::{Intercepted, Published, WithPublisher};
 
-/// An application's CQRS unit: the publisher `P` its handlers commit
-/// through, the command gateway `C`, the query gateway `Q` and its events
-/// `E` (`()` without asynchronous processing). Built with
+/// An application's CQRS unit: the command gateway `C`, the query gateway
+/// `Q` and its events `E` (`()` without asynchronous processing). Built with
 /// [`Cqrs::new`].
-pub struct Cqrs<P, C, Q, E = ()> {
-    /// What the command handlers commit through.
-    publisher: Arc<P>,
+pub struct Cqrs<C, Q, E = ()> {
     /// Routes the commands.
     commands: C,
     /// Routes the queries (and their subscriptions).
@@ -125,13 +122,7 @@ impl Cqrs<(), (), ()> {
     }
 }
 
-impl<P, C, Q, E> Cqrs<P, C, Q, E> {
-    /// The publisher the command handlers commit through (the
-    /// event-sourcing engine, for code that drives aggregates directly).
-    pub fn publisher(&self) -> &P {
-        &self.publisher
-    }
-
+impl<C, Q, E> Cqrs<C, Q, E> {
     /// Where commands are sent: `unit.commands().send(..)`.
     pub fn commands(&self) -> &C {
         &self.commands
@@ -161,7 +152,7 @@ impl<P, C, Q, E> Cqrs<P, C, Q, E> {
 }
 
 #[cfg(feature = "tokio")]
-impl<P, C, Q, Ev, S, T> Cqrs<P, C, Q, Events<Ev, S, T>>
+impl<C, Q, Ev, S, T> Cqrs<C, Q, Events<Ev, S, T>>
 where
     Ev: DomainEvent,
     S: EventStore<Ev> + Clone + 'static,
@@ -188,7 +179,7 @@ where
 /// gateway is set once:
 ///
 /// ```compile_fail,E0599
-/// let _ = cqrs::Cqrs::from_publisher(()).commands(()).commands(());
+/// let _ = cqrs::Cqrs::from_publisher(()).commands(|_| 1_u8).commands(|_| 2_u8);
 /// ```
 ///
 /// and processors follow the unit's events, so a unit without them has
@@ -219,10 +210,11 @@ pub struct CqrsBuilder<P, C = (), Q = (), E = (), U = ()> {
 }
 
 impl<P, Q, E, U> CqrsBuilder<P, (), Q, E, U> {
-    /// The command gateway, built with the services its handlers need
-    /// (`PostCommandGateway::new(posts)`): the unit gives it the publisher
-    /// ([`WithPublisher`]), so it sends commands from here on.
-    pub fn commands<G>(self, gateway: G) -> CqrsBuilder<P, Published<G, Arc<P>>, Q, E, U> {
+    /// The command gateway, built by `gateway` from the publisher the unit
+    /// makes (`|events| PostCommandGateway::new(posts, events)`): the
+    /// handlers hold it and commit through it. It is shared, so the gateway
+    /// takes it as an `Arc<P>`, which is a publisher too.
+    pub fn commands<G>(self, gateway: impl FnOnce(Arc<P>) -> G) -> CqrsBuilder<P, G, Q, E, U> {
         let CqrsBuilder {
             publisher,
             queries,
@@ -231,7 +223,7 @@ impl<P, Q, E, U> CqrsBuilder<P, (), Q, E, U> {
             processing,
             ..
         } = self;
-        let commands = gateway.with_publisher(Arc::clone(&publisher));
+        let commands = gateway(Arc::clone(&publisher));
         CqrsBuilder {
             publisher,
             commands,
@@ -408,9 +400,8 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
 
 impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
     /// The unit.
-    pub fn build(self) -> Cqrs<P, C, Q, E> {
+    pub fn build(self) -> Cqrs<C, Q, E> {
         let CqrsBuilder {
-            publisher,
             commands,
             queries,
             events,
@@ -418,7 +409,6 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
             ..
         } = self;
         Cqrs {
-            publisher,
             commands,
             queries,
             events,
@@ -438,10 +428,8 @@ where
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
-    ) -> Cqrs<P, C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T>>
-    {
+    ) -> Cqrs<C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T>> {
         let CqrsBuilder {
-            publisher,
             commands,
             queries,
             events,
@@ -452,7 +440,6 @@ where
         let queries =
             SubscriptionQueries::new(queries, updates).after_projection(events.clone(), processing.projections.clone());
         Cqrs {
-            publisher,
             commands,
             queries,
             events,

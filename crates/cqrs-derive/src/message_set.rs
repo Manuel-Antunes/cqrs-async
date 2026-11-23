@@ -123,30 +123,6 @@ pub fn message_set(input: DeriveInput, attribute: &str, marker: &str) -> Result<
         }
     });
 
-    // Commands also route through a gateway of command handlers, with the
-    // publisher their gateway was given.
-    let dispatch_in_via = (attribute == "commands").then(|| {
-        quote! {
-            #[automatically_derived]
-            impl<G, X> #krate::DispatchInVia<G, X> for #name
-            where
-                X: ::core::marker::Sync,
-                #(G: #krate::DispatchIn<#types, X>, #krate::ErrorOf<#types>: ::core::convert::Into<#error>,)*
-            {
-                async fn dispatch_in_via(self, gateway: &G, metadata: #krate::Metadata, publisher: &X) -> ::core::result::Result<#output, #error> {
-                    match self {
-                        #(
-                            Self::#idents(message) => <G as #krate::DispatchIn<#types, X>>::dispatch_in(gateway, message, metadata, publisher)
-                                .await
-                                .map(#output::#idents)
-                                .map_err(::core::convert::Into::into),
-                        )*
-                    }
-                }
-            }
-        }
-    });
-
     Ok(quote! {
         #port
         #subscriptions
@@ -194,8 +170,6 @@ pub fn message_set(input: DeriveInput, attribute: &str, marker: &str) -> Result<
                 }
             }
         }
-
-        #dispatch_in_via
 
         #[allow(dead_code)]
         const _: () = {

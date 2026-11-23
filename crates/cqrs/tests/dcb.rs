@@ -11,8 +11,7 @@ use std::sync::{
 
 use cqrs::{
     Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventStore, ExpectedVersion,
-    InMemoryEventStore, InlinePublisher, Loaded, Metadata, Published, StoreError, StreamId, TagResolver, WithPublisher,
-    testing::block_on,
+    InMemoryEventStore, InlinePublisher, Loaded, Metadata, StoreError, StreamId, TagResolver, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -110,12 +109,14 @@ struct Subscribe {
 }
 
 type Store = Arc<InMemoryEventStore<SchoolEvent>>;
+type Publisher = Arc<InlinePublisher<SchoolEvent, Store>>;
 
 /// Subscribes to each course in turn. On its first run it can let another
 /// student take a seat between its loads and its save.
 struct SubscribeHandler {
     courses: Arc<AggregateLoader<Course, Store>>,
     students: Arc<AggregateLoader<Student, Store>>,
+    events: Publisher,
     runs: AtomicU32,
     sneak_in: Option<u32>,
 }
@@ -136,7 +137,7 @@ impl CommandHandler for SubscribeHandler {
                 subscribe_directly(self.courses.store(), course.id, other);
             }
             course.subscribe(command.student, student.as_deref(), events)?;
-            events.commit(course).await?;
+            events.commit(course, &self.events).await?;
         }
         Ok(())
     }
@@ -149,7 +150,31 @@ struct Gateway {
 }
 
 /// The gateway, committing through an engine over the same store.
-fn gateway(sneak_in: Option<u32>) -> (Store, Published<Gateway, InlinePublisher<SchoolEvent, Store>>) {
+/// The gateway and the publisher its handler commits through.
+struct Wired {
+    gateway: Gateway,
+    publisher: Publisher,
+}
+
+impl Wired {
+    fn inner(&self) -> &Gateway {
+        &self.gateway
+    }
+
+    fn publisher(&self) -> &Publisher {
+        &self.publisher
+    }
+}
+
+impl std::ops::Deref for Wired {
+    type Target = Gateway;
+
+    fn deref(&self) -> &Gateway {
+        &self.gateway
+    }
+}
+
+fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
     let store: Store = Arc::new(InMemoryEventStore::new());
     for (course, capacity) in [(1, 1), (2, 5), (3, 5)] {
         let opened = SchoolEvent::CourseOpened { course, capacity };
@@ -161,14 +186,21 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Published<Gateway, InlinePublisher<
         ))
         .unwrap();
     }
+    let publisher: Publisher = Arc::new(InlinePublisher::new(Arc::clone(&store)));
     let handler = SubscribeHandler {
+        events: Arc::clone(&publisher),
         courses: Arc::new(AggregateLoader::new(Arc::clone(&store))),
         students: Arc::new(AggregateLoader::new(Arc::clone(&store))),
         runs: AtomicU32::new(0),
         sneak_in,
     };
-    let publisher = InlinePublisher::new(Arc::clone(&store));
-    (store, Gateway { subscribe: handler }.with_publisher(publisher))
+    (
+        store,
+        Wired {
+            gateway: Gateway { subscribe: handler },
+            publisher,
+        },
+    )
 }
 
 /// Another writer's subscription, straight into the store.
@@ -267,12 +299,12 @@ fn a_read_only_aggregate_is_checked_too() {
     // course did not change, the student did, and the student was loaded.
     let (store, gateway) = gateway(None);
     let course = block_on(gateway.inner().subscribe.courses.load(&2)).unwrap().unwrap();
-    let mut events = Appender::publishing(Metadata::new(), gateway.publisher());
+    let mut events = Appender::with_metadata(Metadata::new());
     let student = block_on(gateway.inner().subscribe.students.load_in(&1, &mut events)).unwrap();
     assert!(student.is_none(), "no subscription yet: absence is checked too");
     subscribe_directly(&store, 3, 1);
     course.subscribe(1, None, &mut events).unwrap();
-    let refused = block_on(events.commit(course));
+    let refused = block_on(events.commit(course, gateway.publisher()));
     assert_eq!(refused, Err(StoreError::ConditionFailed));
 }
 
@@ -291,14 +323,14 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
     // the second save.
     let (_, other) = gateway(None);
     let courses = &other.inner().subscribe.courses;
-    let mut events = Appender::publishing(Metadata::new(), other.publisher());
+    let mut events = Appender::with_metadata(Metadata::new());
     let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
     events.append(SchoolEvent::Subscribed { course: 2, student: 5 });
-    block_on(events.commit(course)).unwrap();
+    block_on(events.commit(course, other.publisher())).unwrap();
     let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
     assert_eq!(course.students, [5]);
     events.append(SchoolEvent::Subscribed { course: 2, student: 6 });
-    block_on(events.commit(course)).unwrap();
+    block_on(events.commit(course, other.publisher())).unwrap();
     assert_eq!(block_on(courses.load(&2)).unwrap().unwrap().students, [5, 6]);
 }
 
@@ -306,9 +338,9 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
 fn a_new_aggregate_root_is_created_in_its_own_stream() {
     let (store, gateway) = gateway(None);
     let course = Loaded::new(Course::initial(&9));
-    let mut events = Appender::publishing(Metadata::new(), gateway.publisher());
+    let mut events = Appender::with_metadata(Metadata::new());
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
-    block_on(events.commit(course)).unwrap();
+    block_on(events.commit(course, gateway.publisher())).unwrap();
     let loaded = block_on(gateway.inner().subscribe.courses.load(&9)).unwrap().unwrap();
     assert_eq!(loaded.capacity, 3);
     assert_eq!(store.all().last().unwrap().stream, StreamId::of::<Course>(&9));

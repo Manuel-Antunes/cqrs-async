@@ -182,11 +182,7 @@ where
     /// # Errors
     ///
     /// The store's.
-    pub async fn load_in<P>(
-        &self,
-        id: &A::Id,
-        events: &mut Appender<A::Event, P>,
-    ) -> Result<Option<Loaded<A>>, StoreError> {
+    pub async fn load_in(&self, id: &A::Id, events: &mut Appender<A::Event>) -> Result<Option<Loaded<A>>, StoreError> {
         let Some(criteria) = A::criteria(id) else {
             return self.load_stream(id).await;
         };
@@ -202,10 +198,10 @@ where
     /// # Errors
     ///
     /// The store's.
-    pub async fn source<P>(
+    pub async fn source(
         &self,
         criteria: EventCriteria,
-        events: &mut Appender<A::Event, P>,
+        events: &mut Appender<A::Event>,
     ) -> Result<Vec<EventEnvelope<A::Event>>, StoreError> {
         events.source(&self.store, criteria).await
     }

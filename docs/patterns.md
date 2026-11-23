@@ -197,7 +197,7 @@ impl<R: PostRepository> CommandHandler for RetitlePostHandler<R> {
     async fn handle(&self, command: &RetitlePost, events: &mut Appender<PostEvent>) -> Result<(), BlogError> {
         let post = self.posts.find(command.id).await?.ok_or(NotFound(command.id))?;
         post.retitle(command.title.as_str(), events)?;
-        events.commit(post).await?;
+        events.commit(post, &self.events).await?;
         Ok(())
     }
 }
@@ -234,11 +234,10 @@ separate; a [CQRS unit](#55-the-cqrs-unit-a-typed-builder) exposes
 `commands()` and `queries()`.
 
 A gateway of command handlers is marked `#[gateway(commands)]` (or
-`#[gateway(commands = Enum)]`). It is built with its handlers' services
-only and sends nothing until it has a publisher:
-`PostCommandGateway::new(posts).with_publisher(publisher)` (the
-`WithPublisher` trait) is the gateway that sends; until then, `send` does
-not compile.
+`#[gateway(commands = Enum)]`). It only routes: each handler holds the
+publisher it commits through (`PostCommandGateway::new(posts, events)`), and
+the gateway runs it with a fresh appender, re-running it when a commit lost a
+race (`dispatch_command`).
 
 ### 10. Ports as gateway bounds
 
@@ -396,7 +395,7 @@ derefs to `&A` only (no `&mut`, E0596), and `commit` consumes it:
 ```rust
 let post = posts.find(id).await?.ok_or(NotFound(id))?;    // Loaded<Post>, from your repository
 post.retitle("New", events)?;                              // &Post
-events.commit(post).await?;                                // moved: cannot be reused
+events.commit(post, &self.events).await?;                  // moved: cannot be reused
 let new = Loaded::new(Post::initial(&id));                 // expects no stream yet
 ```
 
@@ -468,7 +467,7 @@ struct Course { id: u32, capacity: usize, students: Vec<u32> }
 let course = courses.load_in(&course_id, events).await?.ok_or(Error::NoSuchCourse)?;
 let student = students.load_in(&student_id, events).await?;   // read only: still checked
 course.subscribe(student_id, student.as_deref(), events)?;
-events.commit(course).await?;   // StoreError::ConditionFailed if either changed
+events.commit(course, &self.events).await?;   // StoreError::ConditionFailed if either changed
 ```
 
 Here `courses` and `students` are `AggregateLoader`s: `load_in` is
@@ -505,13 +504,12 @@ without parsing strings. A domain error means nothing was saved.
 command's metadata, what it read across streams (for the conditional
 commit), and whether retrying it is safe.
 
-**Shape.** The gateway hands each run a fresh `Appender<E, P>`, `P` being
-the publisher the gateway was given:
+**Shape.** The gateway hands each run a fresh `Appender<E>`:
 
 | | |
 |---|---|
 | `events.append(e)` (via `EventAppender`) | pending events, taken by the next `commit` |
-| `events.commit(entity)` | commits them to the entity's stream through the publisher (NestJS's `aggregate.commit()`) |
+| `events.commit(entity, &publisher)` | commits them to the entity's stream through the handler's publisher (NestJS's `aggregate.commit()`) |
 | `events.metadata()` | the command's metadata, stored with every event |
 | `events.source(store, criteria)` | reads by criteria and makes later commits conditional on it |
 | `events.depend_on(condition)` | adds a condition (what `load_in` does) |
@@ -555,7 +553,7 @@ application writes them anyway (as in NestJS).
   aggregate from the event store with an `AggregateLoader`;
 - **committing** is the framework's: an `EventPublisher<E>` (NestJS's
   `EventPublisher`), given to the gateway once and reached by handlers
-  through their context, `events.commit(entity)`.
+  through their context, `events.commit(entity, &self.events)`.
 
 ```rust
 // application
@@ -575,7 +573,7 @@ impl<S: EventStore<PostEvent>> PostRepository for EventSourcedPostRepository<S> 
 // composition root: the store is shared, the publisher is the unit's
 let store = Arc::new(InMemoryEventStore::new());
 let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));
-let app = Cqrs::new(store, tokens).commands(PostCommandGateway::new(posts)) /* ... */;
+let app = Cqrs::new(store, tokens).commands(|events| PostCommandGateway::new(posts, events)) /* ... */;
 ```
 
 **Rules.** Handlers take only their services (`R: PostRepository`); the
@@ -888,7 +886,7 @@ impl<M: Message> Interceptor<M> for Audit {
     }
 }
 
-let commands = Intercepted::new(PostCommandGateway::new(posts).with_publisher(publisher), Audit(log));
+let commands = Intercepted::new(PostCommandGateway::new(posts, publisher), Audit(log));
 ```
 
 **Rules.** It may change the message or metadata, refuse (return an error
@@ -1126,14 +1124,14 @@ let store = PostgresEventStore::new(pool.clone(), "posts");                     
 let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));    // yours, over the same store
 
 let app = Cqrs::new(store, PostgresTokenStore::new(pool))  // both stores: the constructor's
-    .commands(PostCommandGateway::new(posts))              // services only; the unit gives it the publisher
-    .intercept(Audit(audit))                               // Intercepted<Published<gateway, ..>, Audit>
+    .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over its publisher
+    .intercept(Audit(audit))                               // Intercepted<gateway, Audit>
     .queries(PostQueryGateway::new(summaries.clone()))
     .options(TrackingOptions { segments: 8, batch_size: 100, ..TrackingOptions::default() })
     .projection(PostSummaryProjection::new(summaries, updates.clone()))   // started; subscriptions wait for it
     .policy(NotifyOnPublish::new(notifier))                               // started; not waited for
     .subscriptions(updates)
-    .build();                                              // Cqrs<P, C, Q, E>
+    .build();                                              // Cqrs<C, Q, E>
 
 app.commands().send(CreatePost { .. }).await?;
 app.queries().subscribe(FindPost { id });
@@ -1147,9 +1145,10 @@ app.stop().await;
   store are required arguments: there is no forgotten `.tokens()` leaving
   production on in-memory tokens. The unit makes its events (`Events`)
   from them, and the events are the publisher: append, then broadcast.
-- **The publisher is injected, never passed to constructors.**
-  `.commands(gateway)` calls `gateway.with_publisher(..)` (the
-  `WithPublisher` trait); handlers commit with `events.commit(entity)`. The
+- **The publisher is a handler's constructor argument, handed over by the
+  unit.** `.commands(|events| gateway(events))` gives the closure the
+  publisher it made (shared: an `Arc`); handlers commit with
+  `events.commit(entity, &self.events)`. The
   repository is the application's business: the unit never builds or
   passes it. `Cqrs::from_publisher(publisher)` starts from a hand-built
   publisher instead (e.g. inline processing, no runtime), and its unit
@@ -1163,7 +1162,7 @@ app.stop().await;
   publisher does (15.3 ns both, `benches/micro.rs`, `unit`).
 - **Switching stores changes the inputs only**: the two stores
   (`start()` in memory vs `start_postgres(pool)` in the guide).
-- **Return it by its ports**: `Cqrs<PostEvents, impl PostCommands, impl PostQueries + PostSubscriptions, PostEvents>`.
+- **Return it by its ports**: `Cqrs<impl PostCommands, impl PostQueries + PostSubscriptions, PostEvents>`.
   A presentation trait implemented for any `Cqrs` with those ports serves
   every wiring.
 - `.options` applies to the processors started after it; a processor

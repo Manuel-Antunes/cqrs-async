@@ -12,10 +12,10 @@
 //!   message): application side.
 //! - [`EventStore`] / [`AggregateLoader`] / [`InlinePublisher`]: persistence with optimistic
 //!   concurrency; events reach the [`EventProcessor`] only after commit.
-//!   Handlers commit through their [`Appender`] (`events.commit(entity)`),
-//!   which carries the [`EventPublisher`] their gateway was given
-//!   ([`WithPublisher`]); repositories are the application's own ports,
-//!   whose adapters load with an [`AggregateLoader`].
+//!   Handlers commit through their [`Appender`] and the [`EventPublisher`]
+//!   they were built with (`events.commit(entity, &self.events)`);
+//!   repositories are the application's own ports, whose adapters load with
+//!   an [`AggregateLoader`].
 //! - `#[derive(Gateway)]` (a struct of handlers, routed by their message
 //!   type) and [`Bus`] (zero-macro, type-level list): dispatch.
 //! - [`Cqrs`]: an application's unit (publisher, gateways, events and
@@ -62,10 +62,7 @@ mod upcast;
 
 pub use aggregate::{Aggregate, EventAppender};
 pub use bus::{Bus, Cons, Here, Nil, Route, There};
-pub use command_handler::{
-    Appender, CommandHandler, DispatchIn, DispatchInVia, EventPublisher, Pending, Published, WithPublisher,
-    dispatch_command,
-};
+pub use command_handler::{Appender, CommandHandler, EventPublisher, Pending, dispatch_command};
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
 pub use dead_letter::{
@@ -105,6 +102,6 @@ pub mod prelude {
     pub use crate::{
         Aggregate, Appender, Command, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
         EventFeed, EventHandler, EventPublisher, Handler, HandlerError, Message, Query, QueryGateway,
-        QuerySubscriptions, RefreshedBy, TagResolver, WithPublisher,
+        QuerySubscriptions, RefreshedBy, TagResolver,
     };
 }
