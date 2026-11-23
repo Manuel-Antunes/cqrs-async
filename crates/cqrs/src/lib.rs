@@ -17,7 +17,8 @@
 //!   repositories are the application's own ports, whose adapters load with
 //!   an [`AggregateLoader`].
 //! - `#[derive(Gateway)]` (a struct of handlers, routed by their message
-//!   type) and [`Bus`] (zero-macro, type-level list): dispatch.
+//!   type): dispatch. A gateway is a [`Dispatch`] impl per message: the
+//!   derive writes them, and they can be written by hand.
 //! - [`Cqrs`]: an application's unit (publisher, gateways, events and
 //!   processors), wired by a typed builder.
 //! - [`EventFeed`]: the committed events as a `Stream`, a first-class port;
@@ -38,7 +39,6 @@
 extern crate self as cqrs;
 
 mod aggregate;
-mod bus;
 mod command_handler;
 mod criteria;
 mod cursor;
@@ -61,7 +61,6 @@ mod unit;
 mod upcast;
 
 pub use aggregate::{Aggregate, EventAppender};
-pub use bus::{Bus, Cons, Here, Nil, Route, There};
 pub use command_handler::{Appender, CommandHandler, EventPublisher, Pending, dispatch_command};
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};

@@ -5,7 +5,9 @@ use futures_util::{StreamExt, TryStreamExt, future::Either, stream};
 use tokio::sync::watch;
 
 use super::{ProcessorHandle, ProcessorStatus};
-use crate::{Dispatch, DomainEvent, EventFeed, Message, QuerySubscriptions, RefreshedBy, StoreError, TokenStore};
+use crate::{
+    Dispatch, DomainEvent, EventFeed, Message, Metadata, QuerySubscriptions, RefreshedBy, StoreError, TokenStore,
+};
 
 /// Refreshes re-run the query at most once per this many events that were
 /// already waiting: a burst of changes costs one query, not one per event.
@@ -178,7 +180,7 @@ where
             // Listen first, then read: nothing committed in between is lost.
             let changes = events.subscribe(start);
             projection.reached(start).await;
-            let current = queries.dispatch(query.clone()).await;
+            let current = queries.dispatch_with(query.clone(), Metadata::new()).await;
 
             let relevant = query.clone();
             let refreshes = changes
@@ -193,7 +195,7 @@ where
                         for event in &burst {
                             projection.reached(event.position).await;
                         }
-                        queries.dispatch(query).await
+                        queries.dispatch_with(query, Metadata::new()).await
                     }
                 });
             Either::Right(stream::once(ready(current)).chain(refreshes))

@@ -210,7 +210,7 @@ by reference: they may run again after a conflict.
 
 ### 9. Derived gateway
 
-**Problem.** Bus registries keyed by `TypeId` fail at runtime when a
+**Problem.** Registries keyed by `TypeId` fail at runtime when a
 handler is missing or registered twice.
 
 **Shape.** A struct of handlers with `#[derive(Gateway)]`: it implements
@@ -289,24 +289,34 @@ let PostCommandOutput::CreatePost(id) = gateway.send(created).await? else { unre
 Each message converts `From` into the enum. `#[derive(Queries)]` and
 `#[gateway(queries = ...)]` are the read-side twins.
 
-### 12. Type-level bus (no macro)
+### 12. A gateway written by hand (no macro)
 
-**Problem.** Sometimes you want a bus without declaring a struct.
+**Problem.** Sometimes you want to see what the derive writes, or route
+without declaring a struct of handlers.
 
-**Shape.** A type-level list; the compiler infers each handler's position:
+**Shape.** A gateway is a `Dispatch<M>` impl per message; the derive writes
+exactly these (`CommandGateway` / `QueryGateway` are blanket impls over
+`Dispatch`):
 
 ```rust
-let bus = Bus::new()
-    .register(CreatePostHandler::new(posts.clone()))
-    .register(PublishPostHandler::new(posts))
-    .register(FindPostHandler::new(summaries));
-let id = bus.send(CreatePost { title: "hlist".into() }).await?;
-let found = bus.query(FindPost { id }).await?;
+impl<P: EventPublisher<PostEvent>, R: PostRepository> Dispatch<CreatePost> for ByHand<P, R> {
+    async fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> Result<PostId, BlogError> {
+        dispatch_command(&self.create, message, metadata).await   // the retry loop of command handlers
+    }
+}
+
+impl<P, R> Dispatch<FindPost> for ByHand<P, R> {
+    async fn dispatch_with(&self, message: FindPost, metadata: Metadata) -> Result<Option<PostSummary>, BlogError> {
+        self.find.handle_with(message, metadata).await            // a query handler
+    }
+}
 ```
 
-**Rules.** No handler: "no handler for `M` is registered on this bus";
-two: ambiguity (E0283). The price is an inferred index parameter in generic
-code, so prefer the derived gateway for ports.
+**Rules.** No impl for `M`: E0277 where it is sent. The tested version is
+`a_gateway_can_be_written_by_hand_without_the_derive` in
+`examples/blog/tests/flow.rs`. The type-level `Bus` that once did this
+without a struct is gone: it cost an inferred index parameter in generic
+code, and the derived gateway gives better errors.
 
 ### 13. Metadata as correlation data
 

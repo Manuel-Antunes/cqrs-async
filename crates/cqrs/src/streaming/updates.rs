@@ -238,7 +238,7 @@ where
         let catch_up = self.catch_up.clone();
         let initial = stream::once(async move {
             catch_up.caught_up().await;
-            queries.dispatch(query).await
+            queries.dispatch_with(query, Metadata::new()).await
         });
         distinct(initial.chain(updates))
     }

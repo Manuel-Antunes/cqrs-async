@@ -326,11 +326,6 @@ pub trait Dispatch<M: Message>: Send + Sync {
     /// `M`. Wrappers forward both, so metadata is never lost on the way.
     fn dispatch_with(&self, message: M, metadata: Metadata)
     -> impl Future<Output = Result<M::Output, M::Error>> + Send;
-
-    /// Hands `message` to the handler responsible for `M`, without metadata.
-    fn dispatch(&self, message: M) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
-        self.dispatch_with(message, Metadata::new())
-    }
 }
 
 // Forwards every method, so an override of a provided one is never lost.
@@ -342,10 +337,6 @@ impl<M: Message, G: Dispatch<M>> Dispatch<M> for Arc<G> {
         metadata: Metadata,
     ) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
         (**self).dispatch_with(message, metadata)
-    }
-
-    fn dispatch(&self, message: M) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
-        (**self).dispatch(message)
     }
 }
 
@@ -374,7 +365,7 @@ pub trait DispatchVia<G: ?Sized>: Message {
 pub trait CommandGateway<C: Command>: Dispatch<C> {
     /// Sends the command to its handler and waits for the result.
     fn send(&self, command: C) -> impl Future<Output = Result<C::Output, C::Error>> + Send {
-        self.dispatch(command)
+        self.dispatch_with(command, Metadata::new())
     }
 
     /// Sends the command with `metadata` (Axon's `send(command, metadata)`):
@@ -391,7 +382,7 @@ impl<C: Command, G: Dispatch<C>> CommandGateway<C> for G {}
 pub trait QueryGateway<Q: Query>: Dispatch<Q> {
     /// Asks the query of its handler and waits for the answer.
     fn query(&self, query: Q) -> impl Future<Output = Result<Q::Output, Q::Error>> + Send {
-        self.dispatch(query)
+        self.dispatch_with(query, Metadata::new())
     }
 }
 

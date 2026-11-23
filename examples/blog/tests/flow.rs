@@ -9,9 +9,7 @@ use blog::{
     in_memory, in_memory_with,
     infrastructure::EventSourcedPostRepository,
 };
-use cqrs::{
-    Bus, CommandGateway, EventPublisher, InlinePublisher, Pending, QueryGateway, StoreError, testing::block_on,
-};
+use cqrs::{CommandGateway, EventPublisher, InlinePublisher, Pending, QueryGateway, StoreError, testing::block_on};
 use std::sync::Arc;
 
 fn assert_send<T: Send>(value: T) -> T {
@@ -197,21 +195,40 @@ fn components_depend_on_gateway_ports() {
 }
 
 #[test]
-fn the_zero_macro_bus_infers_the_handler() {
+fn a_gateway_can_be_written_by_hand_without_the_derive() {
     use blog::{
         application::{projections::PostSummaryProjection, queries::PostUpdates},
+        domain::PostId,
         infrastructure::InMemoryPostSummaryRepository,
     };
-    use cqrs::{CommandHandler, ErrorOf, InMemoryEventStore, Metadata, OutputOf, dispatch_command};
+    use cqrs::{Dispatch, Handler, InMemoryEventStore, Metadata, dispatch_command};
 
-    /// Registers a command handler on a bus: the bus routes `Handler`s.
-    struct Run<H>(H);
+    /// What `#[derive(Gateway)]` writes, one `Dispatch` impl per message.
+    struct ByHand<P, R> {
+        create: CreatePostHandler<P>,
+        publish: PublishPostHandler<R, P>,
+        find: FindPostHandler<InMemoryPostSummaryRepository>,
+    }
 
-    impl<H: CommandHandler> cqrs::Handler for Run<H> {
-        type Message = H::Command;
+    impl<P: cqrs::EventPublisher<blog::domain::PostEvent>, R: PostRepository> Dispatch<CreatePost> for ByHand<P, R> {
+        async fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> Result<PostId, BlogError> {
+            dispatch_command(&self.create, message, metadata).await
+        }
+    }
 
-        async fn handle(&self, command: H::Command) -> Result<OutputOf<H::Command>, ErrorOf<H::Command>> {
-            dispatch_command(&self.0, command, Metadata::new()).await
+    impl<P: cqrs::EventPublisher<blog::domain::PostEvent>, R: PostRepository> Dispatch<PublishPost> for ByHand<P, R> {
+        async fn dispatch_with(&self, message: PublishPost, metadata: Metadata) -> Result<(), BlogError> {
+            dispatch_command(&self.publish, message, metadata).await
+        }
+    }
+
+    impl<P: Send + Sync, R: Send + Sync> Dispatch<FindPost> for ByHand<P, R> {
+        async fn dispatch_with(
+            &self,
+            message: FindPost,
+            metadata: Metadata,
+        ) -> Result<Option<blog::application::queries::PostSummary>, BlogError> {
+            self.find.handle_with(message, metadata).await
         }
     }
 
@@ -222,14 +239,20 @@ fn the_zero_macro_bus_infers_the_handler() {
             PostSummaryProjection::new(summaries.clone(), Arc::new(PostUpdates::default())),
         )));
         let posts = Arc::new(EventSourcedPostRepository::new(store));
-        let bus = Bus::new()
-            .register(Run(CreatePostHandler::new(Arc::clone(&publisher))))
-            .register(Run(PublishPostHandler::new(posts, publisher)))
-            .register(FindPostHandler::new(summaries));
+        let gateway = ByHand {
+            create: CreatePostHandler::new(Arc::clone(&publisher)),
+            publish: PublishPostHandler::new(posts, publisher),
+            find: FindPostHandler::new(summaries),
+        };
 
-        let id = bus.send(CreatePost { title: "hlist".into() }).await.unwrap();
-        bus.send(PublishPost { id }).await.unwrap();
-        let found = bus.query(FindPost { id }).await.unwrap().unwrap();
+        let id = gateway
+            .send(CreatePost {
+                title: "by hand".into(),
+            })
+            .await
+            .unwrap();
+        gateway.send(PublishPost { id }).await.unwrap();
+        let found = gateway.query(FindPost { id }).await.unwrap().unwrap();
         assert!(found.published);
     });
 }

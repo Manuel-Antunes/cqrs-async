@@ -9,7 +9,7 @@ use std::{
 
 use blog::domain::{Post, PostId};
 use cqrs::Aggregate;
-use cqrs::{Bus, CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots, Loaded};
+use cqrs::{CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots, Loaded};
 use cqrs_benchmarks::{
     PlainPosts, now,
     ping::{Ping, PingGateway, PingHandler},
@@ -35,13 +35,6 @@ mod dispatch {
     fn derived_gateway(bencher: divan::Bencher) {
         let gateway = PingGateway { ping: PingHandler };
         bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
-    }
-
-    /// Through the type-level `Bus`.
-    #[divan::bench]
-    fn hlist_bus(bencher: divan::Bencher) {
-        let bus = Bus::new().register(PingHandler);
-        bencher.bench_local(|| now(bus.send(Ping(black_box(1)))).unwrap());
     }
 }
 

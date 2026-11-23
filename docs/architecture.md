@@ -94,7 +94,7 @@ application logic, and where it is stored is a port.
 |---|---|---|---|
 | Command / query | message classes | `ICommand` / `IQuery` | structs with `#[derive(Command)]` / `#[derive(Query)]`; the message declares `Output` and `Error` |
 | Handler | `@CommandHandler` / `@QueryHandler` methods | `@CommandHandler` classes | one struct per message: `#[command_handler] impl CommandHandler`, `#[query_handler] impl Handler` |
-| Dispatch | `CommandGateway`, `QueryGateway` | `CommandBus`, `QueryBus` | `#[derive(Gateway)]` on a struct of handlers; `CommandGateway<C>` / `QueryGateway<Q>` as ports; or the macro-free `Bus` |
+| Dispatch | `CommandGateway`, `QueryGateway` | `CommandBus`, `QueryBus` | `#[derive(Gateway)]` on a struct of handlers; `CommandGateway<C>` / `QueryGateway<Q>` as ports; or a hand-written `Dispatch` impl per message |
 | Recording events | `EventAppender` | `AggregateRoot.apply()` | `Appender<E>` handed to the handler; the domain sees `impl EventAppender<E>` |
 | Aggregate | `@EventSourcedEntity` | `AggregateRoot` | a plain struct with `#[derive(AggregateRoot)]` (or `impl Aggregate`) |
 | Entity built from tags | `@EventSourcedEntity(tagKey = ...)` | — | `#[aggregate(tag = "course")]` |
