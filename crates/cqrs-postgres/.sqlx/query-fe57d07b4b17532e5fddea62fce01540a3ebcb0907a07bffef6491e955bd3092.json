@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT sequence AS \"sequence!\" FROM cqrs_dead_letters WHERE processor = $1 ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sequence!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_dead_letters",
+            "name": "sequence"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fe57d07b4b17532e5fddea62fce01540a3ebcb0907a07bffef6491e955bd3092"
+}

@@ -20,7 +20,8 @@ use super::{
 };
 use crate::{
     Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
-    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
+    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalDeadLetters,
+    TransactionalTokenStore, segment_of,
 };
 
 /// How a [`TrackingProcessor`] splits, claims, reads and retries.
@@ -177,7 +178,7 @@ where
     S: EventStore<E> + Clone + 'static,
     H: EventHandler<E, T::Transaction> + 'static,
     T: TransactionalTokenStore + 'static,
-    D: DeadLetterQueue<E> + 'static,
+    D: DeadLetterQueue<E> + TransactionalDeadLetters<E, T::Transaction> + 'static,
 {
     /// Replaces the default settings.
     #[must_use]
@@ -767,15 +768,6 @@ where
             return Some(TokenUpdate::Untouched); // a replayed event, for a handler that must not see it again
         }
         let sequence = event.stream.to_string();
-        let parking = self.options.dead_letter_after.is_some();
-        if parking && self.is_parked(&sequence, stop).await? {
-            let cause = "an earlier event of this aggregate is parked".to_owned();
-            return self
-                .park(event, sequence, cause, stop)
-                .await
-                .then_some(TokenUpdate::Untouched);
-        }
-
         let token = TrackingToken {
             processor: &self.name,
             segment,
@@ -783,6 +775,12 @@ where
             replay,
             cursor,
         };
+        let parking = self.options.dead_letter_after.is_some();
+        if parking && self.is_parked(&sequence, stop).await? {
+            let cause = "an earlier event of this aggregate is parked".to_owned();
+            return self.park(event, sequence, cause, token, stop).await;
+        }
+
         let mut backoff = Backoff::new(&self.options);
         let mut attempts = 0;
         loop {
@@ -797,10 +795,7 @@ where
                     tracing::warn!(processor = %self.name, position = event.position, attempts, %cause, "event handler failed");
                     if self.options.dead_letter_after.is_some_and(|after| attempts >= after) {
                         progress.fail(segment, None);
-                        return self
-                            .park(event, sequence, cause, stop)
-                            .await
-                            .then_some(TokenUpdate::Untouched);
+                        return self.park(event, sequence, cause, token, stop).await;
                     }
                     progress.fail(segment, Some(cause));
                     if backoff.wait(stop).await {
@@ -851,31 +846,52 @@ where
         }
     }
 
-    /// Parks `event`, retrying the queue itself if it fails. `false`: stopped.
+    /// Parks `event` and moves the segment's token past it, in one unit of
+    /// work, retrying with backoff if the queue or the token store fails.
+    /// `None`: stopped while retrying.
     async fn park(
         &self,
         event: &Arc<EventEnvelope<E>>,
         sequence: String,
         cause: String,
+        token: TrackingToken<'_>,
         stop: &mut watch::Receiver<bool>,
-    ) -> bool {
+    ) -> Option<TokenUpdate> {
         let mut backoff = Backoff::new(&self.options);
         loop {
-            let letter = DeadLetter {
-                sequence: sequence.clone(),
-                event: Arc::clone(event),
-                cause: cause.clone(),
-            };
-            match self.dead_letters.enqueue(&self.name, letter).await {
-                Ok(()) => return true,
+            match self.park_once(event, &sequence, &cause, token).await {
+                Ok(update) => return Some(update),
                 Err(error) => {
                     tracing::warn!(processor = %self.name, %error, "cannot park the event");
                     if backoff.wait(stop).await {
-                        return false;
+                        return None;
                     }
                 }
             }
         }
+    }
+
+    /// One attempt at [`park`](Self::park). A lost claim rolls the letter
+    /// back: whoever holds the segment now parks it.
+    async fn park_once(
+        &self,
+        event: &Arc<EventEnvelope<E>>,
+        sequence: &str,
+        cause: &str,
+        token: TrackingToken<'_>,
+    ) -> Result<TokenUpdate, StoreError> {
+        let mut tx = self.tokens.begin().await?;
+        let letter = DeadLetter {
+            sequence: sequence.to_owned(),
+            event: Arc::clone(event),
+            cause: cause.to_owned(),
+        };
+        self.dead_letters.enqueue_in(&mut tx, &self.name, letter).await?;
+        let update = self.tokens.store_in(&mut tx, token).await?;
+        if update != TokenUpdate::ClaimLost {
+            self.tokens.commit(tx).await?;
+        }
+        Ok(update)
     }
 
     /// Stores the segment's cursor. `false`: the claim was lost.

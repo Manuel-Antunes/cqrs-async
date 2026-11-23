@@ -108,7 +108,7 @@ application logic, and where it is stored is a port.
 | Processing group | processing group | — | a tuple of handlers |
 | Token store / token | `TokenStore`, `GapAwareTrackingToken` | — | `TokenStore`, `Cursor` |
 | Replay | `resetTokens`, `@DisallowReplay`, `ReplayStatus` | — | `TrackingProcessor::reset`, `const REPLAY: bool = false`, `context.replay()` |
-| Dead letters | `SequencedDeadLetterQueue` | — | `DeadLetterQueue`, `TrackingProcessor::retry_dead_letters` |
+| Dead letters | `SequencedDeadLetterQueue` | — | `DeadLetterQueue`, `TransactionalDeadLetters`, `PostgresDeadLetters`, `TrackingProcessor::retry_dead_letters` |
 | Interceptors | dispatch / handler interceptors | — | `Interceptor<M>` around gateways, `EventInterceptor<E, Tx>` around handlers |
 | Subscription queries | `QueryUpdateEmitter`, `subscriptionQuery` | — | `QueryUpdateEmitter<Q>`, `SubscriptionQueries`, `QuerySubscriptions<Q>` |
 | Sagas | stateful event handlers | `@Saga` over an RxJS stream | `EventFeed::subscribe` (a `Stream`), or an event handler that sends commands |

@@ -19,10 +19,13 @@ use std::{
 
 use cqrs::SnapshotStore;
 use cqrs::{
-    Aggregate, Cursor, EventEnvelope, EventFeed, EventHandler, EventStore, Events, ExpectedVersion, Gap, HandlerError,
-    Metadata, ProcessingContext, StoreError, StreamId, SubscriptionOptions, TokenStore, TrackingOptions,
+    Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventStore, Events,
+    ExpectedVersion, Gap, HandlerError, Metadata, ProcessingContext, StoreError, StreamId, SubscriptionOptions,
+    TokenStore, TrackingOptions, TransactionalDeadLetters, TransactionalTokenStore,
 };
-use cqrs_postgres::{PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, migrate, upcast};
+use cqrs_postgres::{
+    PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, migrate, upcast,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     PgPool,
@@ -611,6 +614,162 @@ impl Aggregate for Bell {
     }
 
     fn evolve(&mut self, _: &BellEvent) {}
+}
+
+/// Fails every event of one stream until it is healed.
+struct Poisoned {
+    stream: String,
+    healed: std::sync::atomic::AtomicBool,
+    seen: Mutex<Vec<(String, u64)>>,
+}
+
+impl Poisoned {
+    fn new(stream: &StreamId) -> Arc<Self> {
+        Arc::new(Self {
+            stream: stream.to_string(),
+            healed: std::sync::atomic::AtomicBool::new(false),
+            seen: Mutex::default(),
+        })
+    }
+
+    fn heal(&self) {
+        self.healed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn seen(&self) -> Vec<(String, u64)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl<Tx: Send> EventHandler<ClockEvent, Tx> for Poisoned {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<ClockEvent>,
+        _: &mut ProcessingContext<'_, Tx>,
+    ) -> Result<(), HandlerError> {
+        let stream = event.stream.to_string();
+        if stream == self.stream && !self.healed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HandlerError::msg("cannot handle this one"));
+        }
+        self.seen.lock().unwrap().push((stream, event.sequence));
+        Ok(())
+    }
+}
+
+/// Parked events live in the database: a processor that dies after parking
+/// leaves its letters (and its token past them) behind, and a fresh handle on
+/// the queue finds, retries and removes them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
+    let pool = database_or_skip!();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let events = Events::new(store.clone()).with_tokens(PostgresTokenStore::new(pool.clone()));
+    let clocks = events.event_sourced::<Clock>();
+    let handler = Poisoned::new(&stream(1));
+    let processor = events
+        .processor("parking", Arc::clone(&handler))
+        .with_options(options(1, 1))
+        .with_dead_letters(PostgresDeadLetters::new(store.clone()), 2)
+        .spawn();
+
+    // Clock 1's first event fails and is parked; its second parks behind it.
+    // Clock 2 flows.
+    let first = clocks
+        .append(cqrs::Loaded::new(Clock::initial(&1)), ticks(1, 1))
+        .await
+        .unwrap();
+    let second = clocks.append(first.aggregate, ticks(2, 1)).await.unwrap();
+    let other = clocks
+        .append(cqrs::Loaded::new(Clock::initial(&2)), ticks(1, 1))
+        .await
+        .unwrap();
+    let last = other.events[0].position;
+    tokio::time::timeout(Duration::from_secs(20), processor.caught_up(last))
+        .await
+        .expect("the segment moved past the parked events");
+    assert_eq!(handler.seen(), [(stream(2).to_string(), 1)]);
+    processor.abort().await; // a crash: nothing is released or cleaned up
+
+    // A restart: new handles on everything.
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let queue = PostgresDeadLetters::new(store.clone());
+    let sequence = stream(1).to_string();
+    assert_eq!(
+        queue.sequences("parking").await.unwrap(),
+        std::slice::from_ref(&sequence)
+    );
+    assert!(queue.contains("parking", &sequence).await.unwrap());
+    assert!(!queue.contains("another processor", &sequence).await.unwrap());
+    let oldest = queue.first("parking", &sequence).await.unwrap().unwrap();
+    assert_eq!(oldest.event.position, first.events[0].position);
+    assert_eq!(oldest.event.payload, ClockEvent::Ticked { n: 1 });
+    assert_eq!(oldest.cause, "cannot handle this one");
+
+    // Fixed: the retry handles both, oldest first, and empties the queue.
+    handler.heal();
+    let events = Events::new(store).with_tokens(PostgresTokenStore::new(pool));
+    let outcome = events
+        .processor("parking", Arc::clone(&handler))
+        .with_dead_letters(queue.clone(), 2)
+        .retry_dead_letters()
+        .await
+        .unwrap();
+    assert_eq!((outcome.handled, outcome.still_parked), (2, 0));
+    assert_eq!(
+        handler.seen(),
+        [(stream(2).to_string(), 1), (sequence.clone(), 1), (sequence.clone(), 2)]
+    );
+    assert!(queue.sequences("parking").await.unwrap().is_empty());
+    assert_eq!(second.events[0].sequence, 2);
+}
+
+/// Parking joins the unit of work: it commits with it, rolls back with it,
+/// and parking the same event again leaves one letter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parking_commits_and_rolls_back_with_its_unit_of_work() {
+    let pool = database_or_skip!();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let tokens = PostgresTokenStore::new(pool.clone());
+    let queue = PostgresDeadLetters::new(store.clone());
+    store
+        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 3), &Metadata::new())
+        .await
+        .unwrap();
+    let all = store.read_all(0, 10).await.unwrap();
+    let letter = |index: usize| DeadLetter {
+        sequence: stream(1).to_string(),
+        event: Arc::new(all[index].clone()),
+        cause: "down".to_owned(),
+    };
+    let sequence = stream(1).to_string();
+
+    let mut unit = tokens.begin().await.unwrap();
+    queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap();
+    queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap();
+    assert!(
+        !queue.contains("p", &sequence).await.unwrap(),
+        "invisible before the unit of work commits"
+    );
+    tokens.commit(unit).await.unwrap();
+    assert!(queue.contains("p", &sequence).await.unwrap());
+
+    let mut unit = tokens.begin().await.unwrap();
+    queue.enqueue_in(&mut unit, "p", letter(1)).await.unwrap();
+    drop(unit); // rolled back
+    let mut unit = tokens.begin().await.unwrap();
+    queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap(); // again, after the first commit
+    tokens.commit(unit).await.unwrap();
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cqrs_dead_letters")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "one letter: the duplicate and the rolled-back one left nothing"
+    );
+    queue.remove_first("p", &sequence).await.unwrap();
+    assert!(queue.sequences("p").await.unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

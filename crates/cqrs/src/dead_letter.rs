@@ -35,13 +35,12 @@ impl<E> Clone for DeadLetter<E> {
 
 /// Parked events per processor and sequence, oldest first.
 ///
+/// Parking itself is [`TransactionalDeadLetters`].
+///
 /// Implemented for `()`: no queue, nothing is ever parked.
 pub trait DeadLetterQueue<E>: Send + Sync {
     /// Whether `sequence` has parked events (later events must queue behind).
     fn contains(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<bool, StoreError>> + Send;
-
-    /// Parks `letter` at the end of its sequence.
-    fn enqueue(&self, processor: &str, letter: DeadLetter<E>) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The sequences with parked events.
     fn sequences(&self, processor: &str) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
@@ -57,13 +56,27 @@ pub trait DeadLetterQueue<E>: Send + Sync {
     fn remove_first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
 
+/// A dead-letter queue that parks within the unit of work of the processor's
+/// token store (`Tx` is its
+/// [`TransactionalTokenStore::Transaction`]): the processor parks an event
+/// and moves its token in that one unit of work, so a crash can neither lose
+/// the letter nor leave the token behind it. A queue that is not
+/// transactional (the in-memory one) accepts any `Tx` and ignores it.
+pub trait TransactionalDeadLetters<E, Tx>: DeadLetterQueue<E> {
+    /// Parks `letter` at the end of its sequence, within `tx`. Parking the
+    /// same event again (after a crash that lost the token move, say) leaves
+    /// one letter.
+    fn enqueue_in(
+        &self,
+        tx: &mut Tx,
+        processor: &str,
+        letter: DeadLetter<E>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+}
+
 impl<E: Send + Sync> DeadLetterQueue<E> for () {
     async fn contains(&self, _: &str, _: &str) -> Result<bool, StoreError> {
         Ok(false)
-    }
-
-    async fn enqueue(&self, processor: &str, _: DeadLetter<E>) -> Result<(), StoreError> {
-        Err(StoreError::Backend(format!("{processor} has no dead-letter queue")))
     }
 
     async fn sequences(&self, _: &str) -> Result<Vec<String>, StoreError> {
@@ -76,6 +89,12 @@ impl<E: Send + Sync> DeadLetterQueue<E> for () {
 
     async fn remove_first(&self, _: &str, _: &str) -> Result<(), StoreError> {
         Ok(())
+    }
+}
+
+impl<E: Send + Sync, Tx: Send> TransactionalDeadLetters<E, Tx> for () {
+    async fn enqueue_in(&self, _: &mut Tx, processor: &str, _: DeadLetter<E>) -> Result<(), StoreError> {
+        Err(StoreError::Backend(format!("{processor} has no dead-letter queue")))
     }
 }
 
@@ -106,21 +125,27 @@ impl<E> InMemoryDeadLetters<E> {
             .flat_map(|(_, queue)| queue.iter().cloned())
             .collect()
     }
+
+    /// Parks `letter` at the end of its sequence, unless that event is
+    /// parked already.
+    pub fn enqueue(&self, processor: &str, letter: DeadLetter<E>) {
+        let mut letters = self.letters.lock().expect("dead letters poisoned");
+        let queue = letters
+            .entry((processor.to_owned(), letter.sequence.clone()))
+            .or_default();
+        if !queue
+            .iter()
+            .any(|parked| parked.event.position == letter.event.position)
+        {
+            queue.push(letter);
+        }
+    }
 }
 
 impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
         let letters = self.letters.lock().expect("dead letters poisoned");
         Ok(letters.contains_key(&(processor.to_owned(), sequence.to_owned())))
-    }
-
-    async fn enqueue(&self, processor: &str, letter: DeadLetter<E>) -> Result<(), StoreError> {
-        let mut letters = self.letters.lock().expect("dead letters poisoned");
-        letters
-            .entry((processor.to_owned(), letter.sequence.clone()))
-            .or_default()
-            .push(letter);
-        Ok(())
     }
 
     async fn sequences(&self, processor: &str) -> Result<Vec<String>, StoreError> {
@@ -154,16 +179,20 @@ impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     }
 }
 
+/// In memory there is no unit of work to join: parking is immediate.
+impl<E: Send + Sync, Tx: Send> TransactionalDeadLetters<E, Tx> for InMemoryDeadLetters<E> {
+    async fn enqueue_in(&self, _: &mut Tx, processor: &str, letter: DeadLetter<E>) -> Result<(), StoreError> {
+        self.enqueue(processor, letter);
+        Ok(())
+    }
+}
+
 /// A shared dead-letter queue is a dead-letter queue.
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
 impl<E, Q: DeadLetterQueue<E>> DeadLetterQueue<E> for Arc<Q> {
     fn contains(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<bool, StoreError>> + Send {
         (**self).contains(processor, sequence)
-    }
-
-    fn enqueue(&self, processor: &str, letter: DeadLetter<E>) -> impl Future<Output = Result<(), StoreError>> + Send {
-        (**self).enqueue(processor, letter)
     }
 
     fn sequences(&self, processor: &str) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
@@ -180,6 +209,20 @@ impl<E, Q: DeadLetterQueue<E>> DeadLetterQueue<E> for Arc<Q> {
 
     fn remove_first(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<(), StoreError>> + Send {
         (**self).remove_first(processor, sequence)
+    }
+}
+
+/// A shared transactional dead-letter queue is one.
+// Forwards every method, so an override of a provided one is never lost.
+#[deny(clippy::missing_trait_methods)]
+impl<E, Tx, Q: TransactionalDeadLetters<E, Tx>> TransactionalDeadLetters<E, Tx> for Arc<Q> {
+    fn enqueue_in(
+        &self,
+        tx: &mut Tx,
+        processor: &str,
+        letter: DeadLetter<E>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        (**self).enqueue_in(tx, processor, letter)
     }
 }
 

@@ -60,10 +60,12 @@
 //!     CQRS_POSTGRES_URL=postgres://... cargo build -p cqrs-postgres
 //! ```
 
+mod dead_letters;
 mod event_store;
 mod snapshot_store;
 mod token_store;
 
+pub use dead_letters::PostgresDeadLetters;
 pub use event_store::PostgresEventStore;
 pub use snapshot_store::PostgresSnapshotStore;
 pub use token_store::{PgTransaction, PostgresTokenStore};
@@ -75,7 +77,8 @@ use cqrs::StoreError;
 use sqlx::PgPool;
 
 /// Creates the tables (idempotent): `cqrs_events`, `cqrs_event_tags`,
-/// `cqrs_consistency`, `cqrs_head`, `cqrs_snapshots`, `cqrs_tokens`.
+/// `cqrs_consistency`, `cqrs_head`, `cqrs_snapshots`, `cqrs_tokens`,
+/// `cqrs_dead_letters`.
 ///
 /// # Errors
 ///
@@ -93,6 +96,7 @@ const SCHEMA: &str = concat!(
     include_str!("../migrations/0002_parallel_appends.sql"),
     include_str!("../migrations/0003_json_payloads.sql"),
     include_str!("../migrations/0004_event_logs.sql"),
+    include_str!("../migrations/0005_dead_letters.sql"),
 );
 
 /// Any database failure, as the core sees it.

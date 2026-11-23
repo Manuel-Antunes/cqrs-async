@@ -82,6 +82,7 @@ before logs existed belong to the log `default`.
 | `cqrs_events` | one row per event: log, position (PK), stream type/id, sequence (unique per stream in a log), event type and version, payload and metadata (`json`: stored as written, returned as is), `recorded_at` |
 | `cqrs_event_tags (log, tag, position)` | the tag index criteria read through |
 | `cqrs_snapshots` | newest snapshot per stream, with its revision |
+| `cqrs_dead_letters (processor, sequence, position)` | parked events: which event, and why; the event is read back from the log |
 | `cqrs_tokens (processor, segment)` | position, gaps, owner, claim expiry, replay bound |
 | sequence `cqrs_position` | global positions |
 | functions `cqrs_positions`, `cqrs_lock` | position assignment, domain-derived locks |

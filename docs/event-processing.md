@@ -125,8 +125,28 @@ let outcome = events
 ```
 
 Each sequence is retried oldest first, each event in a unit of work, and
-stops at its first failure. `InMemoryDeadLetters` is provided; a durable
-queue implements `DeadLetterQueue<E>`.
+stops at its first failure.
+
+Two queues are provided. `InMemoryDeadLetters` is lost when the process
+ends: with a durable token store the token moves past a parked event, so the
+event would never be handled again. `PostgresDeadLetters::new(store)`
+(table `cqrs_dead_letters`) keeps the letters in the database:
+
+```rust
+let queue = PostgresDeadLetters::new(store.clone());   // the store the processor reads
+events.projection(..).with_dead_letters(queue, 5).spawn();
+```
+
+Parking happens in the same unit of work as the token move
+(`TransactionalDeadLetters::enqueue_in` over the token store's transaction),
+so a crash cannot lose a letter or leave the token behind it, and parking the
+same event twice leaves one letter. A new process finds the letters and
+`retry_dead_letters` handles them. If the queue cannot answer whether an
+aggregate is parked, the processor waits and asks again (backoff) rather
+than handling the event ahead of the parked ones. Your own durable queue
+implements `DeadLetterQueue<E>` (lookups) and
+`TransactionalDeadLetters<E, Tx>` (parking), where `Tx` is your token
+store's transaction.
 
 ## Subscriptions
 

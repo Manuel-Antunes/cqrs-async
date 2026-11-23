@@ -67,7 +67,9 @@ pub use command_handler::{
 };
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
-pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
+pub use dead_letter::{
+    DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, TransactionalDeadLetters, retry_dead_letters,
+};
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use event_sourced::{
     EventProcessor, EventSourced, HandlerFailure, Loaded, LogFailures, NotFound, OnFailure, ProcessingFailure, Saved,

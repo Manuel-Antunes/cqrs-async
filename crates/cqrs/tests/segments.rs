@@ -15,7 +15,7 @@ use std::{
 use cqrs::{
     Aggregate, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventSourced, Events, HandlerError,
     InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, ProcessingContext, StoreError, StreamId,
-    TrackingOptions, retry_dead_letters, segment_of,
+    TrackingOptions, TransactionalDeadLetters, retry_dead_letters, segment_of,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -360,30 +360,36 @@ impl EventHandler<Ticked> for FailsFirstOf {
 #[derive(Default)]
 struct FlakyQueue {
     inner: InMemoryDeadLetters<Ticked>,
-    failures_left: AtomicU32,
+    failures_left: Mutex<u32>,
     failures_served: AtomicU32,
+}
+
+impl TransactionalDeadLetters<Ticked, ()> for FlakyQueue {
+    async fn enqueue_in(&self, tx: &mut (), processor: &str, letter: DeadLetter<Ticked>) -> Result<(), StoreError> {
+        let first = self.inner.letters(processor).is_empty();
+        self.inner.enqueue_in(tx, processor, letter).await?;
+        if first {
+            *self.failures_left.lock().unwrap() = 3; // the next lookups fail
+        }
+        Ok(())
+    }
 }
 
 impl DeadLetterQueue<Ticked> for FlakyQueue {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
-        if self
-            .failures_left
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
-            .is_ok()
-        {
+        let failing = {
+            // A plain lock, not a compare-and-swap loop: `AtomicU32::try_update`
+            // is newer than the crate's MSRV and `fetch_update` is deprecated.
+            let mut left = self.failures_left.lock().unwrap();
+            let failing = *left > 0;
+            *left = left.saturating_sub(1);
+            failing
+        };
+        if failing {
             self.failures_served.fetch_add(1, Ordering::SeqCst);
             return Err(StoreError::Backend("the queue is unreachable".to_owned()));
         }
         self.inner.contains(processor, sequence).await
-    }
-
-    async fn enqueue(&self, processor: &str, letter: DeadLetter<Ticked>) -> Result<(), StoreError> {
-        let first = self.inner.letters(processor).is_empty();
-        self.inner.enqueue(processor, letter).await?;
-        if first {
-            self.failures_left.store(3, Ordering::SeqCst); // the next lookups fail
-        }
-        Ok(())
     }
 
     async fn sequences(&self, processor: &str) -> Result<Vec<String>, StoreError> {

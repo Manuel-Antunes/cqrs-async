@@ -18,10 +18,10 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
-    EventInterceptor, EventSourced, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters,
-    InMemoryEventStore, InMemoryTokenStore, Intercepted, Loaded, Metadata, ProcessingContext, StoreError, StreamId,
-    TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore, retry_dead_letters,
+    Aggregate, Cursor, DeadLetter, DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor,
+    EventSourced, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
+    InMemoryTokenStore, Intercepted, Loaded, Metadata, ProcessingContext, StoreError, StreamId, TokenStore,
+    TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore, retry_dead_letters,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -304,7 +304,7 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
             event: Arc::new(event),
             cause: "down".into(),
         };
-        queue.enqueue("rows", letter).await.unwrap();
+        queue.enqueue("rows", letter);
     }
     let handler = rows(&journal, 2); // tick 2 fails its first retry
 

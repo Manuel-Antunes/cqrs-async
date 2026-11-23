@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2) AS \"parked!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "parked!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1de4792b7248d972c2c9c2c51d2a16814f5ec0dbbc0622c853ae13bcb014f72d"
+}

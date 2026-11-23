@@ -599,6 +599,28 @@ async fn condition_failed(
 }
 
 impl<E, U> PostgresEventStore<E, U> {
+    /// The pool, for the stores that share this one's database.
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
+impl<E, U> PostgresEventStore<E, U>
+where
+    E: DeserializeOwned,
+    U: Upcaster,
+{
+    /// The event of this log at `position`, if there is one.
+    pub(crate) async fn event_at(&self, position: u64) -> Result<Option<EventEnvelope<E>>, StoreError> {
+        let row = select_events!(&*self.log, "position = $2", to_i64(position))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.map(|row| envelope(row, &*self.upcaster)).transpose()
+    }
+}
+
+impl<E, U> PostgresEventStore<E, U> {
     /// What the rows an append returned record, in event order, or its
     /// error (a conflict completed with the stream's actual version).
     async fn recorded(
