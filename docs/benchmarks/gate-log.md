@@ -36,3 +36,31 @@ Docker. Load average was 5-21 from unrelated processes during these runs (see be
 
 A PostgreSQL container stop (the Docker daemon restarted; `cqrs-poc-pg` has no restart policy) killed one
 gate run in the middle; it was discarded and rerun after `docker start cqrs-poc-pg`.
+
+## Phase 3 (publisher in the handler)
+
+Same method: the Phase 0 and Phase 3 release binaries run alternately (2 rounds), plus the micro
+benchmarks. Load average 8-17.
+
+| Measure | gate | base 1 | phase 3, 1 | base 2 | phase 3, 2 |
+|---|---|---:|---:|---:|---:|
+| open account, cmd/s | >= 1.10 | 1.32 (4008) | 1.07 (3682) | 0.71 (2021) | 1.14 (3606) |
+| mixed load, cmd/s | >= 1.25 | 1.62 (3908) | 1.35 (3650) | 0.92 (2260) | 1.49 (2788) |
+| mixed load, p99 | <= 0.76 | 0.52 (18.47) | 0.78 (20.82) | 2.66 (87.63) | 0.31 (34.48) |
+| mixed load, all done | <= 0.77 | 0.63 (5220) | 0.75 (5532) | 1.15 (9304) | 0.68 (7220) |
+| hot account, cmd/s | >= 1.00 | 1.47 (132) | 1.67 (136) | 1.41 (98.72) | 1.23 (119) |
+| read model rebuild | >= 16 | 23.28 (37590) | 30.84 (39077) | 53.22 (29591) | 22.98 (30957) |
+| 5000-event replay, p50 | <= 0.95 | 0.86 (4.28) | 0.88 (5.02) | 0.90 (5.38) | 0.72 (4.27) |
+| snapshot every 100, p50 | <= 0.61 | 0.24 (1.13) | 0.32 (1.47) | 0.32 (1.76) | 0.48 (1.65) |
+
+Base 2 is an outlier (2021 cmd/s open account, p99 88 ms: something else was using the machine). In
+round 1 the Phase 3 binary is 7-8% lower on open account and mixed throughput and equal on the hot
+account; in round 2 it is the better of the two. No consistent difference. Every gate measure passes
+in round 1 except mixed p99 (0.78x against 0.76x) and the base binary passes it there by luck of the
+load.
+
+Micro benchmarks (median): `unit/command_gateway` 13.1 ns (Phase 0: 13.7), `command_through_unit`
+13.0 (13.8), `command_intercepted_4` 11.8 (13.3), `command_cycle` 1.03 us (1.11), `add_new_aggregate`
+375 ns (458). The static dispatch the plan wants kept costs nothing more after moving the publisher
+into the handler. (These are not the plan's 4.0 / 15.6 ns: the plan's numbers do not reproduce on this
+machine even for the Phase 0 code.)
