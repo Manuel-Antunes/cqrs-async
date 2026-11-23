@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH current AS (\n            SELECT coalesce(max(sequence), 0) AS version FROM cqrs_events\n            WHERE log = $10 AND stream_type = $1 AND stream_id = $2\n        ),\n        allowed AS (\n            SELECT version FROM current WHERE $3::bigint IS NULL OR $3 = version\n        ),\n        positions AS (\n            SELECT p.position, p.n\n            FROM allowed, LATERAL cqrs_positions(CASE WHEN allowed.version >= 0 THEN $4::integer END, $9::bigint[])\n                WITH ORDINALITY AS p(position, n)\n        ),\n        tag_index AS (\n            INSERT INTO cqrs_event_tags (log, tag, position)\n            SELECT $10, t.tag, positions.position\n            FROM unnest($7::text[], $8::bigint[]) AS t(tag, n) JOIN positions ON positions.n = t.n\n        )\n        INSERT INTO cqrs_events\n            (log, position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)\n        SELECT $10, positions.position, $1, $2, allowed.version + batch.n,\n               batch.item->>'type', (batch.item->>'version')::integer, batch.item->'payload', $6\n        FROM allowed, positions, json_array_elements($5::json) WITH ORDINALITY AS batch(item, n)\n        WHERE positions.n = batch.n\n        RETURNING position AS \"position!\", sequence AS \"sequence!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "recorded_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int4",
+        "Json",
+        "Json",
+        "TextArray",
+        "Int8Array",
+        "Int8Array",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "0abe2f278af274334c094e1dea9e3d95107d2ecfdf380e1df1a727ef3c930167"
+}

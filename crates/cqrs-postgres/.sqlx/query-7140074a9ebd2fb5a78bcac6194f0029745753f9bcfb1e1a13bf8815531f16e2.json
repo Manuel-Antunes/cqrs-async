@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CASE\n             WHEN cardinality($1::text[]) = 0 THEN EXISTS (\n                 SELECT 1 FROM cqrs_events WHERE log = $4 AND position > $3\n                 AND (cardinality($2::text[]) = 0 OR event_type = ANY($2)))\n             ELSE EXISTS (\n                 SELECT 1 FROM cqrs_events WHERE log = $4 AND position IN (\n                     SELECT t.position FROM cqrs_event_tags t\n                     WHERE t.log = $4 AND t.tag = ($1)[1] AND t.position > $3\n                     AND (SELECT count(*) FROM cqrs_event_tags o\n                          WHERE o.log = $4 AND o.position = t.position AND o.tag = ANY($1))\n                         = cardinality($1))\n                 AND (cardinality($2) = 0 OR event_type = ANY($2)))\n           END AS \"failed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "failed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7140074a9ebd2fb5a78bcac6194f0029745753f9bcfb1e1a13bf8815531f16e2"
+}

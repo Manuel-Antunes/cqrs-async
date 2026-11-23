@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! // v1: Created { title }   v2: Created { title, tags }
-//! let store = PostgresEventStore::<PostEvent>::new(pool).with_upcasters((
+//! let store = PostgresEventStore::<PostEvent>::new(pool, "posts").with_upcasters((
 //!     upcast("post.created", 1, |payload| payload["Created"]["tags"] = json!([])),
 //!     upcast("post.created", 2, |payload| payload["Created"]["draft"] = json!(true)),
 //! ));

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT max(sequence) FROM cqrs_events WHERE stream_type = $1 AND stream_id = $2",
+  "query": "SELECT max(sequence) FROM cqrs_events WHERE log = $1 AND stream_type = $2 AND stream_id = $3",
   "describe": {
     "columns": [
       {
@@ -13,6 +13,7 @@
     "parameters": {
       "Left": [
         "Text",
+        "Text",
         "Text"
       ]
     },
@@ -20,5 +21,5 @@
       null
     ]
   },
-  "hash": "9af95391a92140ac697852867385165de3eb3465e8c6d507d15f4186c7e31082"
+  "hash": "d4de96cc63e965279756aff81d2269dac8da24c35e044234993349406caebf37"
 }

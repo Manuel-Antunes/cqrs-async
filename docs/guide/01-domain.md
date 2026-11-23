@@ -47,7 +47,8 @@ impl std::str::FromStr for PostId {
 
 ## The events
 
-Events are facts, in the past tense, one enum per aggregate:
+Events are facts, in the past tense, one enum per aggregate (each aggregate's
+events get their own log in PostgreSQL: part 8):
 
 ```rust
 // src/domain/post/event.rs

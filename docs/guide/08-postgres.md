@@ -24,16 +24,18 @@ serde since part 1.
 let pool = PgPool::connect(&url).await?;
 cqrs_postgres::migrate(&pool).await?;   // the library's tables; idempotent
 
-let store = PostgresEventStore::<PostEvent>::new(pool.clone());
+let store = PostgresEventStore::<PostEvent>::new(pool.clone(), "posts");
 let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));   // the adapter from part 2, unchanged
 Cqrs::new(store, PostgresTokenStore::new(pool.clone()))
     .commands(PostCommandGateway::new(posts))
     // ...
 ```
 
-- `PostgresEventStore`: the log, appends in parallel, a gap-aware cursor
-  for readers ([Storage](../storage.md#postgresql)). It is a handle on the
-  pool: clones share it.
+- `PostgresEventStore`: a named log (`"posts"`), appends in parallel, a
+  gap-aware cursor for readers ([Storage](../storage.md#postgresql)). It is
+  a handle on the pool: clones share it. Another aggregate's event enum gets
+  its own store and log name on the same database
+  ([Storage § Logs](../storage.md#logs)).
 - `PostgresTokenStore`: processors' positions and claims, shared by every
   instance. Its unit of work is a `PgTransaction`.
 
@@ -219,7 +221,7 @@ pub async fn start_postgres(
     cqrs_postgres::migrate(&pool).await?;
     sqlx::raw_sql(READ_MODEL).execute(&pool).await.map_err(backend)?;
 
-    let store = PostgresEventStore::<PostEvent>::new(pool.clone());
+    let store = PostgresEventStore::<PostEvent>::new(pool.clone(), "posts");
     let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));
     let summaries = Arc::new(PostgresPostSummaryRepository::new(pool.clone()));
     let updates = Arc::new(PostUpdates::default());
@@ -318,7 +320,7 @@ event being retried. With `with_dead_letters(queue, n)` it is parked after
 fixed ([Event processing § Dead letters](../event-processing.md#dead-letters)).
 
 **Changing an event's shape.** Bump its version and register an upcaster:
-`PostgresEventStore::new(pool).with_upcasters(upcast("post.created", 1, |payload| ..))`
+`PostgresEventStore::new(pool, "posts").with_upcasters(upcast("post.created", 1, |payload| ..))`
 ([Storage § Upcasting](../storage.md#upcasting)).
 
 Next: [9. The API](09-api.md).

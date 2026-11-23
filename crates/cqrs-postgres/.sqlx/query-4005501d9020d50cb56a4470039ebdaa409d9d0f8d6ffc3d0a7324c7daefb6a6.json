@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload::text AS \"payload!\", metadata::text AS \"metadata!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE position > $1 ORDER BY position LIMIT $2",
+  "query": "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload::text AS \"payload!\", metadata::text AS \"metadata!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE log = $1 AND position > $2 ORDER BY position LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -90,6 +90,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Int8",
         "Int8"
       ]
@@ -106,5 +107,5 @@
       null
     ]
   },
-  "hash": "48430c7e080ef68b2f531d7092c6ecb3935a4dad848524dfad1d823cf53c436d"
+  "hash": "4005501d9020d50cb56a4470039ebdaa409d9d0f8d6ffc3d0a7324c7daefb6a6"
 }

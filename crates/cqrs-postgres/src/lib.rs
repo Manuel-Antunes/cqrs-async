@@ -9,7 +9,7 @@
 //! ```text
 //! let pool = PgPool::connect(&url).await?;
 //! cqrs_postgres::migrate(&pool).await?;
-//! let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone()))
+//! let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
 //!     .with_tokens(PostgresTokenStore::new(pool));
 //! ```
 //!
@@ -92,6 +92,7 @@ const SCHEMA: &str = concat!(
     include_str!("../migrations/0001_cqrs.sql"),
     include_str!("../migrations/0002_parallel_appends.sql"),
     include_str!("../migrations/0003_json_payloads.sql"),
+    include_str!("../migrations/0004_event_logs.sql"),
 );
 
 /// Any database failure, as the core sees it.

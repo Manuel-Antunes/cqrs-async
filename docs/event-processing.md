@@ -7,7 +7,7 @@ share everything.
 
 ```rust
 let events = Events::new(Arc::new(InMemoryEventStore::<PostEvent>::new()));   // in-memory tokens
-let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone()))
+let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
     .with_tokens(PostgresTokenStore::new(pool));                              // shared tokens
 
 let posts = events.event_sourced::<Post>();           // loads and commits posts, broadcasting each commit

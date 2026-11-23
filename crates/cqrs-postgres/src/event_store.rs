@@ -13,14 +13,23 @@ use sqlx::{PgExecutor, PgPool};
 
 use crate::{StoredEvent, Upcaster, backend};
 
-/// The event log in PostgreSQL, events stored as JSON (`serde`), read
+/// A named event log in PostgreSQL, events stored as JSON (`serde`), read
 /// through the [`Upcaster`]s `U` (none by default).
+///
+/// Every store names its log, and reads and appends nothing else, so several
+/// event types (one enum per aggregate, as the guide recommends) can share
+/// one database: `PostgresEventStore::<PostEvent>::new(pool, "posts")` and
+/// `PostgresEventStore::<UserEvent>::new(pool, "users")`. Positions come
+/// from one sequence for the whole database, so a log's positions are not
+/// contiguous when others append in between.
 ///
 /// Cloning shares the pool: give a clone to the repository, the processors
 /// and the subscriptions (`Events::new(store)` does).
 pub struct PostgresEventStore<E, U = ()> {
     /// The connection pool.
     pool: PgPool,
+    /// The log this store reads and appends: its events and their tags.
+    log: Arc<str>,
     /// Rewrites old payloads before decoding.
     upcaster: Arc<U>,
     /// The event type this store reads and writes.
@@ -28,10 +37,13 @@ pub struct PostgresEventStore<E, U = ()> {
 }
 
 impl<E> PostgresEventStore<E> {
-    /// A store over `pool`, whose schema [`migrate`](crate::migrate) created.
-    pub fn new(pool: PgPool) -> Self {
+    /// A store of the log `log` over `pool`, whose schema
+    /// [`migrate`](crate::migrate) created. Two stores with the same log name
+    /// share their events: give each event type its own name.
+    pub fn new(pool: PgPool, log: &str) -> Self {
         Self {
             pool,
+            log: log.into(),
             upcaster: Arc::new(()),
             event: PhantomData,
         }
@@ -44,6 +56,7 @@ impl<E, U> PostgresEventStore<E, U> {
     pub fn with_upcasters<U2: Upcaster>(self, upcasters: U2) -> PostgresEventStore<E, U2> {
         PostgresEventStore {
             pool: self.pool,
+            log: self.log,
             upcaster: Arc::new(upcasters),
             event: PhantomData,
         }
@@ -54,6 +67,7 @@ impl<E, U> Clone for PostgresEventStore<E, U> {
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
+            log: Arc::clone(&self.log),
             upcaster: Arc::clone(&self.upcaster),
             event: PhantomData,
         }
@@ -80,13 +94,14 @@ struct EventRow {
 /// against the schema at compile time, and `query!` takes literals only, so
 /// the shared column list is spliced in here rather than with `concat!`.
 macro_rules! select_events {
-    ($($where:literal)+, $($arg:expr),* $(,)?) => {
+    ($log:expr, $($where:literal)+, $($arg:expr),* $(,)?) => {
         sqlx::query_as!(
             EventRow,
             "SELECT position, stream_type, stream_id, sequence, event_type, event_version, \
              payload::text AS \"payload!\", metadata::text AS \"metadata!\", \
-             (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE "
+             (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE log = $1 AND "
             $(+ $where)+,
+            $log,
             $($arg),*
         )
     };
@@ -99,7 +114,8 @@ where
 {
     async fn load(&self, stream: &StreamId, after: u64) -> Result<Vec<EventEnvelope<E>>, StoreError> {
         let rows = select_events!(
-            "stream_type = $1 AND stream_id = $2 AND sequence > $3 ORDER BY sequence",
+            &*self.log,
+            "stream_type = $2 AND stream_id = $3 AND sequence > $4 ORDER BY sequence",
             stream.aggregate_type(),
             stream.id(),
             to_i64(after),
@@ -123,7 +139,7 @@ where
             // this one computed, so it goes again at the new end.
             let mut attempts = 0;
             let rows = loop {
-                let rows = append_rows(&self.pool, stream, expected, events, metadata).await;
+                let rows = append_rows(&self.pool, &self.log, stream, expected, events, metadata).await;
                 attempts += 1;
                 match rows {
                     Err(StoreError::Conflict { .. }) if expected == ExpectedVersion::Any && attempts < 16 => {}
@@ -136,23 +152,23 @@ where
         // The criteria's keys (and the stream's) exclusive, in a statement of
         // their own: the check then runs on a snapshot taken after the wait,
         // and no matching append is half-way while it runs.
-        let mut exclusive = criteria_keys(&condition.criteria)?;
-        exclusive.push(key("stream", &stream.to_string()));
+        let mut exclusive = criteria_keys(&self.log, &condition.criteria)?;
+        exclusive.push(key(&self.log, "stream", &stream.to_string()));
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        sqlx::query!("SELECT cqrs_lock($1, $2)", &exclusive, &write_keys(events))
+        sqlx::query!("SELECT cqrs_lock($1, $2)", &exclusive, &write_keys(&self.log, events))
             .fetch_one(&mut *tx)
             .await
             .map_err(backend)?;
         for criterion in &condition.criteria.criteria {
             let (tags, types) = bind_criterion(criterion);
-            let failed = condition_failed(&mut tx, &tags, &types, to_i64(condition.after))
+            let failed = condition_failed(&mut tx, &self.log, &tags, &types, to_i64(condition.after))
                 .await
                 .map_err(backend)?;
             if failed {
                 return Err(StoreError::ConditionFailed);
             }
         }
-        let rows = append_rows(&mut *tx, stream, expected, events, metadata).await;
+        let rows = append_rows(&mut *tx, &self.log, stream, expected, events, metadata).await;
         if let Err(StoreError::Conflict { .. }) = rows {
             drop(tx); // roll back and unlock before reading the version
             return Err(self.conflict(stream, expected).await);
@@ -166,7 +182,7 @@ where
         // The criteria's keys exclusive first: no matching append is
         // half-way, so every matching event is committed before the reads,
         // and any later one takes a position above the head read here.
-        let exclusive = criteria_keys(criteria)?;
+        let exclusive = criteria_keys(&self.log, criteria)?;
         let mut tx = self.pool.begin().await.map_err(backend)?;
         sqlx::query!("SELECT cqrs_lock($1, '{}')", &exclusive)
             .fetch_one(&mut *tx)
@@ -179,7 +195,8 @@ where
                 // shortcut: no index on event_type, so this reads the whole
                 // log; add one if tag-less criteria become common.
                 select_events!(
-                    "(cardinality($1::text[]) = 0 OR event_type = ANY($1)) ORDER BY position",
+                    &*self.log,
+                    "(cardinality($2::text[]) = 0 OR event_type = ANY($2)) ORDER BY position",
                     &types
                 )
                 .fetch_all(&mut *tx)
@@ -189,10 +206,11 @@ where
                 // tag's entries (an index range, in position order) and checks
                 // the others by primary key.
                 select_events!(
-                    "position IN (SELECT t.position FROM cqrs_event_tags t WHERE t.tag = ($1::text[])[1] \
-                     AND (SELECT count(*) FROM cqrs_event_tags o WHERE o.position = t.position AND o.tag = ANY($1)) \
-                     = cardinality($1)) "
-                    "AND (cardinality($2::text[]) = 0 OR event_type = ANY($2)) ORDER BY position",
+                    &*self.log,
+                    "position IN (SELECT t.position FROM cqrs_event_tags t WHERE t.log = $1 \
+                     AND t.tag = ($2::text[])[1] AND (SELECT count(*) FROM cqrs_event_tags o \
+                     WHERE o.log = $1 AND o.position = t.position AND o.tag = ANY($2)) = cardinality($2)) "
+                    "AND (cardinality($3::text[]) = 0 OR event_type = ANY($3)) ORDER BY position",
                     &tags,
                     &types,
                 )
@@ -201,7 +219,7 @@ where
             };
             rows.extend(matching.map_err(backend)?);
         }
-        let head = head(&mut *tx).await?;
+        let head = head(&mut *tx, &self.log).await?;
         tx.commit().await.map_err(backend)?;
 
         let mut events = rows
@@ -216,7 +234,8 @@ where
 
     async fn read_all(&self, after: u64, limit: usize) -> Result<Vec<EventEnvelope<E>>, StoreError> {
         let rows = select_events!(
-            "position > $1 ORDER BY position LIMIT $2",
+            &*self.log,
+            "position > $2 ORDER BY position LIMIT $3",
             to_i64(after),
             i64::try_from(limit).unwrap_or(i64::MAX),
         )
@@ -227,7 +246,7 @@ where
     }
 
     async fn last_position(&self) -> Result<u64, StoreError> {
-        head(&self.pool).await
+        head(&self.pool, &self.log).await
     }
 
     /// The cursor's gaps that were committed since, then what follows it,
@@ -250,16 +269,17 @@ where
             FROM snapshot s LEFT JOIN LATERAL (
                 (SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata,
                         (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us
-                 FROM cqrs_events WHERE position = ANY($2))
+                 FROM cqrs_events WHERE log = $4 AND position = ANY($2))
                 UNION ALL
                 (SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata,
                         (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us
-                 FROM cqrs_events WHERE position > $1 ORDER BY position LIMIT $3)
+                 FROM cqrs_events WHERE log = $4 AND position > $1 ORDER BY position LIMIT $3)
                 ORDER BY position LIMIT $3
             ) e ON true"#,
             to_i64(cursor.position()),
             &gaps,
             i64::try_from(limit).unwrap_or(i64::MAX),
+            &*self.log,
         )
         .fetch_all(&self.pool)
         .await
@@ -325,12 +345,15 @@ where
 // token misses them all); a stored cursor never misses it.
 const CURSOR_WINDOW: i64 = 10_000;
 
-/// The highest committed position (0 when empty).
-async fn head<'c>(executor: impl PgExecutor<'c>) -> Result<u64, StoreError> {
-    let head = sqlx::query_scalar!(r#"SELECT coalesce(max(position), 0) AS "head!" FROM cqrs_events"#)
-        .fetch_one(executor)
-        .await
-        .map_err(backend)?;
+/// The highest committed position of the log `log` (0 when empty).
+async fn head<'c>(executor: impl PgExecutor<'c>, log: &str) -> Result<u64, StoreError> {
+    let head = sqlx::query_scalar!(
+        r#"SELECT coalesce(max(position), 0) AS "head!" FROM cqrs_events WHERE log = $1"#,
+        log
+    )
+    .fetch_one(executor)
+    .await
+    .map_err(backend)?;
     Ok(head as u64)
 }
 
@@ -380,6 +403,7 @@ struct Appended {
 /// Runs on `executor` (the pool, or a transaction).
 async fn append_rows<'c, E: DomainEvent + Serialize>(
     executor: impl PgExecutor<'c>,
+    log: &str,
     stream: &StreamId,
     expected: ExpectedVersion,
     events: &[TaggedEvent<E>],
@@ -397,14 +421,14 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
             Ok(serde_json::json!({ "type": stored.event_type, "version": stored.version, "payload": stored.payload }))
         })
         .collect::<Result<Vec<_>, StoreError>>()?;
-    let keys = write_keys(events);
+    let keys = write_keys(log, events);
     let tags = EventTags::of(events);
     let result = sqlx::query_as!(
         Appended,
         r#"
         WITH current AS (
             SELECT coalesce(max(sequence), 0) AS version FROM cqrs_events
-            WHERE stream_type = $1 AND stream_id = $2
+            WHERE log = $10 AND stream_type = $1 AND stream_id = $2
         ),
         allowed AS (
             SELECT version FROM current WHERE $3::bigint IS NULL OR $3 = version
@@ -415,13 +439,13 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
                 WITH ORDINALITY AS p(position, n)
         ),
         tag_index AS (
-            INSERT INTO cqrs_event_tags (tag, position)
-            SELECT t.tag, positions.position
+            INSERT INTO cqrs_event_tags (log, tag, position)
+            SELECT $10, t.tag, positions.position
             FROM unnest($7::text[], $8::bigint[]) AS t(tag, n) JOIN positions ON positions.n = t.n
         )
         INSERT INTO cqrs_events
-            (position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)
-        SELECT positions.position, $1, $2, allowed.version + batch.n,
+            (log, position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)
+        SELECT $10, positions.position, $1, $2, allowed.version + batch.n,
                batch.item->>'type', (batch.item->>'version')::integer, batch.item->'payload', $6
         FROM allowed, positions, json_array_elements($5::json) WITH ORDINALITY AS batch(item, n)
         WHERE positions.n = batch.n
@@ -435,6 +459,7 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
         &tags.tags,
         &tags.events,
         &keys,
+        log,
     )
     .fetch_all(executor)
     .await;
@@ -480,12 +505,18 @@ impl EventTags {
     }
 }
 
-/// An advisory lock key for a piece of the domain: FNV-1a of `kind:value`,
-/// stable across processes. Two pieces sharing a key only wait for each
-/// other more than they need to.
-fn key(kind: &str, value: &str) -> i64 {
+/// An advisory lock key for a piece of the domain of a log: FNV-1a of
+/// `log:kind:value`, stable across processes. Two pieces sharing a key only
+/// wait for each other more than they need to; logs never share one.
+fn key(log: &str, kind: &str, value: &str) -> i64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in kind.bytes().chain(*b":").chain(value.bytes()) {
+    for byte in log
+        .bytes()
+        .chain(*b":")
+        .chain(kind.bytes())
+        .chain(*b":")
+        .chain(value.bytes())
+    {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
@@ -494,12 +525,12 @@ fn key(kind: &str, value: &str) -> i64 {
 
 /// What an append of `events` takes shared: each of their tags and types,
 /// the pieces of the domain a criterion can name.
-fn write_keys<E: DomainEvent>(events: &[TaggedEvent<E>]) -> Vec<i64> {
+fn write_keys<E: DomainEvent>(log: &str, events: &[TaggedEvent<E>]) -> Vec<i64> {
     let mut keys: Vec<i64> = events
         .iter()
         .flat_map(|TaggedEvent { event, tags }| {
-            let tags = tags.iter().map(|tag| key("tag", &tag.to_string()));
-            tags.chain([key("type", event.event_type())])
+            let tags = tags.iter().map(|tag| key(log, "tag", &tag.to_string()));
+            tags.chain([key(log, "type", event.event_type())])
         })
         .collect();
     keys.sort_unstable();
@@ -510,13 +541,13 @@ fn write_keys<E: DomainEvent>(events: &[TaggedEvent<E>]) -> Vec<i64> {
 /// What reading or checking `criteria` takes exclusive: one tag of each
 /// criterion with tags (every matching append holds it shared), or each
 /// type of one without (every append of those types holds it shared).
-fn criteria_keys(criteria: &EventCriteria) -> Result<Vec<i64>, StoreError> {
+fn criteria_keys(log: &str, criteria: &EventCriteria) -> Result<Vec<i64>, StoreError> {
     criteria
         .criteria
         .iter()
         .map(|criterion| match (criterion.tags.first(), criterion.types.is_empty()) {
-            (Some(tag), _) => Ok(vec![key("tag", &tag.to_string())]),
-            (None, false) => Ok(criterion.types.iter().map(|name| key("type", name)).collect()),
+            (Some(tag), _) => Ok(vec![key(log, "tag", &tag.to_string())]),
+            (None, false) => Ok(criterion.types.iter().map(|name| key(log, "type", name)).collect()),
             (None, true) => Err(StoreError::Backend(
                 "a criterion must name a tag or an event type".to_owned(),
             )),
@@ -533,12 +564,13 @@ fn bind_criterion(criterion: &cqrs::Criterion) -> (Vec<String>, Vec<String>) {
     (tags, criterion.types.iter().map(|&name| name.to_owned()).collect())
 }
 
-/// Whether an event matching the criterion (tags `$1`, types `$2`) was
-/// appended after `$3`. Runs holding the criterion's keys exclusive, so
+/// Whether an event of the log `$4` matching the criterion (tags `$1`, types
+/// `$2`) was appended after `$3`. Runs holding the criterion's keys exclusive, so
 /// every matching append is committed (and took a position above the head
 /// its decision was sourced at) or has not started.
 async fn condition_failed(
     tx: &mut sqlx::PgConnection,
+    log: &str,
     tags: &[String],
     types: &[String],
     after: i64,
@@ -546,18 +578,21 @@ async fn condition_failed(
     sqlx::query_scalar!(
         r#"SELECT CASE
              WHEN cardinality($1::text[]) = 0 THEN EXISTS (
-                 SELECT 1 FROM cqrs_events WHERE position > $3
+                 SELECT 1 FROM cqrs_events WHERE log = $4 AND position > $3
                  AND (cardinality($2::text[]) = 0 OR event_type = ANY($2)))
              ELSE EXISTS (
-                 SELECT 1 FROM cqrs_events WHERE position IN (
-                     SELECT t.position FROM cqrs_event_tags t WHERE t.tag = ($1)[1] AND t.position > $3
-                     AND (SELECT count(*) FROM cqrs_event_tags o WHERE o.position = t.position AND o.tag = ANY($1))
+                 SELECT 1 FROM cqrs_events WHERE log = $4 AND position IN (
+                     SELECT t.position FROM cqrs_event_tags t
+                     WHERE t.log = $4 AND t.tag = ($1)[1] AND t.position > $3
+                     AND (SELECT count(*) FROM cqrs_event_tags o
+                          WHERE o.log = $4 AND o.position = t.position AND o.tag = ANY($1))
                          = cardinality($1))
                  AND (cardinality($2) = 0 OR event_type = ANY($2)))
            END AS "failed!""#,
         tags,
         types,
         after,
+        log,
     )
     .fetch_one(tx)
     .await
@@ -592,7 +627,8 @@ impl<E, U> PostgresEventStore<E, U> {
     /// version (read after the fact: informative only).
     async fn conflict(&self, stream: &StreamId, expected: ExpectedVersion) -> StoreError {
         let actual = sqlx::query_scalar!(
-            "SELECT max(sequence) FROM cqrs_events WHERE stream_type = $1 AND stream_id = $2",
+            "SELECT max(sequence) FROM cqrs_events WHERE log = $1 AND stream_type = $2 AND stream_id = $3",
+            &*self.log,
             stream.aggregate_type(),
             stream.id(),
         )
@@ -659,10 +695,15 @@ mod tests {
             Tagged(vec![Tag::new("room", 1)]),
             Tagged(vec![Tag::new("room", 1), Tag::new("floor", 2)]),
         ];
-        let mut expected = vec![key("tag", "room=1"), key("tag", "floor=2"), key("type", "tagged")];
+        let mut expected = vec![
+            key("log", "tag", "room=1"),
+            key("log", "tag", "floor=2"),
+            key("log", "type", "tagged"),
+        ];
         expected.sort_unstable();
         let batch: Vec<_> = batch.into_iter().map(TaggedEvent::new).collect();
-        assert_eq!(write_keys(&batch), expected);
+        assert_eq!(write_keys("log", &batch), expected);
+        assert_ne!(write_keys("other", &batch), expected, "logs never share a lock key");
         let criteria = EventCriteria {
             criteria: vec![
                 cqrs::Criterion {
@@ -675,12 +716,15 @@ mod tests {
                 },
             ],
         };
-        let keys = criteria_keys(&criteria).unwrap();
+        let keys = criteria_keys("log", &criteria).unwrap();
         assert_eq!(keys.len(), 3, "one tag, then both types");
         assert!(
-            criteria_keys(&EventCriteria {
-                criteria: vec![cqrs::Criterion::default()]
-            })
+            criteria_keys(
+                "log",
+                &EventCriteria {
+                    criteria: vec![cqrs::Criterion::default()]
+                }
+            )
             .is_err()
         );
     }

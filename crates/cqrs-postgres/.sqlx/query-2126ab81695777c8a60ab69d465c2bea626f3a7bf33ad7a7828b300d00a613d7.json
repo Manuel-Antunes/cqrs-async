@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload::text AS \"payload!\", metadata::text AS \"metadata!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE (cardinality($1::text[]) = 0 OR event_type = ANY($1)) ORDER BY position",
+  "query": "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload::text AS \"payload!\", metadata::text AS \"metadata!\", (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE log = $1 AND position IN (SELECT t.position FROM cqrs_event_tags t WHERE t.log = $1 AND t.tag = ($2::text[])[1] AND (SELECT count(*) FROM cqrs_event_tags o WHERE o.log = $1 AND o.position = t.position AND o.tag = ANY($2)) = cardinality($2)) AND (cardinality($3::text[]) = 0 OR event_type = ANY($3)) ORDER BY position",
   "describe": {
     "columns": [
       {
@@ -90,6 +90,8 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
+        "TextArray",
         "TextArray"
       ]
     },
@@ -105,5 +107,5 @@
       null
     ]
   },
-  "hash": "53cc4cd01d4a1a06d4d599eefe36dcbb1223c1ccfc2a5323ffa5a03060716523"
+  "hash": "2126ab81695777c8a60ab69d465c2bea626f3a7bf33ad7a7828b300d00a613d7"
 }

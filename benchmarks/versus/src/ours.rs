@@ -210,7 +210,8 @@ where
         .execute(&pool)
         .await
         .expect("creating the view");
-        let events = Events::new(Store::new(pool.clone())).with_tokens(PostgresTokenStore::new(pool.clone()));
+        let events =
+            Events::new(Store::new(pool.clone(), "accounts")).with_tokens(PostgresTokenStore::new(pool.clone()));
         let accounts = Arc::new(snapshots(events.event_sourced()));
         let execute = ExecuteHandler {
             accounts: EventSourcedAccounts(accounts),

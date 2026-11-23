@@ -99,7 +99,7 @@ fn ticks(from: u64, count: u64) -> Vec<ClockEvent> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn events_round_trip_with_their_envelope() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<ClockEvent>::new(pool);
+    let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     let metadata = Metadata::from([("correlation".to_owned(), "req-1".to_owned())]);
 
     let committed = store
@@ -139,13 +139,13 @@ enum ClockEventV2 {
 async fn old_events_are_upcast_when_read() {
     let pool = database_or_skip!();
     let none = Metadata::new();
-    PostgresEventStore::<ClockEvent>::new(pool.clone())
+    PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks")
         .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
         .await
         .unwrap();
 
     // Without an upcaster the old row no longer decodes, and says why.
-    let plain = PostgresEventStore::<ClockEventV2>::new(pool.clone());
+    let plain = PostgresEventStore::<ClockEventV2>::new(pool.clone(), "clocks");
     let error = plain.load(&stream(1), 0).await.err().unwrap();
     assert!(
         matches!(&error, StoreError::Backend(message) if message.contains("clock.ticked v1")),
@@ -194,7 +194,7 @@ async fn old_events_are_upcast_when_read() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn optimistic_concurrency_is_enforced() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<ClockEvent>::new(pool);
+    let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     let none = Metadata::new();
     store
         .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
@@ -223,7 +223,7 @@ async fn optimistic_concurrency_is_enforced() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_writers_append_in_parallel_without_losing_anything() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<ClockEvent>::new(pool);
+    let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     let writers: Vec<_> = (1..=16)
         .map(|id| {
             let store = store.clone();
@@ -263,7 +263,7 @@ async fn concurrent_writers_append_in_parallel_without_losing_anything() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<ClockEvent>::new(pool);
+    let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     store
         .append(&stream(1), ExpectedVersion::NoStream, ticks(0, 1), &Metadata::new())
         .await
@@ -308,7 +308,7 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn a_subscription_reading_while_writers_race_misses_nothing() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<ClockEvent>::new(pool);
+    let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     let events = Events::new(store.clone()).with_options(SubscriptionOptions {
         batch_size: 7,
         poll_interval: Duration::from_millis(20),
@@ -445,8 +445,8 @@ fn options(segments: u32, max_segments: u32) -> TrackingOptions {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn instances_share_segments_through_postgres() {
     let pool = database_or_skip!();
-    let events =
-        Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone())).with_tokens(PostgresTokenStore::new(pool));
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
+        .with_tokens(PostgresTokenStore::new(pool));
     let clocks = events.event_sourced::<Clock>();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
     let a = events
@@ -478,11 +478,146 @@ async fn instances_share_segments_through_postgres() {
     b.stop().await;
 }
 
+/// A second event enum, for the second aggregate of the same database.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+enum BellEvent {
+    #[event(name = "bell.rung")]
+    Rung { times: u32 },
+}
+
+/// Records the bells it handled.
+#[derive(Default)]
+struct BellRecorder(Mutex<Vec<u32>>);
+
+impl<Tx: Send> EventHandler<BellEvent, Tx> for BellRecorder {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<BellEvent>,
+        _: &mut ProcessingContext<'_, Tx>,
+    ) -> Result<(), HandlerError> {
+        let BellEvent::Rung { times } = event.payload;
+        self.0.lock().unwrap().push(times);
+        Ok(())
+    }
+}
+
+/// The guide asks for one event enum per aggregate, so two enums end up in
+/// one database: each store must read only its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_event_enums_in_one_database_read_only_their_own_events() {
+    let pool = database_or_skip!();
+    let clocks = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let bells = PostgresEventStore::<BellEvent>::new(pool, "bells");
+    let none = Metadata::new();
+
+    clocks
+        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &none)
+        .await
+        .unwrap();
+    bells
+        .append(
+            &StreamId::new("bell", "1"),
+            ExpectedVersion::NoStream,
+            vec![BellEvent::Rung { times: 3 }],
+            &none,
+        )
+        .await
+        .unwrap();
+    clocks
+        .append(&stream(1), ExpectedVersion::Exact(2), ticks(3, 1), &none)
+        .await
+        .unwrap();
+
+    let clock_events = clocks.read_all(0, 100).await.unwrap();
+    assert_eq!(clock_events.iter().map(|e| e.position).collect::<Vec<_>>(), [1, 2, 4]);
+    let bell_events = bells.read_all(0, 100).await.unwrap();
+    assert_eq!(bell_events.iter().map(|e| e.position).collect::<Vec<_>>(), [3]);
+    assert_eq!(clocks.last_position().await.unwrap(), 4);
+    assert_eq!(bells.last_position().await.unwrap(), 3, "the head of the bells' log");
+
+    // A stream id of one log is free in the other: same type and id, no clash.
+    bells
+        .append(
+            &stream(1),
+            ExpectedVersion::NoStream,
+            vec![BellEvent::Rung { times: 1 }],
+            &none,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_processor_for_each_event_enum_advances_on_one_database() {
+    let pool = database_or_skip!();
+    let tokens = PostgresTokenStore::new(pool.clone());
+    let clock_events =
+        Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks")).with_tokens(tokens.clone());
+    let bell_events = Events::new(PostgresEventStore::<BellEvent>::new(pool, "bells")).with_tokens(tokens);
+    let (clock_seen, bell_seen) = (Arc::new(Recorder::default()), Arc::new(BellRecorder::default()));
+    let clock_processor = clock_events.processor("clocks", Arc::clone(&clock_seen)).spawn();
+    let bell_processor = bell_events.processor("bells", Arc::clone(&bell_seen)).spawn();
+
+    let (clocks, bells) = (
+        clock_events.event_sourced::<Clock>(),
+        bell_events.event_sourced::<Bell>(),
+    );
+    let (mut last_clock, mut last_bell) = (0, 0);
+    for id in 1..=5 {
+        last_clock = clocks
+            .append(cqrs::Loaded::new(Clock::initial(&id)), ticks(1, 1))
+            .await
+            .unwrap()
+            .events[0]
+            .position;
+        last_bell = bells
+            .append(
+                cqrs::Loaded::new(Bell::initial(&id)),
+                vec![BellEvent::Rung { times: id }],
+            )
+            .await
+            .unwrap()
+            .events[0]
+            .position;
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        clock_processor.caught_up(last_clock).await;
+        bell_processor.caught_up(last_bell).await;
+    })
+    .await
+    .expect("both processors advance past the other's events");
+
+    assert_eq!(clock_seen.streams().len(), 5);
+    assert_eq!(*bell_seen.0.lock().unwrap(), [1, 2, 3, 4, 5]);
+    clock_processor.stop().await;
+    bell_processor.stop().await;
+}
+
+struct Bell {
+    id: u32,
+}
+
+impl Aggregate for Bell {
+    const TYPE: &'static str = "bell";
+    type Id = u32;
+    type Event = BellEvent;
+
+    fn initial(id: &u32) -> Self {
+        Self { id: *id }
+    }
+
+    fn id(&self) -> &u32 {
+        &self.id
+    }
+
+    fn evolve(&mut self, _: &BellEvent) {}
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
     let pool = database_or_skip!();
-    let events =
-        Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone())).with_tokens(PostgresTokenStore::new(pool));
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
+        .with_tokens(PostgresTokenStore::new(pool));
     let clocks = events.event_sourced::<Clock>();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
 
@@ -602,7 +737,8 @@ impl Aggregate for Tally {
 async fn snapshots_are_kept_per_aggregate_and_revision() {
     let pool = database_or_skip!();
     let snapshots = PostgresSnapshotStore::<Tally>::new(pool.clone());
-    let tallies = cqrs::EventSourced::new(PostgresEventStore::new(pool.clone())).with_snapshots(snapshots.clone(), 2);
+    let tallies =
+        cqrs::EventSourced::new(PostgresEventStore::new(pool.clone(), "clocks")).with_snapshots(snapshots.clone(), 2);
     let mut tally = cqrs::Loaded::new(Tally::initial(&1));
     for n in 1..=3 {
         tally = tallies
@@ -648,7 +784,7 @@ enum RoomEvent {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<RoomEvent>::new(pool);
+    let store = PostgresEventStore::<RoomEvent>::new(pool, "rooms");
     let room = |n: u32| cqrs::criteria![room = n];
     let book = |by: u32| vec![RoomEvent::Booked { room: 1, by }];
     // Another room's booking does not stand in the way.
@@ -724,7 +860,7 @@ enum SeatEvent {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn criteria_match_all_their_tags_and_any_alternative() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<SeatEvent>::new(pool);
+    let store = PostgresEventStore::<SeatEvent>::new(pool, "seats");
     let events = [
         ("a", SeatEvent::Taken { room: 1, floor: 2 }), // 1
         ("b", SeatEvent::Taken { room: 1, floor: 3 }), // 2
@@ -764,7 +900,7 @@ async fn criteria_match_all_their_tags_and_any_alternative() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<SeatEvent>::new(pool);
+    let store = PostgresEventStore::<SeatEvent>::new(pool, "seats");
     let none = Metadata::new();
     let room_1_floor_2 = cqrs::AppendCondition {
         criteria: cqrs::criteria![room = 1, floor = 2],
@@ -875,7 +1011,7 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         .execute(&pool)
         .await
         .unwrap();
-    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone()))
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
     let clocks = events.event_sourced::<Clock>();
     let mut last = 0;
@@ -976,7 +1112,7 @@ async fn a_processing_group_commits_all_its_read_models_or_none() {
     ] {
         sqlx::query(table).execute(&pool).await.unwrap();
     }
-    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone()))
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
     let new = cqrs::Loaded::new(Clock::initial(&1));
     let last = events
@@ -1027,7 +1163,7 @@ impl cqrs::TagResolver for Parity {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hand_written_tags_are_indexed_and_guard_conditions() {
     let pool = database_or_skip!();
-    let store = PostgresEventStore::<Parity>::new(pool);
+    let store = PostgresEventStore::<Parity>::new(pool, "parity");
     let tick = |n| vec![Parity::Ticked { n }];
     for n in 1..=4 {
         store
@@ -1136,7 +1272,7 @@ async fn a_failing_projection_interceptor_rolls_the_write_back() {
         .execute(&pool)
         .await
         .unwrap();
-    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone()))
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
     let last = events
         .store()
@@ -1172,7 +1308,7 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         .execute(&pool)
         .await
         .unwrap();
-    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone()))
+    let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
     let clocks = events.event_sourced::<Clock>();
     let mut last = 0;

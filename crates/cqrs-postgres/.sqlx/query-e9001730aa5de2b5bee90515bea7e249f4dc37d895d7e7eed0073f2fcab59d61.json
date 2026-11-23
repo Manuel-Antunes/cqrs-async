@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT coalesce(max(position), 0) AS \"head!\" FROM cqrs_events",
+  "query": "SELECT coalesce(max(position), 0) AS \"head!\" FROM cqrs_events WHERE log = $1",
   "describe": {
     "columns": [
       {
@@ -11,11 +11,13 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "b1a1f9981687d96e6dde9d77990624009c89d03ad480879651078656c2eb91cd"
+  "hash": "e9001730aa5de2b5bee90515bea7e249f4dc37d895d7e7eed0073f2fcab59d61"
 }

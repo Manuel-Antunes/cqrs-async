@@ -584,7 +584,7 @@ async fn postgres(report: &mut Report, scale: &Scale) {
             .await
             .unwrap();
         cqrs_postgres::migrate(&pool).await.unwrap();
-        let store = cqrs_postgres::PostgresEventStore::<Ticked>::new(pool);
+        let store = cqrs_postgres::PostgresEventStore::<Ticked>::new(pool, "ticks");
 
         let per_writer = total / writers;
         let started = Instant::now();

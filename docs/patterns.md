@@ -673,7 +673,7 @@ for each other.
 **Shape.**
 
 ```rust
-let store = PostgresEventStore::<PostEvent>::new(pool).with_upcasters((
+let store = PostgresEventStore::<PostEvent>::new(pool, "posts").with_upcasters((
     upcast("post.created", 1, |payload| payload["Created"]["tags"] = json!([])),
     upcast("post.created", 2, |payload| payload["Created"]["draft"] = json!(true)),
 ));
@@ -1125,7 +1125,7 @@ and structs. Switching stores means touching all of it.
 and changes the builder's type:
 
 ```rust
-let store = PostgresEventStore::new(pool.clone());                       // or Arc::new(InMemoryEventStore::new())
+let store = PostgresEventStore::new(pool.clone(), "posts");                     // or Arc::new(InMemoryEventStore::new())
 let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));    // yours, over the same store
 
 let app = Cqrs::new(store, PostgresTokenStore::new(pool))  // both stores: the constructor's

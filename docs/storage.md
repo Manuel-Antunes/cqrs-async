@@ -45,7 +45,7 @@ the in-memory set.
 let pool = PgPool::connect(&url).await?;
 cqrs_postgres::migrate(&pool).await?;                  // idempotent, safe for instances starting together
 
-let store = PostgresEventStore::<PostEvent>::new(pool.clone());
+let store = PostgresEventStore::<PostEvent>::new(pool.clone(), "posts");
 let tokens = PostgresTokenStore::new(pool.clone());
 let snapshots = PostgresSnapshotStore::<Post>::new(pool.clone()).with_revision(1);
 let events = Events::new(store).with_tokens(tokens);
@@ -54,12 +54,33 @@ let events = Events::new(store).with_tokens(tokens);
 Events need `Serialize + DeserializeOwned` (payloads are stored as `json`). Every
 process sharing the database shares the log, the tokens and the claims.
 
+### Logs
+
+A store reads and appends one named log (`"posts"` above): the second
+argument of `new`. Two event types in one database, as the guide recommends
+(one enum per aggregate), each get their own store with their own name:
+
+```rust
+let posts = PostgresEventStore::<PostEvent>::new(pool.clone(), "posts");
+let users = PostgresEventStore::<UserEvent>::new(pool.clone(), "users");
+```
+
+Each store sees only its log: `read_all`, `read`, `source`, `last_position`,
+conditions and the lock keys are all per log, and the same stream type and id
+may exist in two logs. Two stores given the same name share their events, so
+they must have the same event type. Positions come from one sequence for the
+whole database, so the positions of a log are not contiguous when other logs
+append in between; a processor's cursor treats those positions as gaps until
+no transaction that could fill them is left (see below). Tokens are per
+processor name, and snapshots per aggregate type, as before. Rows written
+before logs existed belong to the log `default`.
+
 ### Tables
 
 | Table | |
 |---|---|
-| `cqrs_events` | one row per event: position (PK), stream type/id, sequence (unique per stream), event type and version, payload and metadata (`json`: stored as written, returned as is), `recorded_at` |
-| `cqrs_event_tags (tag, position)` | the tag index criteria read through |
+| `cqrs_events` | one row per event: log, position (PK), stream type/id, sequence (unique per stream in a log), event type and version, payload and metadata (`json`: stored as written, returned as is), `recorded_at` |
+| `cqrs_event_tags (log, tag, position)` | the tag index criteria read through |
 | `cqrs_snapshots` | newest snapshot per stream, with its revision |
 | `cqrs_tokens (processor, segment)` | position, gaps, owner, claim expiry, replay bound |
 | sequence `cqrs_position` | global positions |
@@ -148,7 +169,7 @@ Stored events are never rewritten. When an event's shape changes:
 use cqrs_postgres::upcast;
 use serde_json::json;
 
-let store = PostgresEventStore::<PostEvent>::new(pool).with_upcasters((
+let store = PostgresEventStore::<PostEvent>::new(pool, "posts").with_upcasters((
     upcast("post.created", 1, |payload| payload["Created"]["tags"] = json!([])),
     upcast("post.created", 2, |payload| payload["Created"]["draft"] = json!(true)),
 ));
