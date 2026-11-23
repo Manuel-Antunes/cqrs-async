@@ -1,0 +1,128 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # The sqlx cache in crates/cqrs-postgres/.sqlx builds the queries
+      # without a database.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        env:
+          SQLX_OFFLINE: "true"
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cqrs
+          POSTGRES_PASSWORD: cqrs
+          POSTGRES_DB: cqrs
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U cqrs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CQRS_POSTGRES_URL: postgres://cqrs:cqrs@127.0.0.1:55432/cqrs
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Unit, integration and doc tests; the cqrs-postgres tests run for real
+      # because CQRS_POSTGRES_URL is set.
+      - run: cargo test --workspace
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+          SQLX_OFFLINE: "true"
+
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p cqrs --no-default-features
+      - run: cargo check -p cqrs --no-default-features --features derive
+      - run: cargo check -p cqrs --no-default-features --features tokio
+      - run: cargo check -p cqrs --no-default-features --features json
+      - run: cargo test -p cqrs --no-default-features --lib
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p cqrs -p cqrs-derive -p cqrs-postgres --all-features
+        env:
+          SQLX_OFFLINE: "true"
+
+  # The committed sqlx cache must be what the queries produce against the
+  # migrated schema: regenerate it into a scratch directory and compare.
+  sqlx-cache:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cqrs
+          POSTGRES_PASSWORD: cqrs
+          POSTGRES_DB: cqrs
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U cqrs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CQRS_POSTGRES_URL: postgres://cqrs:cqrs@127.0.0.1:55432/cqrs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Migrate the database
+        run: |
+          for f in crates/cqrs-postgres/migrations/*.sql; do
+            psql "$CQRS_POSTGRES_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Regenerate the cache and compare
+        run: |
+          mkdir -p "$RUNNER_TEMP/sqlx"
+          touch crates/cqrs-postgres/src/lib.rs
+          SQLX_OFFLINE_DIR="$RUNNER_TEMP/sqlx" cargo check -p cqrs-postgres
+          diff -r "$RUNNER_TEMP/sqlx" crates/cqrs-postgres/.sqlx
