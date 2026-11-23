@@ -16,7 +16,9 @@ cqrs-postgres = { path = "crates/cqrs-postgres" }
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false }
-tracing = "0.1"
+# Only the event macros are used: without the default features there is no
+# `tracing-attributes` (a proc macro, with `syn`) behind the core.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 # Benchmarks measure what users get: optimized, with debug info for profilers.
 [profile.bench]
