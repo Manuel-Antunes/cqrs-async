@@ -5,14 +5,17 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
 use cqrs::{
-    Aggregate, EventEnvelope, EventHandler, EventSourced, Events, HandlerError, InMemoryDeadLetters,
-    InMemoryEventStore, InMemoryTokenStore, Loaded, ProcessingContext, StreamId, TrackingOptions, retry_dead_letters,
-    segment_of,
+    Aggregate, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventSourced, Events, HandlerError,
+    InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, ProcessingContext, StoreError, StreamId,
+    TrackingOptions, retry_dead_letters, segment_of,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -332,6 +335,116 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     let next = world.tick(poison).await;
     processor.caught_up(next).await;
     assert_eq!(by_stream(&recorder.seen())[&stream(poison)], [1, 2, 3]);
+    processor.stop().await;
+}
+
+/// Fails the first event of one stream, handles everything else.
+struct FailsFirstOf {
+    stream: String,
+    seen: Mutex<Vec<(String, u64)>>,
+}
+
+impl EventHandler<Ticked> for FailsFirstOf {
+    async fn handle(&self, event: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+        let stream = event.stream.to_string();
+        if stream == self.stream && event.sequence == 1 {
+            return Err(HandlerError::msg("cannot handle the first one"));
+        }
+        self.seen.lock().unwrap().push((stream, event.sequence));
+        Ok(())
+    }
+}
+
+/// A queue whose `contains` fails a few times once something was parked,
+/// as a database hiccup would.
+#[derive(Default)]
+struct FlakyQueue {
+    inner: InMemoryDeadLetters<Ticked>,
+    failures_left: AtomicU32,
+    failures_served: AtomicU32,
+}
+
+impl DeadLetterQueue<Ticked> for FlakyQueue {
+    async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
+        if self
+            .failures_left
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+            .is_ok()
+        {
+            self.failures_served.fetch_add(1, Ordering::SeqCst);
+            return Err(StoreError::Backend("the queue is unreachable".to_owned()));
+        }
+        self.inner.contains(processor, sequence).await
+    }
+
+    async fn enqueue(&self, processor: &str, letter: DeadLetter<Ticked>) -> Result<(), StoreError> {
+        let first = self.inner.letters(processor).is_empty();
+        self.inner.enqueue(processor, letter).await?;
+        if first {
+            self.failures_left.store(3, Ordering::SeqCst); // the next lookups fail
+        }
+        Ok(())
+    }
+
+    async fn sequences(&self, processor: &str) -> Result<Vec<String>, StoreError> {
+        self.inner.sequences(processor).await
+    }
+
+    async fn first(&self, processor: &str, sequence: &str) -> Result<Option<DeadLetter<Ticked>>, StoreError> {
+        self.inner.first(processor, sequence).await
+    }
+
+    async fn remove_first(&self, processor: &str, sequence: &str) -> Result<(), StoreError> {
+        self.inner.remove_first(processor, sequence).await
+    }
+}
+
+/// A failing lookup in the queue is not "not parked": the event waits and
+/// asks again, so it never overtakes the parked events of its aggregate.
+#[tokio::test(start_paused = true)]
+async fn a_queue_that_fails_a_lookup_never_lets_an_event_overtake_the_parked_ones() {
+    let world = World::new();
+    let (poison, other) = (1, 2);
+    let handler = Arc::new(FailsFirstOf {
+        stream: stream(poison),
+        seen: Mutex::default(),
+    });
+    let queue = Arc::new(FlakyQueue::default());
+    let processor = world
+        .events
+        .processor("flaky", Arc::clone(&handler))
+        .with_options(World::options(1, u32::MAX))
+        .with_dead_letters(Arc::clone(&queue), 2)
+        .spawn();
+
+    world.tick(poison).await; // 1: fails twice, parked; the next lookups fail
+    world.tick(poison).await; // 2: its lookup fails, then says: parked behind 1
+    let last = world.tick(other).await;
+    processor.caught_up(last).await;
+
+    assert_eq!(
+        queue.failures_served.load(Ordering::SeqCst),
+        3,
+        "the lookup was retried until it answered"
+    );
+    assert_eq!(
+        *handler.seen.lock().unwrap(),
+        [(stream(other), 1)],
+        "the second event of the parked aggregate was never handled"
+    );
+    let parked: Vec<_> = queue
+        .inner
+        .letters("flaky")
+        .iter()
+        .map(|letter| (letter.event.sequence, letter.cause.clone()))
+        .collect();
+    assert_eq!(
+        parked,
+        [
+            (1, "cannot handle the first one".to_owned()),
+            (2, "an earlier event of this aggregate is parked".to_owned()),
+        ]
+    );
     processor.stop().await;
 }
 

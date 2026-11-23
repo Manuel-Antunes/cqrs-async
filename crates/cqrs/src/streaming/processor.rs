@@ -768,7 +768,7 @@ where
         }
         let sequence = event.stream.to_string();
         let parking = self.options.dead_letter_after.is_some();
-        if parking && self.dead_letters.contains(&self.name, &sequence).await.unwrap_or(false) {
+        if parking && self.is_parked(&sequence, stop).await? {
             let cause = "an earlier event of this aggregate is parked".to_owned();
             return self
                 .park(event, sequence, cause, stop)
@@ -831,6 +831,24 @@ where
         self.tokens.commit(tx).await.map_err(HandlerError::from)?;
         self.handler.committed_in(event, token.replay).await;
         Ok(TokenUpdate::Stored)
+    }
+
+    /// Whether `sequence` has parked events. A failing lookup is not "no":
+    /// the event would overtake the parked ones. It is asked again with the
+    /// same backoff as parking. `None`: stopped while retrying.
+    async fn is_parked(&self, sequence: &str, stop: &mut watch::Receiver<bool>) -> Option<bool> {
+        let mut backoff = Backoff::new(&self.options);
+        loop {
+            match self.dead_letters.contains(&self.name, sequence).await {
+                Ok(parked) => return Some(parked),
+                Err(error) => {
+                    tracing::warn!(processor = %self.name, %error, "cannot look the sequence up in the dead letters");
+                    if backoff.wait(stop).await {
+                        return None;
+                    }
+                }
+            }
+        }
     }
 
     /// Parks `event`, retrying the queue itself if it fails. `false`: stopped.
