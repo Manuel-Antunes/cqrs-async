@@ -1,0 +1,6 @@
+# The query macros of this crate check its SQL against the database named by
+# CQRS_POSTGRES_URL (the one the tests use), never an application's
+# DATABASE_URL: an app depending on this crate builds from `.sqlx/` even when
+# its own database has no `cqrs_*` tables.
+[common]
+database-url-var = "CQRS_POSTGRES_URL"

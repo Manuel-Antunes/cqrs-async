@@ -1,0 +1,17 @@
+[package]
+name = "cqrs-derive"
+description = "PoC: derives and attribute macros for the cqrs crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit-mut"] }
+proc-macro-crate = "3"

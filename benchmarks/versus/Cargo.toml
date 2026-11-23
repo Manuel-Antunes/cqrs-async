@@ -1,0 +1,23 @@
+[package]
+name = "cqrs-versus"
+description = "The same bank system on this crate and on cqrs-es/postgres-es, measured side by side"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Ours.
+cqrs.workspace = true
+cqrs-postgres.workspace = true
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "json"] }
+# Theirs: postgres-es is on sqlx 0.8, so it gets its own pool.
+cqrs-es = "0.5"
+postgres-es = "0.5"
+sqlx08 = { package = "sqlx", version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "json"] }
+async-trait = "0.1"
+# Both.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }

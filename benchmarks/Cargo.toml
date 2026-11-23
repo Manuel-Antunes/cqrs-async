@@ -1,0 +1,29 @@
+[package]
+name = "cqrs-benchmarks"
+description = "Benchmarks: micro (divan) and load (Tokio harness) for the cqrs PoC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cqrs.workspace = true
+blog = { path = "../examples/blog" }
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+axum = "0.8"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+serde_json = "1"
+cqrs-postgres.workspace = true
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
+
+[dev-dependencies]
+divan = "0.1"
+
+[[bench]]
+name = "micro"
+harness = false

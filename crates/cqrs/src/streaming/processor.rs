@@ -1,0 +1,1039 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    pin::pin,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use futures_util::{FutureExt, StreamExt};
+use tokio::{
+    sync::{mpsc, watch},
+    task::{AbortHandle, JoinSet},
+};
+
+use super::{
+    LiveEvents, SubscriptionOptions,
+    subscription::{Start, track},
+};
+use crate::{
+    Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
+    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
+};
+
+/// How a [`TrackingProcessor`] splits, claims, reads and retries.
+#[derive(Clone, Copy, Debug)]
+pub struct TrackingOptions {
+    /// How each segment reads the store and the live feed.
+    pub subscription: SubscriptionOptions,
+    /// Segments the log is split into, by aggregate. Fixed by whoever
+    /// initializes the token store first. Default 1.
+    pub segments: u32,
+    /// At most this many segments per instance, so several instances share
+    /// them. Default: all.
+    pub max_segments: u32,
+    /// How long a claim lasts unless renewed; after it, another instance may
+    /// take the segment over. Default 5 s.
+    pub claim_timeout: Duration,
+    /// How often claims are renewed and free segments looked for. Must be
+    /// well under `claim_timeout`. Default 1 s.
+    pub claim_interval: Duration,
+    /// Wait before the first retry of a failed event; doubles on each retry.
+    pub retry_initial: Duration,
+    /// Upper bound for the wait between retries.
+    pub retry_max: Duration,
+    /// Attempts before an event is parked in the dead-letter queue (with the
+    /// later events of its aggregate). `None`: retry forever, holding the
+    /// segment back. Needs [`TrackingProcessor::with_dead_letters`].
+    pub dead_letter_after: Option<u32>,
+    /// Events the shared reader may queue for one segment. A full queue is
+    /// backpressure: the reader waits for room. Default 1024.
+    pub segment_buffer: usize,
+    /// How long the reader waits for room in a full queue before deciding the
+    /// segment is stuck: it is then detached and reads on its own, so it
+    /// never holds the others back. Default 1 s.
+    pub segment_stall_timeout: Duration,
+    /// Events of a segment handled in one unit of work, with one token
+    /// update (Axon's `batchSize`). A worker takes what is already queued
+    /// for it, up to this many, and never waits to fill a batch, so it adds
+    /// no latency. If a batch fails it is rolled back and its events are
+    /// handled one at a time, with the usual retries and dead letters.
+    /// Default 1.
+    pub batch_size: usize,
+}
+
+impl Default for TrackingOptions {
+    fn default() -> Self {
+        Self {
+            subscription: SubscriptionOptions::default(),
+            segments: 1,
+            max_segments: u32::MAX,
+            claim_timeout: Duration::from_secs(5),
+            claim_interval: Duration::from_secs(1),
+            retry_initial: Duration::from_millis(50),
+            retry_max: Duration::from_secs(5),
+            dead_letter_after: None,
+            segment_buffer: 1024,
+            segment_stall_timeout: Duration::from_secs(1),
+            batch_size: 1,
+        }
+    }
+}
+
+/// Runs one [`EventHandler`] over the event log, split into segments by
+/// aggregate: Axon 5's pooled streaming processor.
+///
+/// - **Order per aggregate, parallel across them.** An aggregate's events
+///   always land in the same segment (see [`segment_of`]); each segment is
+///   handled by its own worker, in position order.
+/// - **One read per instance.** A single reader reads the log once and hands
+///   each event to its segment's queue (Axon's coordinator and work
+///   packages). A segment that falls behind (its queue fills, or it was taken
+///   over from another instance behind the reader) reads on its own from its
+///   position, so a slow segment never blocks the others.
+/// - **Shared between instances.** Segments are claimed in the
+///   [`TokenStore`]; claims are renewed every `claim_interval` and expire
+///   after `claim_timeout`, so the segments of an instance that dies are
+///   taken over from their stored positions. Storing a position requires
+///   still holding the claim.
+/// - **Failures.** A failing event is retried with exponential backoff; it
+///   only holds back its own segment. With a dead-letter queue, after
+///   `dead_letter_after` attempts it is parked together with the later
+///   events of its aggregate, and everything else keeps flowing.
+/// - **At-least-once.** A position is stored after the event is handled, so
+///   an event handled just before a crash (or a lost claim) is handled again:
+///   handlers must be idempotent. A SQL token store can store the position in
+///   the handler's own transaction to make it exactly-once.
+pub struct TrackingProcessor<E, S, H, T, D = ()> {
+    /// Key of the tokens, and the name in logs.
+    name: String,
+    /// Where the events are read from.
+    store: S,
+    /// Live feed, for low latency once caught up.
+    live: LiveEvents<E>,
+    /// What each event is handed to, shared by the segment workers.
+    handler: Arc<H>,
+    /// Positions and claims.
+    tokens: Arc<T>,
+    /// Parked events.
+    dead_letters: Arc<D>,
+    /// Splitting, claiming, reading and retry settings.
+    options: TrackingOptions,
+    /// Events up to here are a replay (read from the tokens at start).
+    replay_until: AtomicU64,
+}
+
+/// What a running processor instance reports.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcessorStatus {
+    /// Every event up to here was handled by the segments this instance
+    /// owns (the lowest of their watermarks; 0 while it owns none). Events
+    /// above it may be handled too: see [`covers`](Self::covers).
+    pub position: u64,
+    /// The error of an event being retried, while it keeps failing.
+    pub failing: Option<String>,
+    /// The segments this instance owns.
+    pub segments: Vec<u32>,
+    /// Their cursors, in the same order.
+    pub cursors: Vec<Cursor>,
+}
+
+impl ProcessorStatus {
+    /// Whether this instance owns segments and they all saw the event at
+    /// `position` (the one it belongs to handled it).
+    pub fn covers(&self, position: u64) -> bool {
+        !self.cursors.is_empty() && self.cursors.iter().all(|cursor| cursor.covers(position))
+    }
+}
+
+impl<E, S, H, T> TrackingProcessor<E, S, H, T>
+where
+    E: DomainEvent,
+    S: EventStore<E> + Clone + 'static,
+    H: EventHandler<E, T::Transaction> + 'static,
+    T: TransactionalTokenStore + 'static,
+{
+    /// A processor named `name` feeding `handler`. The store must be the one
+    /// the engine appends to, shared (`Arc`), so it is `Clone`.
+    pub fn new(name: impl Into<String>, store: S, live: &LiveEvents<E>, handler: H, tokens: T) -> Self {
+        Self {
+            name: name.into(),
+            store,
+            live: live.clone(),
+            handler: Arc::new(handler),
+            tokens: Arc::new(tokens),
+            dead_letters: Arc::new(()),
+            options: TrackingOptions::default(),
+            replay_until: AtomicU64::new(0),
+        }
+    }
+}
+
+impl<E, S, H, T, D> TrackingProcessor<E, S, H, T, D>
+where
+    E: DomainEvent,
+    S: EventStore<E> + Clone + 'static,
+    H: EventHandler<E, T::Transaction> + 'static,
+    T: TransactionalTokenStore + 'static,
+    D: DeadLetterQueue<E> + 'static,
+{
+    /// Replaces the default settings.
+    #[must_use]
+    pub fn with_options(mut self, options: TrackingOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Parks events in `queue` after `after` failed attempts (with the later
+    /// events of their aggregate) instead of retrying forever.
+    pub fn with_dead_letters<D2>(self, queue: D2, after: u32) -> TrackingProcessor<E, S, H, T, D2> {
+        TrackingProcessor {
+            name: self.name,
+            store: self.store,
+            live: self.live,
+            handler: self.handler,
+            tokens: self.tokens,
+            dead_letters: Arc::new(queue),
+            options: TrackingOptions {
+                dead_letter_after: Some(after.max(1)),
+                ..self.options
+            },
+            replay_until: self.replay_until,
+        }
+    }
+
+    /// Replays the processor from the start (Axon's `resetTokens`): moves
+    /// its tokens back to position 0, then lets the handler clear what it
+    /// built ([`EventHandler::reset`]). Every instance must be stopped
+    /// first; [`spawn`](Self::spawn) then replays. The events stored so far
+    /// are a replay, which a handler that does not
+    /// [`REPLAY`](EventHandler::REPLAY) skips.
+    ///
+    /// # Errors
+    ///
+    /// [`ResetError::Running`] while an instance still holds a segment (its
+    /// tokens are untouched); the store's or the handler's error otherwise.
+    /// A failed handler reset leaves the tokens reset: call it again.
+    pub async fn reset(&self) -> Result<(), ResetError> {
+        self.tokens.initialize(&self.name, self.options.segments).await?;
+        let replay_until = self.store.last_position().await?;
+        if !self.tokens.reset(&self.name, clock(), replay_until).await? {
+            return Err(ResetError::Running);
+        }
+        let mut tx = self.tokens.begin().await?;
+        self.handler.reset(&mut ProcessingContext::new(&mut tx, false)).await.map_err(ResetError::Handler)?;
+        Ok(self.tokens.commit(tx).await?)
+    }
+
+    /// Retries the events this processor parked (Axon's dead-letter
+    /// processor), each in a unit of work of its token store: see
+    /// [`retry_dead_letters`](crate::retry_dead_letters). Run it once the
+    /// cause is fixed; running instances may keep parking meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// The queue's, or a unit of work that cannot begin or commit.
+    pub async fn retry_dead_letters(&self) -> Result<crate::RetryOutcome, StoreError> {
+        crate::retry_dead_letters(&*self.dead_letters, &self.name, &*self.tokens, &*self.handler).await
+    }
+
+    /// Starts the processor (its coordinator, then one worker per claimed
+    /// segment) on Tokio tasks.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime.
+    pub fn spawn(self) -> ProcessorHandle {
+        let (status, status_rx) = watch::channel(ProcessorStatus::default());
+        let (stop, stop_rx) = watch::channel(false);
+        let name = self.name.clone();
+        let progress = Arc::new(Progress {
+            segments: Mutex::new(BTreeMap::new()),
+            status,
+        });
+        let task = tokio::spawn(Arc::new(self).coordinate(owner_id(&name), progress, stop_rx));
+        ProcessorHandle {
+            name,
+            status: status_rx,
+            stop,
+            task,
+        }
+    }
+
+    /// Claims and renews segments, runs a worker per owned segment, and
+    /// releases them on stop.
+    async fn coordinate(self: Arc<Self>, owner: String, progress: Arc<Progress>, mut stop: watch::Receiver<bool>) {
+        let mut backoff = Backoff::new(&self.options);
+        let count = loop {
+            let started = async {
+                let count = self.tokens.initialize(&self.name, self.options.segments).await?;
+                Ok::<_, StoreError>((count, self.tokens.replay_until(&self.name).await?))
+            };
+            match started.await {
+                Ok((count, replay_until)) => {
+                    self.replay_until.store(replay_until, Ordering::Relaxed);
+                    break count;
+                }
+                Err(error) => {
+                    tracing::warn!(processor = %self.name, %error, "cannot initialize tokens");
+                    if backoff.wait(&mut stop).await {
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Dropping the set (stop, or `abort` simulating a crash) aborts the
+        // reader and the workers.
+        let mut workers = JoinSet::new();
+        let mut owned: HashMap<u32, (AbortHandle, watch::Sender<bool>)> = HashMap::new();
+        let routes: Routes<E> = Arc::new(Mutex::new(HashMap::new()));
+        let read_up_to = Arc::new(Mutex::new(Cursor::default()));
+        let mut reader: Option<watch::Sender<bool>> = None;
+        loop {
+            while workers.try_join_next().is_some() {}
+            owned.retain(|segment, (task, _)| {
+                let alive = !task.is_finished();
+                if !alive {
+                    progress.forget(*segment); // lost its claim or stopped
+                }
+                alive
+            });
+
+            let now = clock();
+            let until = now + self.options.claim_timeout.as_millis() as u64;
+            for segment in 0..count {
+                let mine = owned.contains_key(&segment);
+                if !mine && owned.len() as u32 >= self.options.max_segments {
+                    continue;
+                }
+                match self.tokens.claim(&self.name, segment, &owner, now, until).await {
+                    Ok(Some(cursor)) if !mine => {
+                        let (stop_worker, worker_stop) = watch::channel(false);
+                        progress.track(segment, cursor.clone());
+                        let done = Arc::new(AtomicU64::new(0));
+                        // Routed through the shared reader (with several
+                        // segments: with one, it would only add a hop) unless it
+                        // already read something this segment did not see.
+                        let routed = count > 1
+                            && (reader.is_none() || cursor.includes(&read_up_to.lock().expect("reader poisoned")));
+                        let inbox = routed.then(|| {
+                            let (sender, inbox) = mpsc::channel(self.options.segment_buffer.max(1));
+                            let route = Route { sender, from: cursor.clone(), sent: 0, done: Arc::clone(&done) };
+                            routes.lock().expect("routes poisoned").insert(segment, route);
+                            inbox
+                        });
+                        let worker = Arc::clone(&self).work(
+                            owner.clone(),
+                            segment,
+                            count,
+                            cursor,
+                            inbox,
+                            done,
+                            Arc::clone(&progress),
+                            worker_stop,
+                        );
+                        owned.insert(segment, (workers.spawn(worker), stop_worker));
+                    }
+                    Ok(None) if mine => {
+                        // Expired and taken over: stop handling it.
+                        routes.lock().expect("routes poisoned").remove(&segment);
+                        if let Some((_, stop_worker)) = owned.remove(&segment) {
+                            let _ = stop_worker.send(true);
+                        }
+                        progress.forget(segment);
+                    }
+                    Ok(_) => {} // renewed, or held by someone else
+                    Err(error) => tracing::warn!(processor = %self.name, segment, %error, "cannot claim"),
+                }
+            }
+
+            // Start the shared reader once there is something to route, from
+            // what every routed segment saw.
+            let start = Cursor::common(routes.lock().expect("routes poisoned").values().map(|route| &route.from));
+            if let (None, Some(start)) = (&reader, start) {
+                start.clone_into(&mut read_up_to.lock().expect("reader poisoned"));
+                let (stop_reader, reader_stop) = watch::channel(false);
+                let read = Arc::clone(&self).read(
+                    owner.clone(),
+                    count,
+                    start,
+                    Arc::clone(&routes),
+                    Arc::clone(&read_up_to),
+                    Arc::clone(&progress),
+                    reader_stop,
+                );
+                workers.spawn(read);
+                reader = Some(stop_reader);
+            }
+
+            tokio::select! {
+                _ = stop.changed() => break,
+                () = tokio::time::sleep(self.options.claim_interval) => {}
+            }
+        }
+
+        for (_, stop_worker) in owned.values() {
+            let _ = stop_worker.send(true);
+        }
+        if let Some(stop_reader) = &reader {
+            let _ = stop_reader.send(true);
+        }
+        while workers.join_next().await.is_some() {}
+        for segment in owned.keys() {
+            let _ = self.tokens.release(&self.name, *segment, &owner).await;
+        }
+    }
+
+    /// Handles one segment, in order: first the events the shared reader
+    /// routes to its `inbox`; once detached (or with no inbox), by reading
+    /// the log itself from where it got.
+    #[allow(clippy::too_many_arguments)]
+    async fn work(
+        self: Arc<Self>,
+        owner: String,
+        segment: u32,
+        count: u32,
+        mut cursor: Cursor,
+        inbox: Option<mpsc::Receiver<(Arc<EventEnvelope<E>>, Cursor)>>,
+        done: Arc<AtomicU64>,
+        progress: Arc<Progress>,
+        mut stop: watch::Receiver<bool>,
+    ) {
+        if let Some(mut inbox) = inbox {
+            let batch_size = self.options.batch_size.max(1);
+            let mut received = Vec::with_capacity(batch_size);
+            let mut batch = Vec::with_capacity(batch_size);
+            loop {
+                let next = tokio::select! {
+                    _ = stop.changed() => return,
+                    next = inbox.recv() => next,
+                };
+                // Closed: detached by the reader (or it stopped). Read alone.
+                let Some(first) = next else { break };
+                received.push(first);
+                // What is already waiting, never waiting for more.
+                while received.len() < batch_size {
+                    let Ok(next) = inbox.try_recv() else { break };
+                    received.push(next);
+                }
+                let count = received.len() as u64;
+                for (event, read) in received.drain(..) {
+                    if !cursor.covers(event.position) {
+                        // What the reader saw up to this event, and what this
+                        // segment had seen before it was routed.
+                        let seen = cursor.union(&read);
+                        cursor.clone_from(&seen);
+                        batch.push((event, seen));
+                    }
+                }
+                if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await {
+                    return;
+                }
+                batch.clear();
+                done.fetch_add(count, Ordering::Release);
+            }
+        }
+
+        let batch_size = self.options.batch_size.max(1);
+        let mut batch = Vec::with_capacity(batch_size);
+        let mut backoff = Backoff::new(&self.options);
+        'subscribe: loop {
+            let from = Start::From(cursor.clone());
+            let mut events = pin!(track(self.store.clone(), &self.live, from, self.options.subscription));
+            let mut unsaved = 0_u32;
+            // What the stream yielded while a batch was gathered, other than
+            // an event: handled as the next item.
+            let mut held = None;
+            loop {
+                let next = match held.take() {
+                    Some(next) => next,
+                    None => tokio::select! {
+                        _ = stop.changed() => return,
+                        next = events.next() => next,
+                        // Quiet: store how far other segments' events took us,
+                        // so the processor's overall progress keeps moving.
+                        () = tokio::time::sleep(IDLE_FLUSH), if unsaved > 0 => {
+                            unsaved = 0;
+                            if !self.store_position(segment, &owner, &cursor).await {
+                                return;
+                            }
+                            continue;
+                        }
+                    },
+                };
+                let mut item = match next {
+                    Some(Ok(next)) => next,
+                    Some(Err(error)) => {
+                        tracing::warn!(processor = %self.name, segment, %error, "cannot read events");
+                        if backoff.wait(&mut stop).await {
+                            return;
+                        }
+                        continue 'subscribe; // resume from the last cursor
+                    }
+                    None => return, // the live feed is gone: shutting down
+                };
+
+                // This event, then what is already waiting (never waiting
+                // for more), up to a batch of this segment's events.
+                loop {
+                    let (event, seen) = item;
+                    if segment_of(&event.stream, count) == segment {
+                        batch.push((event, seen.clone()));
+                        unsaved = 0;
+                    } else {
+                        // Another segment's event: only move the token now and
+                        // then, once this segment's earlier events are handled.
+                        unsaved += 1;
+                        if unsaved >= 256 {
+                            unsaved = 0;
+                            if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await
+                                || !self.store_position(segment, &owner, &seen).await
+                            {
+                                return;
+                            }
+                            batch.clear();
+                        }
+                    }
+                    cursor = seen;
+                    if batch.len() >= batch_size {
+                        break;
+                    }
+                    match events.next().now_or_never() {
+                        Some(Some(Ok(next))) => item = next,
+                        Some(other) => {
+                            held = Some(other);
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+                if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await {
+                    return;
+                }
+                batch.clear();
+                progress.advance(segment, &cursor);
+            }
+        }
+    }
+
+    /// The shared reader: reads the log once from `cursor` and queues each
+    /// event for its segment's worker. A segment whose queue is full is
+    /// detached (its queue closes, the worker reads on its own). Now and
+    /// then, segments with nothing pending are moved to the read cursor.
+    #[allow(clippy::too_many_arguments)]
+    async fn read(
+        self: Arc<Self>,
+        owner: String,
+        count: u32,
+        mut cursor: Cursor,
+        routes: Routes<E>,
+        read_up_to: Arc<Mutex<Cursor>>,
+        progress: Arc<Progress>,
+        mut stop: watch::Receiver<bool>,
+    ) {
+        let mut backoff = Backoff::new(&self.options);
+        let mut flush = tokio::time::interval(Duration::from_millis(100));
+        flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        'subscribe: loop {
+            let from = Start::From(cursor.clone());
+            let mut events = pin!(track(self.store.clone(), &self.live, from, self.options.subscription));
+            let mut unflushed = 0_u32;
+            loop {
+                let next = tokio::select! {
+                    _ = stop.changed() => break 'subscribe,
+                    _ = flush.tick() => {
+                        self.flush(&owner, &routes, &cursor, &progress).await;
+                        continue;
+                    }
+                    next = events.next() => next,
+                };
+                let (event, seen) = match next {
+                    Some(Ok(next)) => next,
+                    Some(Err(error)) => {
+                        tracing::warn!(processor = %self.name, %error, "cannot read events");
+                        if backoff.wait(&mut stop).await {
+                            break 'subscribe;
+                        }
+                        continue 'subscribe;
+                    }
+                    None => break 'subscribe,
+                };
+                let segment = segment_of(&event.stream, count);
+                let sender = routes.lock().expect("routes poisoned").get(&segment).map(|route| route.sender.clone());
+                if let Some(sender) = sender {
+                    // Fast path: room in the queue, no timer. A full queue is
+                    // backpressure; only a stall means stuck.
+                    let sent = match sender.try_send((Arc::clone(&event), seen.clone())) {
+                        Ok(()) => Ok(()),
+                        Err(mpsc::error::TrySendError::Full(event)) => {
+                            tokio::select! {
+                                _ = stop.changed() => break 'subscribe,
+                                sent = sender.send_timeout(event, self.options.segment_stall_timeout) => sent.map_err(drop),
+                            }
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => Err(()),
+                    };
+                    let mut routes = routes.lock().expect("routes poisoned");
+                    match (sent, routes.get_mut(&segment)) {
+                        (Ok(()), Some(route)) => route.sent += 1,
+                        // Stuck, or gone meanwhile: let it read alone.
+                        (_, Some(_)) => {
+                            tracing::warn!(processor = %self.name, segment, "segment stalled, reading it separately");
+                            routes.remove(&segment);
+                        }
+                        (_, None) => {}
+                    }
+                }
+                cursor = seen;
+                cursor.clone_into(&mut read_up_to.lock().expect("reader poisoned"));
+                unflushed += 1;
+                if unflushed >= 256 {
+                    unflushed = 0;
+                    self.flush(&owner, &routes, &cursor, &progress).await;
+                }
+            }
+        }
+        // Without a reader, every routed worker carries on alone.
+        routes.lock().expect("routes poisoned").clear();
+    }
+
+    /// Moves the segments with nothing pending to `cursor`: every event of
+    /// theirs it saw was handled.
+    async fn flush(&self, owner: &str, routes: &Routes<E>, cursor: &Cursor, progress: &Progress) {
+        let idle: Vec<u32> = routes
+            .lock()
+            .expect("routes poisoned")
+            .iter()
+            .filter(|(_, route)| route.done.load(Ordering::Acquire) >= route.sent)
+            .map(|(segment, _)| *segment)
+            .collect();
+        for segment in idle {
+            let Some(seen) = progress.advance(segment, cursor) else { continue };
+            if !self.store_position(segment, owner, &seen).await {
+                routes.lock().expect("routes poisoned").remove(&segment);
+            }
+        }
+    }
+
+    /// Handles `batch` (each event with the segment's cursor once it is
+    /// handled) and moves the token past it: one unit of work for all of
+    /// them when there are several, else (or once that failed) one per
+    /// event. `false`: stop the worker (stopped, or the claim is lost).
+    async fn handle_batch(
+        &self,
+        batch: &[(Arc<EventEnvelope<E>>, Cursor)],
+        segment: u32,
+        owner: &str,
+        progress: &Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> bool {
+        if batch.len() > 1 && !self.any_parked(batch).await {
+            match self.handle_batch_in_unit_of_work(batch, segment, owner).await {
+                Ok(TokenUpdate::ClaimLost) => return false,
+                Ok(TokenUpdate::Stored | TokenUpdate::Untouched) => {
+                    progress.fail(segment, None);
+                    if let Some((_, cursor)) = batch.last() {
+                        progress.advance(segment, cursor);
+                    }
+                    return true;
+                }
+                Err(error) => {
+                    // Rolled back: find the failing event one by one.
+                    tracing::debug!(processor = %self.name, segment, %error, "batch failed, handling its events one at a time");
+                }
+            }
+        }
+        for (event, seen) in batch {
+            if !self.handle_and_store(event, seen, segment, owner, progress, stop).await {
+                return false;
+            }
+            progress.advance(segment, seen);
+        }
+        true
+    }
+
+    /// Whether some event of `batch` belongs to a parked sequence: then it
+    /// must be parked too, which the one-by-one path does.
+    async fn any_parked(&self, batch: &[(Arc<EventEnvelope<E>>, Cursor)]) -> bool {
+        if self.options.dead_letter_after.is_none() {
+            return false;
+        }
+        for (event, _) in batch {
+            if self.dead_letters.contains(&self.name, &event.stream.to_string()).await.unwrap_or(true) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Every event of `batch` handled and the token moved past the last one,
+    /// in one unit of work; then each one's post-commit step.
+    async fn handle_batch_in_unit_of_work(
+        &self,
+        batch: &[(Arc<EventEnvelope<E>>, Cursor)],
+        segment: u32,
+        owner: &str,
+    ) -> Result<TokenUpdate, HandlerError> {
+        let Some((last, cursor)) = batch.last() else { return Ok(TokenUpdate::Untouched) };
+        let replay_until = self.replay_until.load(Ordering::Relaxed);
+        let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
+        for (event, _) in batch {
+            let replay = event.position <= replay_until;
+            self.handler.handle_in(event, &mut ProcessingContext::new(&mut tx, replay)).await?;
+        }
+        let token = TrackingToken { processor: &self.name, segment, owner, replay: last.position <= replay_until, cursor };
+        if let TokenUpdate::ClaimLost = self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
+            return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls back
+        }
+        self.tokens.commit(tx).await.map_err(HandlerError::from)?;
+        for (event, _) in batch {
+            self.handler.committed_in(event, event.position <= replay_until).await;
+        }
+        Ok(TokenUpdate::Stored)
+    }
+
+    /// Handles `event` and stores the segment's token as `cursor` (what it
+    /// saw once the event is handled), unless the handler stored it in its
+    /// own transaction. `false`: stop the worker (stopped, or the claim is
+    /// lost).
+    async fn handle_and_store(
+        &self,
+        event: &Arc<EventEnvelope<E>>,
+        cursor: &Cursor,
+        segment: u32,
+        owner: &str,
+        progress: &Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> bool {
+        match self.handle(event, cursor, segment, owner, progress, stop).await {
+            None | Some(TokenUpdate::ClaimLost) => false,
+            Some(TokenUpdate::Stored) => true,
+            Some(TokenUpdate::Untouched) => self.store_position(segment, owner, cursor).await,
+        }
+    }
+
+    /// Handles `event`, retrying; parks it if its aggregate already has
+    /// parked events, or once it failed `dead_letter_after` times. `None`:
+    /// stopped while retrying.
+    async fn handle(
+        &self,
+        event: &Arc<EventEnvelope<E>>,
+        cursor: &Cursor,
+        segment: u32,
+        owner: &str,
+        progress: &Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> Option<TokenUpdate> {
+        let replay = event.position <= self.replay_until.load(Ordering::Relaxed);
+        if replay && !H::REPLAY {
+            return Some(TokenUpdate::Untouched); // a replayed event, for a handler that must not see it again
+        }
+        let sequence = event.stream.to_string();
+        let parking = self.options.dead_letter_after.is_some();
+        if parking && self.dead_letters.contains(&self.name, &sequence).await.unwrap_or(false) {
+            let cause = "an earlier event of this aggregate is parked".to_owned();
+            return self.park(event, sequence, cause, stop).await.then_some(TokenUpdate::Untouched);
+        }
+
+        let token = TrackingToken { processor: &self.name, segment, owner, replay, cursor };
+        let mut backoff = Backoff::new(&self.options);
+        let mut attempts = 0;
+        loop {
+            match self.handle_in_unit_of_work(event, token).await {
+                Ok(update) => {
+                    progress.fail(segment, None);
+                    return Some(update);
+                }
+                Err(error) => {
+                    attempts += 1;
+                    let cause = error.to_string();
+                    tracing::warn!(processor = %self.name, position = event.position, attempts, %cause, "event handler failed");
+                    if self.options.dead_letter_after.is_some_and(|after| attempts >= after) {
+                        progress.fail(segment, None);
+                        return self.park(event, sequence, cause, stop).await.then_some(TokenUpdate::Untouched);
+                    }
+                    progress.fail(segment, Some(cause));
+                    if backoff.wait(stop).await {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One attempt: `event` handled and the token stored in one unit of
+    /// work from the token store, committed together; then the handler's
+    /// post-commit step. A lost claim rolls the unit back.
+    async fn handle_in_unit_of_work(&self, event: &EventEnvelope<E>, token: TrackingToken<'_>) -> Result<TokenUpdate, HandlerError> {
+        let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
+        self.handler.handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay)).await?;
+        match self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
+            // Another instance owns the segment: dropping `tx` rolls back.
+            TokenUpdate::ClaimLost => return Ok(TokenUpdate::ClaimLost),
+            TokenUpdate::Stored | TokenUpdate::Untouched => {}
+        }
+        self.tokens.commit(tx).await.map_err(HandlerError::from)?;
+        self.handler.committed_in(event, token.replay).await;
+        Ok(TokenUpdate::Stored)
+    }
+
+    /// Parks `event`, retrying the queue itself if it fails. `false`: stopped.
+    async fn park(&self, event: &Arc<EventEnvelope<E>>, sequence: String, cause: String, stop: &mut watch::Receiver<bool>) -> bool {
+        let mut backoff = Backoff::new(&self.options);
+        loop {
+            let letter = DeadLetter {
+                sequence: sequence.clone(),
+                event: Arc::clone(event),
+                cause: cause.clone(),
+            };
+            match self.dead_letters.enqueue(&self.name, letter).await {
+                Ok(()) => return true,
+                Err(error) => {
+                    tracing::warn!(processor = %self.name, %error, "cannot park the event");
+                    if backoff.wait(stop).await {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stores the segment's cursor. `false`: the claim was lost.
+    async fn store_position(&self, segment: u32, owner: &str, cursor: &Cursor) -> bool {
+        match self.tokens.store(&self.name, segment, owner, cursor).await {
+            Ok(owned) => owned,
+            Err(error) => {
+                // Only means handling events again after a restart.
+                tracing::warn!(processor = %self.name, segment, %error, "cannot store the position");
+                true
+            }
+        }
+    }
+}
+
+/// A routed segment, as the shared reader sees it.
+struct Route<E> {
+    /// The worker's queue: each event, with the reader's cursor once read.
+    sender: mpsc::Sender<(Arc<EventEnvelope<E>>, Cursor)>,
+    /// What the segment had seen when it was routed.
+    from: Cursor,
+    /// Events queued for it.
+    sent: u64,
+    /// Events it finished.
+    done: Arc<AtomicU64>,
+}
+
+/// The routed segments, shared by the coordinator and the reader.
+type Routes<E> = Arc<Mutex<HashMap<u32, Route<E>>>>;
+
+/// How long a worker waits for its next event before storing how far
+/// other segments' events took it.
+const IDLE_FLUSH: Duration = Duration::from_millis(100);
+
+/// Per-segment progress of one instance, published as its status.
+struct Progress {
+    /// Cursor and current failure of each owned segment.
+    segments: Mutex<BTreeMap<u32, (Cursor, Option<String>)>>,
+    /// Where the summary is published.
+    status: watch::Sender<ProcessorStatus>,
+}
+
+impl Progress {
+    /// Republishes the whole status: on segment ownership changes only.
+    fn rebuild(&self, change: impl FnOnce(&mut BTreeMap<u32, (Cursor, Option<String>)>)) {
+        let mut segments = self.segments.lock().expect("progress poisoned");
+        change(&mut segments);
+        self.status.send_replace(ProcessorStatus {
+            position: lowest(&segments),
+            failing: segments.values().find_map(|(_, failing)| failing.clone()),
+            segments: segments.keys().copied().collect(),
+            cursors: segments.values().map(|(cursor, _)| cursor.clone()).collect(),
+        });
+    }
+
+    fn track(&self, segment: u32, cursor: Cursor) {
+        self.rebuild(|segments| {
+            segments.insert(segment, (cursor, None));
+        });
+    }
+
+    fn forget(&self, segment: u32) {
+        self.rebuild(|segments| {
+            segments.remove(&segment);
+        });
+    }
+
+    /// Adds what `seen` saw to the segment's cursor and returns it (`None`
+    /// if the segment is not owned). Watchers are woken only if it moved.
+    fn advance(&self, segment: u32, seen: &Cursor) -> Option<Cursor> {
+        let mut segments = self.segments.lock().expect("progress poisoned");
+        let index = segments.keys().position(|owned| *owned == segment)?;
+        let state = segments.get_mut(&segment)?;
+        if state.0.includes(seen) {
+            return Some(state.0.clone());
+        }
+        state.0 = state.0.union(seen);
+        let cursor = state.0.clone();
+        let lowest = lowest(&segments);
+        self.status.send_if_modified(|status| match status.cursors.get_mut(index) {
+            Some(published) => {
+                cursor.clone_into(published);
+                status.position = lowest;
+                true
+            }
+            None => false,
+        });
+        Some(cursor)
+    }
+
+    fn fail(&self, segment: u32, failing: Option<String>) {
+        let mut segments = self.segments.lock().expect("progress poisoned");
+        let Some(state) = segments.get_mut(&segment) else {
+            return;
+        };
+        if state.1 == failing {
+            return;
+        }
+        state.1 = failing;
+        let failing = segments.values().find_map(|(_, failing)| failing.clone());
+        self.status.send_modify(|status| status.failing = failing);
+    }
+}
+
+/// The lowest watermark of the owned segments (0 when none).
+fn lowest(segments: &BTreeMap<u32, (Cursor, Option<String>)>) -> u64 {
+    segments.values().map(|(cursor, _)| cursor.watermark()).min().unwrap_or(0)
+}
+
+/// Controls a spawned [`TrackingProcessor`] instance.
+pub struct ProcessorHandle {
+    /// The processor's name.
+    name: String,
+    /// Its progress.
+    status: watch::Receiver<ProcessorStatus>,
+    /// Set to `true` to stop it.
+    stop: watch::Sender<bool>,
+    /// The coordinator task (its workers end with it).
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ProcessorHandle {
+    /// The processor's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Its current progress.
+    pub fn status(&self) -> ProcessorStatus {
+        self.status.borrow().clone()
+    }
+
+    /// Follows its progress, e.g. to wait until it handled a position from
+    /// another task (`wait_for(|status| status.covers(p))`).
+    pub fn progress(&self) -> watch::Receiver<ProcessorStatus> {
+        self.status.clone()
+    }
+
+    /// Waits until the segments this instance owns saw the event at
+    /// `position` (its own segment handled it, and every event before it
+    /// that was committed then): the way to read your own writes from a
+    /// read model. Returns at once if they did; waits forever if it stops
+    /// before.
+    pub async fn caught_up(&self, position: u64) {
+        let mut status = self.status.clone();
+        let ready = |status: &ProcessorStatus| status.covers(position);
+        // An error only means the processor stopped: nothing more will come.
+        if status.wait_for(ready).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// Stops the processor after the events it is handling, waits for it,
+    /// and releases its segments for other instances.
+    pub async fn stop(self) {
+        let _ = self.stop.send(true);
+        let _ = self.task.await;
+    }
+
+    /// Kills the processor without releasing its segments, as a crash would,
+    /// and waits until it no longer runs: other instances take its segments
+    /// over once the claims expire. Events it was handling may have been
+    /// handled (and their positions stored) just before.
+    pub async fn abort(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+/// A unique claim owner for this processor instance.
+fn owner_id(processor: &str) -> String {
+    static INSTANCES: AtomicU64 = AtomicU64::new(0);
+    let instance = INSTANCES.fetch_add(1, Ordering::Relaxed);
+    format!("{processor}@{}-{instance}", std::process::id())
+}
+
+/// Milliseconds on the runtime's clock (paused in tests), for claims.
+fn clock() -> u64 {
+    static EPOCH: OnceLock<tokio::time::Instant> = OnceLock::new();
+    let epoch = *EPOCH.get_or_init(tokio::time::Instant::now);
+    tokio::time::Instant::now().saturating_duration_since(epoch).as_millis() as u64
+}
+
+/// Exponential backoff between retries, interruptible by a stop request.
+struct Backoff {
+    /// Next wait.
+    next: Duration,
+    /// Longest wait.
+    max: Duration,
+}
+
+impl Backoff {
+    fn new(options: &TrackingOptions) -> Self {
+        Self {
+            next: options.retry_initial,
+            max: options.retry_max,
+        }
+    }
+
+    /// Sleeps for the next delay; `true` if a stop was requested meanwhile.
+    async fn wait(&mut self, stop: &mut watch::Receiver<bool>) -> bool {
+        let delay = self.next;
+        self.next = (self.next * 2).min(self.max);
+        tokio::select! {
+            _ = stop.changed() => true,
+            () = tokio::time::sleep(delay) => false,
+        }
+    }
+}
+
+/// Why [`TrackingProcessor::reset`] did not reset.
+#[derive(Debug)]
+pub enum ResetError {
+    /// An instance still holds a segment: stop every instance first.
+    Running,
+    /// The token or event store failed.
+    Store(StoreError),
+    /// The handler's [`reset`](EventHandler::reset) failed.
+    Handler(HandlerError),
+}
+
+impl From<StoreError> for ResetError {
+    fn from(error: StoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl std::fmt::Display for ResetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Running => f.write_str("the processor still runs somewhere: stop it first"),
+            Self::Store(error) => write!(f, "cannot reset the tokens: {error}"),
+            Self::Handler(error) => write!(f, "the handler failed to reset: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ResetError {}

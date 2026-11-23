@@ -1,0 +1,26 @@
+[package]
+name = "blog"
+description = "PoC example: a blog post aggregate wired end to end, served as a GraphQL API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cqrs.workspace = true
+serde = { version = "1", features = ["derive"] }
+futures-core.workspace = true
+futures-util.workspace = true
+# Presentation layer and binary.
+async-graphql = "7.2"
+async-graphql-axum = "7.2"
+axum = "0.8"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+serde_json = "1"
+futures-util = { workspace = true, features = ["sink"] }
+tokio-tungstenite = "0.29"

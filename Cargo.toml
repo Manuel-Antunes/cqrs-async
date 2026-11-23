@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/cqrs", "crates/cqrs-derive", "crates/cqrs-postgres", "examples/blog", "benchmarks", "benchmarks/versus"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+cqrs = { path = "crates/cqrs" }
+cqrs-derive = { path = "crates/cqrs-derive" }
+cqrs-postgres = { path = "crates/cqrs-postgres" }
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+
+# Benchmarks measure what users get: optimized, with debug info for profilers.
+[profile.bench]
+debug = true
+
+[profile.release]
+debug = "line-tables-only"

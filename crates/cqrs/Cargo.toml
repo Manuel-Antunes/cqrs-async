@@ -1,0 +1,34 @@
+[package]
+name = "cqrs"
+description = "PoC: CQRS/ES core with static dispatch only (no dyn), streams first-class"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Batteries included: `cargo add cqrs` gets derives, live events, catch-up
+# subscriptions and tracking processors. `default-features = false` keeps a
+# runtime-agnostic core (contracts, repository, in-memory store, `Stream`).
+default = ["derive", "tokio"]
+derive = ["dep:cqrs-derive"]
+tokio = ["dep:tokio", "dep:futures-util", "dep:tracing"]
+# Events stored as JSON, and upcasters rewriting old shapes: what SQL and
+# document stores share (`cqrs-postgres` turns it on).
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+cqrs-derive = { workspace = true, optional = true }
+# The `Stream` trait of the contracts: tiny and runtime-agnostic, the one
+# axum, async-graphql, tonic, sqlx and SeaORM consume.
+futures-core.workspace = true
+futures-util = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync", "time", "rt", "macros"] }
+tracing = { workspace = true, optional = true }
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+futures-util.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "test-util"] }
