@@ -170,3 +170,40 @@ fn optimistic_concurrency_still_holds_with_snapshots() {
         Err(StoreError::Conflict { actual: Some(4), .. })
     ));
 }
+
+/// What the recommended path does: command handlers commit through the
+/// publisher, and the application's repository adapter loads. With snapshots
+/// every 2 events, a snapshot must exist after the third commit.
+///
+/// Fails today: the publisher's commit never takes a snapshot, and
+/// `cqrs::load` (what the guide's repository adapter calls) never reads one.
+/// The fix is Phase 2 of the migration plan (one loader with snapshots), which
+/// removes the `ignore`.
+#[test]
+#[ignore = "1.4 reproduction: fixed by the Phase 2 loader, which removes this ignore"]
+fn commits_through_the_publisher_take_snapshots_for_the_repository_to_load_from() {
+    use cqrs::{EventPublisher, Loaded, Pending};
+
+    let snapshots = InMemorySnapshots::default();
+    let store = std::sync::Arc::new(InMemoryEventStore::new());
+    let engine = EventSourced::<Sum, _>::new(std::sync::Arc::clone(&store)).with_snapshots(Shared(&snapshots), 2);
+    let pending = |n| Pending {
+        events: vec![Added(n)],
+        metadata: Default::default(),
+        condition: None,
+    };
+
+    // Three commits, each on what the repository adapter loads.
+    block_on(engine.commit(Loaded::new(Sum::initial(&1)), pending(1))).unwrap();
+    for n in 2..=3 {
+        let sum = block_on(cqrs::load::<Sum, _>(&*store, &1)).unwrap().unwrap();
+        block_on(engine.commit(sum, pending(n))).unwrap();
+    }
+
+    let (snapshot, version) = block_on(snapshots.load(&1)).unwrap().expect("a snapshot was taken");
+    assert_eq!(
+        (snapshot.total, version),
+        (3, 2),
+        "taken when the stream reached version 2"
+    );
+}
