@@ -19,9 +19,9 @@ use std::{
 
 use cqrs::{
     Aggregate, Cursor, DeadLetter, DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor,
-    EventSourced, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
-    InMemoryTokenStore, Intercepted, Loaded, Metadata, ProcessingContext, StoreError, StreamId, TokenStore,
-    TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore, retry_dead_letters,
+    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
+    InMemoryTokenStore, InlinePublisher, Intercepted, Loaded, Metadata, Pending, ProcessingContext, StoreError,
+    StreamId, TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore, retry_dead_letters,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -367,9 +367,9 @@ impl<E: DomainEvent> EventHandler<E> for Inline {
 #[tokio::test]
 async fn inline_handlers_get_their_committed_step() {
     let phases = Phases::default();
-    let clocks = EventSourced::<Clock, _, _>::with_processor(InMemoryEventStore::new(), (Inline(Arc::clone(&phases)),));
+    let clocks = InlinePublisher::new(InMemoryEventStore::new()).with_processor((Inline(Arc::clone(&phases)),));
     clocks
-        .append(Loaded::new(Clock(1)), vec![Ticked(1), Ticked(2)])
+        .commit(Loaded::new(Clock(1)), Pending::new(vec![Ticked(1), Ticked(2)]))
         .await
         .unwrap();
     assert_eq!(

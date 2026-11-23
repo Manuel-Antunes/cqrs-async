@@ -69,7 +69,7 @@ members that do not; an interceptor tuple nests.
 
 ### 3. Forwarding `Arc<T>` with every method
 
-**Problem.** Sharing a component (`Arc<EventSourced<..>>`) should not change its
+**Problem.** Sharing a component (`Arc<AggregateLoader<..>>`) should not change its
 behavior. A blanket `impl Trait for Arc<T>` that forwards only the
 required methods silently drops the overrides of provided ones.
 
@@ -102,10 +102,10 @@ store, the read-model adapter) are usually injected as trait objects.
 builder methods that change the type:
 
 ```rust
-pub struct EventSourced<A, S, P = (), N = ()> { .. }    // store, processor, snapshots
+pub struct AggregateLoader<A, S, N = ()> { .. }          // store, snapshots
 
-let posts = EventSourced::new(store)                    // <Post, S, (), ()>
-    .with_snapshots(InMemorySnapshots::default(), 100); // <Post, S, (), InMemorySnapshots<Post>>
+let posts = AggregateLoader::new(store)                 // <Post, S, ()>
+    .with_snapshots(InMemorySnapshots::default(), 100); // <Post, S, InMemorySnapshots<Post>>
 ```
 
 **Rules.** `()` is the "nothing" implementation of most ports: no
@@ -400,7 +400,7 @@ events.commit(post).await?;                                // moved: cannot be r
 let new = Loaded::new(Post::initial(&id));                 // expects no stream yet
 ```
 
-Repositories return it (they get it from `cqrs::load`), so the
+Repositories return it (they get it from an `AggregateLoader`), so the
 version travels from the load to the commit without the domain seeing it.
 
 ### 17. Stable event names and versions
@@ -471,7 +471,7 @@ course.subscribe(student_id, student.as_deref(), events)?;
 events.commit(course).await?;   // StoreError::ConditionFailed if either changed
 ```
 
-Here `courses` and `students` are `EventSourced` engines: `load_in` is
+Here `courses` and `students` are `AggregateLoader`s: `load_in` is
 theirs, and an application repository exposing such reads forwards to it.
 
 **Rules.** `load_in` records an `AppendCondition` in the appender, even
@@ -552,7 +552,7 @@ application writes them anyway (as in NestJS).
 
 - **finding** is the application's: a trait with the methods it needs,
   returning `Loaded<A>`, and an adapter in infrastructure that rebuilds the
-  aggregate from the event store with `cqrs::load`;
+  aggregate from the event store with an `AggregateLoader`;
 - **committing** is the framework's: an `EventPublisher<E>` (NestJS's
   `EventPublisher`), given to the gateway once and reached by handlers
   through their context, `events.commit(entity)`.
@@ -564,11 +564,11 @@ pub trait PostRepository: Send + Sync {
 }
 
 // infrastructure
-pub struct EventSourcedPostRepository<S> { store: S }
+pub struct EventSourcedPostRepository<S> { loader: AggregateLoader<Post, S> }
 
 impl<S: EventStore<PostEvent>> PostRepository for EventSourcedPostRepository<S> {
     async fn find(&self, id: PostId) -> Result<Option<Loaded<Post>>, StoreError> {
-        cqrs::load(&self.store, &id).await
+        self.loader.load(&id).await
     }
 }
 
@@ -579,27 +579,25 @@ let app = Cqrs::new(store, tokens).commands(PostCommandGateway::new(posts)) /* .
 ```
 
 **Rules.** Handlers take only their services (`R: PostRepository`); the
-framework never builds or passes the repository. `cqrs::load` does not use
-snapshots; an adapter for long streams can load through an `EventSourced`
-engine with `with_snapshots` instead, which saves a snapshot when a load
-replays more than `every` events. `EventSourced` also offers, outside
-handlers, `create(id, decide)`, `update(id, decide)` (load, decide, commit,
-retry) and the low-level `append(loaded, events)`.
+framework never builds or passes the repository. The `AggregateLoader` is
+the one way to load; with `with_snapshots` it starts from the newest
+snapshot and saves a new one when a load replays `every` events or more.
+Commits go through the publisher only: there is no other write path.
 
 ### 24. Snapshots as a decorator
 
 **Shape.**
 
 ```rust
-let posts = EventSourced::<Post, _>::new(store.clone()).with_snapshots(InMemorySnapshots::default(), 100);
-let accounts = EventSourced::new(store).with_snapshots(PostgresSnapshotStore::new(pool), 100);
+let posts = AggregateLoader::<Post, _>::new(store.clone()).with_snapshots(InMemorySnapshots::default(), 100);
+let accounts = AggregateLoader::new(store).with_snapshots(PostgresSnapshotStore::new(pool), 100);
 // in a repository adapter: posts.load(&id)
 ```
 
 Loads start from the newest snapshot and replay the rest; a load that
-replays `every` events or more saves a new one (commits do too, through the
-engine's own `append`). A repository adapter for long-lived aggregates
-loads through such an engine instead of `cqrs::load`.
+replays `every` events or more saves a new one (commits never do: the
+publisher serves every aggregate of an event type, the loader knows one).
+A repository adapter for long-lived aggregates loads through it.
 
 **Rules.** An optimization, never the truth: deleting snapshots only costs
 time. The aggregate must be `Clone` (in memory) or serde (PostgreSQL);
@@ -608,13 +606,12 @@ snapshots are ignored.
 
 ### 25. Inline processing group
 
-**Shape.** `EventSourced::with_processor(store, (a, b))`: after
-each commit, the engine feeds the new envelopes to each handler (`handle`,
+**Shape.** `InlinePublisher::new(store).with_processor((a, b))`: after
+each commit, the publisher feeds the new envelopes to each handler (`handle`,
 then `committed`), in the caller's task.
 
-**Rules.** A failing handler stops seeing that batch, is reported in
-handed to the `on_failure` policy (`LogFailures` by default) or, for the
-engine's own `append*`, returned in `Saved::processing`, and never undoes the
+**Rules.** A failing handler stops seeing that batch, is
+handed to the `on_failure` policy (`LogFailures` by default), and never undoes the
 commit or blocks the others. No
 retries, no tokens: for tests and simple applications. `Events` is a
 processor too: as the engine's processor it only broadcasts the commit.
@@ -863,7 +860,7 @@ until its oldest letter succeeds.
 ### 41. Inline or tracking, same handler
 
 **Shape.** The same `EventHandler` runs inline
-(`EventSourced::with_processor`) or in a tracking processor
+(`InlinePublisher::with_processor`) or in a tracking processor
 (`events.projection(h).spawn()`); only the composition root changes.
 
 **Rules.** Inline, `Tx = ()` and there are no retries; tracking, `Tx` is

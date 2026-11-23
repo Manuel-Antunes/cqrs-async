@@ -148,7 +148,7 @@ cargo sqlx prepare -- -p cqrs-postgres
 ## Snapshots
 
 ```rust
-let posts = events.event_sourced::<Post>().with_snapshots(PostgresSnapshotStore::new(pool.clone()), 100);
+let posts = AggregateLoader::<Post, _>::new(store.clone()).with_snapshots(PostgresSnapshotStore::new(pool.clone()), 100);
 ```
 
 A snapshot is saved every `every` events (at the save that crosses the

@@ -10,7 +10,7 @@ let events = Events::new(Arc::new(InMemoryEventStore::<PostEvent>::new()));   //
 let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
     .with_tokens(PostgresTokenStore::new(pool));                              // shared tokens
 
-let posts = events.event_sourced::<Post>();           // loads and commits posts, broadcasting each commit
+// `events` is the publisher command handlers commit through: it stores, then broadcasts
 let handle = events.projection(summaries).spawn();    // tracking processor named by the namespace
 let handle = events.track("audit", audit_handler);    // by name, default options
 let stream = events.subscribe(0);                     // EventFeed: catch-up subscription
@@ -218,14 +218,12 @@ the event.
 
 ## Inline processing
 
-Without `Events`, the event-sourcing engine can feed handlers in the caller's task:
+Without `Events`, an `InlinePublisher` can feed handlers in the caller's task:
 
 ```rust
-let posts = EventSourced::<Post, _, _>::with_processor(InMemoryEventStore::new(), (projection, policy));
+let publisher = InlinePublisher::new(InMemoryEventStore::new()).with_processor((projection, policy));
 ```
 
 Each commit returns once every handler ran (`handle`, then `committed`);
-failures never undo the commit: a command handler's commit hands them to the
-engine's `on_failure` policy (`LogFailures` by default, or any
-`Fn(&ProcessingFailure)`), and the engine's own `append*` methods return them
-in `Saved::processing`. No runtime, no tokens, no retries: tests and simple applications.
+failures never undo the commit: they go to the publisher's `on_failure`
+policy (`LogFailures` by default, or any `Fn(&ProcessingFailure)`). No runtime, no tokens, no retries: tests and simple applications.

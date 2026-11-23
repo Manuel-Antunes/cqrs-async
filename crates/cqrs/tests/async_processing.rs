@@ -15,9 +15,9 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, EventEnvelope, EventHandler, EventSourced, EventStore, ExpectedVersion, HandlerError,
-    InMemoryEventStore, InMemoryTokenStore, LiveEvents, Metadata, ProcessingContext, StreamId, SubscriptionOptions,
-    TrackingProcessor, subscribe,
+    Aggregate, AggregateLoader, EventEnvelope, EventHandler, EventPublisher, EventStore, ExpectedVersion, HandlerError,
+    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, LiveEvents, Metadata, Pending, ProcessingContext,
+    StreamId, SubscriptionOptions, TrackingProcessor, subscribe,
 };
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
@@ -53,15 +53,22 @@ type Store = Arc<InMemoryEventStore<Ticked>>;
 struct World {
     store: Store,
     live: LiveEvents<Ticked>,
-    clocks: EventSourced<Clock, Store, (LiveEvents<Ticked>,)>,
+    clocks: AggregateLoader<Clock, Store>,
+    publisher: InlinePublisher<Ticked, Store, (LiveEvents<Ticked>,)>,
 }
 
 impl World {
     fn new(capacity: usize) -> Self {
         let store = Arc::new(InMemoryEventStore::new());
         let live = broadcast::channel(capacity).0;
-        let clocks = EventSourced::with_processor(Arc::clone(&store), (live.clone(),));
-        Self { store, live, clocks }
+        let clocks = AggregateLoader::new(Arc::clone(&store));
+        let publisher = InlinePublisher::new(Arc::clone(&store)).with_processor((live.clone(),));
+        Self {
+            store,
+            live,
+            clocks,
+            publisher,
+        }
     }
 
     /// Commits `n` ticks on clock 1 through the repository: stored, then
@@ -72,7 +79,7 @@ impl World {
             None => cqrs::Loaded::new(Clock::initial(&1)),
         };
         let ticks: Vec<_> = (1..=n).map(|i| Ticked(clock.ticks + i)).collect();
-        self.clocks.append(clock, ticks).await.unwrap();
+        self.publisher.commit(clock, Pending::new(ticks)).await.unwrap();
     }
 
     /// Commits a tick straight to the store: what a save cancelled between

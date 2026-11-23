@@ -10,12 +10,12 @@
 //!   methods that append events to the appender they are given (Axon 5).
 //! - [`Command`] / [`Query`] messages and their [`Handler`]s (one struct per
 //!   message): application side.
-//! - [`EventStore`] / [`EventSourced`]: persistence with optimistic
+//! - [`EventStore`] / [`AggregateLoader`] / [`InlinePublisher`]: persistence with optimistic
 //!   concurrency; events reach the [`EventProcessor`] only after commit.
 //!   Handlers commit through their [`Appender`] (`events.commit(entity)`),
 //!   which carries the [`EventPublisher`] their gateway was given
 //!   ([`WithPublisher`]); repositories are the application's own ports,
-//!   whose adapters load with [`load`].
+//!   whose adapters load with an [`AggregateLoader`].
 //! - `#[derive(Gateway)]` (a struct of handlers, routed by their message
 //!   type) and [`Bus`] (zero-macro, type-level list): dispatch.
 //! - [`Cqrs`]: an application's unit (publisher, gateways, events and
@@ -44,9 +44,10 @@ mod criteria;
 mod cursor;
 mod dead_letter;
 mod event;
-mod event_sourced;
 mod feed;
+mod inline;
 mod interceptor;
+mod loader;
 mod message;
 mod projection;
 mod snapshot;
@@ -71,12 +72,10 @@ pub use dead_letter::{
     DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, TransactionalDeadLetters, retry_dead_letters,
 };
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
-pub use event_sourced::{
-    EventProcessor, EventSourced, HandlerFailure, Loaded, LogFailures, NotFound, OnFailure, ProcessingFailure, Saved,
-    load, load_in,
-};
 pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
+pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
+pub use loader::{AggregateLoader, Loaded, NotFound};
 pub use message::{
     Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
     ProcessingContext, Query, QueryGateway,

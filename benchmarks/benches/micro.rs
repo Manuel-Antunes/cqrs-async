@@ -7,12 +7,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use blog::{
-    application::BlogError,
-    domain::{Post, PostId},
-};
+use blog::domain::{Post, PostId};
 use cqrs::Aggregate;
-use cqrs::{Bus, CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots};
+use cqrs::{Bus, CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots, Loaded};
 use cqrs_benchmarks::{
     PlainPosts, now,
     ping::{Ping, PingGateway, PingHandler},
@@ -77,58 +74,54 @@ mod persistence {
     /// Loading an aggregate: read its stream and replay every event.
     #[divan::bench(args = [10, 1_000, 100_000])]
     fn load_and_replay(bencher: divan::Bencher, events: usize) {
-        let posts = PlainPosts::new(InMemoryEventStore::new());
-        now(seed_post(posts.store(), PostId(1), events));
-        bencher.bench_local(|| now(posts.load(black_box(&PostId(1)))).unwrap().unwrap());
+        let posts = PlainPosts::new();
+        now(seed_post(&*posts.store, PostId(1), events));
+        bencher.bench_local(|| now(posts.find(black_box(PostId(1)))).unwrap());
     }
 
     /// Loading a 100k-event aggregate with a snapshot every 100 events:
     /// the snapshot plus at most 99 events, instead of all of them.
     #[divan::bench]
     fn load_with_snapshot_100k_events(bencher: divan::Bencher) {
-        let posts = PlainPosts::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 100);
-        let mut post = cqrs::Loaded::new(Post::initial(&PostId(1)));
-        for n in 0..100_000 {
-            let mut events = Vec::new();
-            if n == 0 {
-                post.create("title 0", &mut events).unwrap();
-            } else {
-                post.retitle(format!("title {n}"), &mut events).unwrap();
-            }
-            post = now(posts.append(post, events)).unwrap().aggregate;
-        }
-        bencher.bench_local(|| now(posts.load(black_box(&PostId(1)))).unwrap().unwrap());
+        let posts = PlainPosts::new().with_snapshots(InMemorySnapshots::default(), 100);
+        now(seed_post(&*posts.store, PostId(1), 100_000));
+        // The first load replays everything and keeps the snapshot.
+        now(posts.find(PostId(1))).unwrap();
+        bencher.bench_local(|| now(posts.find(black_box(PostId(1)))).unwrap());
     }
 
     /// Saving a brand-new aggregate (one event) to a store that keeps growing.
     #[divan::bench]
     fn add_new_aggregate(bencher: divan::Bencher) {
-        let posts = PlainPosts::new(InMemoryEventStore::new());
+        let posts = PlainPosts::new();
         let next = AtomicU64::new(1);
         bencher
             .with_inputs(|| PostId(next.fetch_add(1, Ordering::Relaxed)))
             .bench_local_values(|id| {
-                let created: Result<(), BlogError> =
-                    now(posts.create(&id, |post, events| post.create("title", events)));
-                created.unwrap();
+                let post = Loaded::new(Post::initial(&id));
+                let mut events = Vec::new();
+                post.create("title", &mut events).unwrap();
+                now(posts.commit(post, events)).unwrap();
             });
     }
 
-    /// Load, decide, save: one full command cycle on a 10-event aggregate
+    /// Load, decide, commit: one full command cycle on a 10-event aggregate
     /// (each iteration on its own aggregate, so the stream never grows).
     #[divan::bench]
     fn command_cycle(bencher: divan::Bencher) {
-        let posts = PlainPosts::new(InMemoryEventStore::new());
+        let posts = PlainPosts::new();
         let next = AtomicU64::new(1);
         bencher
             .with_inputs(|| {
                 let id = PostId(next.fetch_add(1, Ordering::Relaxed));
-                now(seed_post(posts.store(), id, 10));
+                now(seed_post(&*posts.store, id, 10));
                 id
             })
             .bench_local_values(|id| {
-                let published: Result<(), BlogError> = now(posts.update(&id, |post, events| post.publish(events)));
-                published.unwrap();
+                let post = now(posts.find(id)).unwrap();
+                let mut events = Vec::new();
+                post.publish(&mut events).unwrap();
+                now(posts.commit(post, events)).unwrap();
             });
     }
 

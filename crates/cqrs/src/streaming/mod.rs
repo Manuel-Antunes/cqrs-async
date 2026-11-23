@@ -1,9 +1,10 @@
 //! Live event processing on Tokio (feature `tokio`, on by default).
 //!
 //! - [`Events`]: the event service of one event type. It broadcasts what an
-//!   [`EventSourced`] commits, implements [`EventFeed`] (catch-up subscriptions)
-//!   and spawns [`TrackingProcessor`]s. Wiring an application is one
-//!   `Events::new(store)` plus `events.event_sourced()` and `events.track(...)`.
+//!   command handlers commit (it is their
+//!   [`EventPublisher`](crate::EventPublisher)), implements [`EventFeed`]
+//!   (catch-up subscriptions) and spawns [`TrackingProcessor`]s. Wiring an
+//!   application is one `Events::new(store)` plus `events.track(...)`.
 //! - [`subscribe`]: the catch-up subscription itself, a `Stream` of every
 //!   event after a position, never missing one.
 //! - [`TrackingProcessor`]: one event handler over the log split into
@@ -31,8 +32,8 @@ pub use subscription::{SubscriptionOptions, subscribe};
 pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf};
 
 use crate::{
-    Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, EventSourced, EventStore,
-    HandlerError, InMemoryTokenStore, ProcessingFailure, StoreError, TransactionalTokenStore,
+    Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, EventStore, HandlerError,
+    InMemoryTokenStore, ProcessingFailure, StoreError, TransactionalTokenStore,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -64,7 +65,7 @@ impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
 ///
 /// ```text
 /// let events = Events::new(Arc::new(InMemoryEventStore::new()));
-/// let posts = events.event_sourced::<Post>();       // broadcasts its commits
+/// let commands = PostGateway::new(posts, events.clone()); // handlers commit through it
 /// let handle = events.track("post-view", post_view); // tracking processor
 /// let stream = events.subscribe(0);                  // EventFeed
 /// ```
@@ -147,16 +148,6 @@ where
     S: EventStore<E> + Clone + 'static,
     C: TransactionalTokenStore + Clone + 'static,
 {
-    /// Event sourcing for `A` over the same store, broadcasting each commit
-    /// to this feed: what the application's repositories load through, and
-    /// its handlers commit through.
-    pub fn event_sourced<A>(&self) -> EventSourced<A, S, Self>
-    where
-        A: Aggregate<Event = E>,
-    {
-        EventSourced::with_processor(self.store.clone(), self.clone())
-    }
-
     /// A [`TrackingProcessor`] named `name` (its token key) feeding
     /// `handler` (or a tuple of them: a processing group) in the token
     /// store's units of work, to configure (segments, dead letters) and
@@ -203,7 +194,7 @@ impl<E, S: Clone, C: Clone> Clone for Events<E, S, C> {
     }
 }
 
-/// As the processing group of an [`EventSourced`]: broadcasts what was committed.
+/// As the processing group of an [`InlinePublisher`](crate::InlinePublisher): broadcasts what was committed.
 impl<E, S, C> EventProcessor<E> for Events<E, S, C>
 where
     E: DomainEvent + Clone,
@@ -231,7 +222,7 @@ where
         entity: crate::Loaded<A>,
         pending: crate::Pending<E>,
     ) -> impl std::future::Future<Output = Result<Option<u64>, StoreError>> + Send {
-        crate::event_sourced::publish(&self.store, self, &crate::LogFailures, entity, pending)
+        crate::inline::publish(&self.store, self, &crate::LogFailures, entity, pending)
     }
 }
 

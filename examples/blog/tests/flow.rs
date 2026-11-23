@@ -6,8 +6,10 @@ use blog::{
     application::{BlogError, commands::*, queries::*},
     domain::{PostError, PostId},
     in_memory,
+    infrastructure::EventSourcedPostRepository,
 };
-use cqrs::{Bus, CommandGateway, QueryGateway, StoreError, testing::block_on};
+use cqrs::{Bus, CommandGateway, EventPublisher, Pending, QueryGateway, StoreError, testing::block_on};
+use std::sync::Arc;
 
 fn assert_send<T: Send>(value: T) -> T {
     value
@@ -97,21 +99,22 @@ fn concurrent_writers_cannot_overwrite_each_other() {
     block_on(async {
         let (blog, _, _) = in_memory();
         let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
-        let posts = blog.publisher();
+        let events = blog.publisher();
+        let posts = EventSourcedPostRepository::new(Arc::clone(events.store()));
 
         // Two writers load the same version and decide...
-        let first = posts.load(&id).await.unwrap().unwrap();
-        let second = posts.load(&id).await.unwrap().unwrap();
+        let first = posts.find(id).await.unwrap().unwrap();
+        let second = posts.find(id).await.unwrap().unwrap();
         let (mut renamed, mut published) = (Vec::new(), Vec::new());
         first.retitle("v2", &mut renamed).unwrap();
         second.publish(&mut published).unwrap();
 
         // ...the first one wins, the second gets a conflict.
-        posts.append(first, renamed).await.unwrap();
-        let error = posts.append(second, published).await.err().unwrap();
+        events.commit(first, Pending::new(renamed)).await.unwrap();
+        let error = events.commit(second, Pending::new(published)).await.err().unwrap();
         assert!(matches!(error, StoreError::Conflict { actual: Some(2), .. }));
 
-        let stored = posts.load(&id).await.unwrap().unwrap();
+        let stored = posts.find(id).await.unwrap().unwrap();
         assert_eq!(stored.title(), "v2");
         assert!(!stored.is_published());
         assert_eq!(stored.version(), Some(2));
@@ -125,16 +128,15 @@ fn a_failing_handler_neither_undoes_the_commit_nor_blocks_the_others() {
         let id = blog.commands().send(CreatePost { title: "t".into() }).await.unwrap();
         notifier.set_down(true);
 
-        let posts = blog.publisher();
-        let post = posts.load(&id).await.unwrap().unwrap();
-        let mut events = Vec::new();
-        post.publish(&mut events).unwrap();
-        let saved = posts.append(post, events).await.unwrap();
-
-        let failure = saved.processing.unwrap_err();
-        assert_eq!(failure.failures.len(), 1);
-        assert!(failure.failures[0].handler.ends_with("Notifier>"));
-        assert_eq!(saved.events.len(), 1); // committed anyway
+        let events = blog.publisher();
+        let posts = EventSourcedPostRepository::new(Arc::clone(events.store()));
+        let post = posts.find(id).await.unwrap().unwrap();
+        let mut decided = Vec::new();
+        post.publish(&mut decided).unwrap();
+        // The commit succeeds: its position is the second event's. The failed
+        // notification went to the publisher's `on_failure` policy (see
+        // cqrs/tests/inline_failures.rs for what that policy receives).
+        assert_eq!(events.commit(post, Pending::new(decided)).await, Ok(Some(2)));
         assert!(summaries.find(id).await.unwrap().unwrap().published); // projection still ran
         assert!(notifier.sent().is_empty());
     });
@@ -187,12 +189,11 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
-    use blog::domain::Post;
-    use cqrs::{EventSourced, Handler, InMemoryEventStore, WithPublisher};
+    use cqrs::{Handler, InMemoryEventStore, InlinePublisher, WithPublisher};
 
     block_on(async {
         // A handler and the publisher it commits through: a handler too.
-        let handler = CreatePostHandler::new().with_publisher(EventSourced::<Post, _>::new(InMemoryEventStore::new()));
+        let handler = CreatePostHandler::new().with_publisher(InlinePublisher::new(InMemoryEventStore::new()));
         let id = handler.handle(CreatePost { title: "direct".into() }).await.unwrap();
         assert_eq!(id, PostId(1));
     });
@@ -211,22 +212,16 @@ fn components_depend_on_gateway_ports() {
 fn the_zero_macro_bus_infers_the_handler() {
     use blog::{
         application::{projections::PostSummaryProjection, queries::PostUpdates},
-        domain::Post,
-        infrastructure::{EventSourcedPostRepository, InMemoryPostSummaryRepository},
+        infrastructure::InMemoryPostSummaryRepository,
     };
-    use cqrs::{EventSourced, InMemoryEventStore, WithPublisher};
-    use std::sync::Arc;
+    use cqrs::{InMemoryEventStore, InlinePublisher, WithPublisher};
 
     block_on(async {
         let store = Arc::new(InMemoryEventStore::new());
         let summaries = Arc::new(InMemoryPostSummaryRepository::default());
-        let publisher = Arc::new(EventSourced::<Post, _, _>::with_processor(
-            Arc::clone(&store),
-            (PostSummaryProjection::new(
-                summaries.clone(),
-                Arc::new(PostUpdates::default()),
-            ),),
-        ));
+        let publisher = Arc::new(InlinePublisher::new(Arc::clone(&store)).with_processor((
+            PostSummaryProjection::new(summaries.clone(), Arc::new(PostUpdates::default())),
+        )));
         let posts = Arc::new(EventSourcedPostRepository::new(store));
         let bus = Bus::new()
             .register(CreatePostHandler::new().with_publisher(Arc::clone(&publisher)))

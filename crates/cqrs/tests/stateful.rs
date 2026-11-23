@@ -7,8 +7,9 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher, EventSourced,
-    InMemoryEventStore, Loaded, NotFound, Published, StoreError, WithPublisher, testing::block_on,
+    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher,
+    InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, Published, StoreError, WithPublisher,
+    testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -82,7 +83,41 @@ struct Add {
     n: u64,
 }
 
-type Counters = Arc<EventSourced<Counter, InMemoryEventStore<CounterEvent>>>;
+type Store = Arc<InMemoryEventStore<CounterEvent>>;
+
+/// What the application has over the store: a loader for its repository and
+/// the publisher its handlers commit through.
+struct Engine {
+    loader: AggregateLoader<Counter, Store>,
+    publisher: InlinePublisher<CounterEvent, Store>,
+}
+
+impl Engine {
+    async fn load(&self, id: &u32) -> Result<Option<Loaded<Counter>>, StoreError> {
+        self.loader.load(id).await
+    }
+
+    fn store(&self) -> &Store {
+        self.loader.store()
+    }
+
+    /// Another writer's commit, straight through the publisher.
+    async fn append(&self, counter: Loaded<Counter>, events: Vec<CounterEvent>) -> Result<(), StoreError> {
+        self.publisher.commit(counter, Pending::new(events)).await.map(|_| ())
+    }
+}
+
+impl EventPublisher<CounterEvent> for Engine {
+    fn commit<A: Aggregate<Event = CounterEvent>>(
+        &self,
+        entity: Loaded<A>,
+        pending: Pending<CounterEvent>,
+    ) -> impl std::future::Future<Output = Result<Option<u64>, StoreError>> + Send {
+        self.publisher.commit(entity, pending)
+    }
+}
+
+type Counters = Arc<Engine>;
 
 struct OpenHandler;
 
@@ -159,7 +194,11 @@ struct Gateway {
 }
 
 fn counters() -> Counters {
-    Arc::new(EventSourced::new(InMemoryEventStore::new()))
+    let store: Store = Arc::new(InMemoryEventStore::new());
+    Arc::new(Engine {
+        loader: AggregateLoader::new(Arc::clone(&store)),
+        publisher: InlinePublisher::new(store),
+    })
 }
 
 /// The gateway, committing through the counters' engine.

@@ -8,8 +8,8 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventSourced,
-    EventStore, HandlerError, InMemoryEventStore, Loaded, ProcessingContext, ProcessingFailure, StoreError,
+    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventStore,
+    HandlerError, InMemoryEventStore, InlinePublisher, Loaded, ProcessingContext, ProcessingFailure, StoreError,
     WithPublisher, testing::block_on,
 };
 use tracing::{
@@ -125,10 +125,8 @@ impl Subscriber for Captured {
 #[test]
 fn a_failing_inline_handler_is_logged_by_default_and_the_event_is_committed() {
     let store = Arc::new(InMemoryEventStore::new());
-    let commands = Commands { tick: TickHandler }.with_publisher(EventSourced::<Clock, _, _>::with_processor(
-        Arc::clone(&store),
-        (notifier(true),),
-    ));
+    let commands = Commands { tick: TickHandler }
+        .with_publisher(InlinePublisher::new(Arc::clone(&store)).with_processor((notifier(true),)));
 
     let captured = Captured::default();
     tracing::subscriber::with_default(captured.clone(), || {
@@ -150,7 +148,8 @@ fn on_failure_hands_the_failure_to_the_application() {
     let store = Arc::new(InMemoryEventStore::new());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
-    let events = EventSourced::<Clock, _, _>::with_processor(Arc::clone(&store), (notifier(true),))
+    let events = InlinePublisher::new(Arc::clone(&store))
+        .with_processor((notifier(true),))
         .on_failure(move |failure: &ProcessingFailure| sink.lock().unwrap().push(failure.failures.len()));
     let commands = Commands { tick: TickHandler }.with_publisher(events);
 
@@ -165,7 +164,8 @@ fn a_healthy_handler_reports_nothing() {
     let store = Arc::new(InMemoryEventStore::new());
     let seen = Arc::new(Mutex::new(0));
     let sink = Arc::clone(&seen);
-    let events = EventSourced::<Clock, _, _>::with_processor(Arc::clone(&store), (notifier(false),))
+    let events = InlinePublisher::new(Arc::clone(&store))
+        .with_processor((notifier(false),))
         .on_failure(move |_: &ProcessingFailure| *sink.lock().unwrap() += 1);
     let commands = Commands { tick: TickHandler }.with_publisher(events);
 

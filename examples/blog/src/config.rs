@@ -17,7 +17,10 @@
 
 use std::sync::Arc;
 
-use cqrs::{Cqrs, EventProcessor, EventSourced, Events, InMemoryEventStore, InMemoryTokenStore, Intercepted};
+use cqrs::{
+    Cqrs, EventProcessor, Events, InMemoryEventStore, InMemorySnapshots, InMemoryTokenStore, InlinePublisher,
+    Intercepted,
+};
 
 use crate::{
     application::{
@@ -37,6 +40,15 @@ use crate::{
 /// (commits, processors, subscriptions).
 pub type PostStore = Arc<InMemoryEventStore<PostEvent>>;
 
+/// How many events of a post a find replays before it keeps a snapshot.
+const SNAPSHOT_EVERY: u64 = 50;
+
+/// The posts' repository over `store`: it rebuilds posts from their events,
+/// keeping a snapshot of the long-lived ones.
+fn posts_over(store: &PostStore) -> EventSourcedPostRepository<PostStore, InMemorySnapshots<Post>> {
+    EventSourcedPostRepository::new(Arc::clone(store)).with_snapshots(InMemorySnapshots::default(), SNAPSHOT_EVERY)
+}
+
 /// The blog, wired in memory and synchronously: the projection and the
 /// notification policy run inside each commit, in the caller's task.
 /// Returns the read model and the notifier too, so callers can observe the
@@ -44,12 +56,12 @@ pub type PostStore = Arc<InMemoryEventStore<PostEvent>>;
 // The types are inferred by the builder: naming them is what this avoids.
 #[allow(clippy::type_complexity)]
 pub fn in_memory() -> (
-    Cqrs<EventSourced<Post, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
+    Cqrs<InlinePublisher<PostEvent, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
     Arc<InMemoryPostSummaryRepository>,
     Arc<InMemoryNotifier>,
 ) {
     let store = PostStore::default();
-    let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));
+    let posts = Arc::new(posts_over(&store));
     let summaries = Arc::new(InMemoryPostSummaryRepository::default());
     let notifier = Arc::new(InMemoryNotifier::default());
     // Synchronous: no subscriptions to push updates to.
@@ -57,7 +69,7 @@ pub fn in_memory() -> (
         PostSummaryProjection::new(Arc::clone(&summaries), Arc::default()),
         NotifyOnPublish::new(Arc::clone(&notifier)),
     );
-    let blog = Cqrs::from_publisher(EventSourced::with_processor(store, processors))
+    let blog = Cqrs::from_publisher(InlinePublisher::new(store).with_processor(processors))
         .commands(PostCommandGateway::new(posts))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
@@ -107,7 +119,7 @@ impl<C, Q> Running<C, Q> {
 /// Outside a Tokio runtime (the processors are spawned).
 pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscriptions> {
     let store = PostStore::default();
-    let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));
+    let posts = Arc::new(posts_over(&store));
     let updates = Arc::new(PostUpdates::default());
     let summaries = Arc::new(InMemoryPostSummaryRepository::default());
     let notifier = Arc::new(InMemoryNotifier::default());

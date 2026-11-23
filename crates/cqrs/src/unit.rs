@@ -26,7 +26,7 @@
 //! gets it through [`WithPublisher`](crate::WithPublisher), and its handlers
 //! commit with `events.commit(entity)`. [`Cqrs::from_publisher`] starts
 //! from a publisher built by hand instead (e.g. an
-//! [`EventSourced`](crate::EventSourced) feeding handlers inline, with no
+//! [`InlinePublisher`](crate::InlinePublisher) feeding handlers inline, with no
 //! runtime).
 //!
 //! Each step changes the builder's type, so what can be called next is
@@ -109,7 +109,7 @@ impl Cqrs<(), (), ()> {
 
     /// Starts building a unit whose command handlers commit through
     /// `publisher`, built by hand: e.g. an
-    /// [`EventSourced`](crate::EventSourced) feeding handlers inline, with
+    /// [`InlinePublisher`](crate::InlinePublisher) feeding handlers inline, with
     /// no runtime.
     // Without `tokio`, `Processing` is a unit struct.
     #[allow(clippy::default_constructed_unit_structs)]

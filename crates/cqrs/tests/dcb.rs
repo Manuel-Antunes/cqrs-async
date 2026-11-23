@@ -10,8 +10,8 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventSourced, EventStore, ExpectedVersion,
-    InMemoryEventStore, Loaded, Metadata, Published, StoreError, StreamId, TagResolver, WithPublisher,
+    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventStore, ExpectedVersion,
+    InMemoryEventStore, InlinePublisher, Loaded, Metadata, Published, StoreError, StreamId, TagResolver, WithPublisher,
     testing::block_on,
 };
 
@@ -114,8 +114,8 @@ type Store = Arc<InMemoryEventStore<SchoolEvent>>;
 /// Subscribes to each course in turn. On its first run it can let another
 /// student take a seat between its loads and its save.
 struct SubscribeHandler {
-    courses: Arc<EventSourced<Course, Store>>,
-    students: Arc<EventSourced<Student, Store>>,
+    courses: Arc<AggregateLoader<Course, Store>>,
+    students: Arc<AggregateLoader<Student, Store>>,
     runs: AtomicU32,
     sneak_in: Option<u32>,
 }
@@ -149,7 +149,7 @@ struct Gateway {
 }
 
 /// The gateway, committing through an engine over the same store.
-fn gateway(sneak_in: Option<u32>) -> (Store, Published<Gateway, EventSourced<Course, Store>>) {
+fn gateway(sneak_in: Option<u32>) -> (Store, Published<Gateway, InlinePublisher<SchoolEvent, Store>>) {
     let store: Store = Arc::new(InMemoryEventStore::new());
     for (course, capacity) in [(1, 1), (2, 5), (3, 5)] {
         let opened = SchoolEvent::CourseOpened { course, capacity };
@@ -162,12 +162,12 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Published<Gateway, EventSourced<Cou
         .unwrap();
     }
     let handler = SubscribeHandler {
-        courses: Arc::new(EventSourced::new(Arc::clone(&store))),
-        students: Arc::new(EventSourced::new(Arc::clone(&store))),
+        courses: Arc::new(AggregateLoader::new(Arc::clone(&store))),
+        students: Arc::new(AggregateLoader::new(Arc::clone(&store))),
         runs: AtomicU32::new(0),
         sneak_in,
     };
-    let publisher = EventSourced::new(Arc::clone(&store));
+    let publisher = InlinePublisher::new(Arc::clone(&store));
     (store, Gateway { subscribe: handler }.with_publisher(publisher))
 }
 
@@ -290,11 +290,16 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
     // The same aggregate saved twice: its own first events do not refuse
     // the second save.
     let (_, other) = gateway(None);
-    let repository = &other.inner().subscribe.courses;
-    let course = block_on(repository.load(&2)).unwrap().unwrap();
-    let saved = block_on(repository.append(course, vec![SchoolEvent::Subscribed { course: 2, student: 5 }])).unwrap();
-    assert_eq!(saved.aggregate.students, [5]);
-    block_on(repository.append(saved.aggregate, vec![SchoolEvent::Subscribed { course: 2, student: 6 }])).unwrap();
+    let courses = &other.inner().subscribe.courses;
+    let mut events = Appender::publishing(Metadata::new(), other.publisher());
+    let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
+    events.append(SchoolEvent::Subscribed { course: 2, student: 5 });
+    block_on(events.commit(course)).unwrap();
+    let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
+    assert_eq!(course.students, [5]);
+    events.append(SchoolEvent::Subscribed { course: 2, student: 6 });
+    block_on(events.commit(course)).unwrap();
+    assert_eq!(block_on(courses.load(&2)).unwrap().unwrap().students, [5, 6]);
 }
 
 #[test]

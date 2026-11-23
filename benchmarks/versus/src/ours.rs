@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventSourced,
+    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
     EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext, ProcessorHandle, Published,
     SnapshotStore, StoreError, StreamId, TrackingOptions, WithPublisher,
 };
@@ -151,7 +151,7 @@ impl<B: CommandGateway<Execute> + 'static> EventHandler for TransferPolicy<B> {
 
 type Store = PostgresEventStore<AccountEvent>;
 type OurEvents = Events<AccountEvent, Store, PostgresTokenStore>;
-type Repo<N> = EventSourced<OurAccount, Store, OurEvents, N>;
+type Repo<N> = AggregateLoader<OurAccount, Store, N>;
 
 pub struct Ours<N> {
     pool: PgPool,
@@ -212,7 +212,7 @@ where
         .expect("creating the view");
         let events =
             Events::new(Store::new(pool.clone(), "accounts")).with_tokens(PostgresTokenStore::new(pool.clone()));
-        let accounts = Arc::new(snapshots(events.event_sourced()));
+        let accounts = Arc::new(snapshots(AggregateLoader::new(events.store().clone())));
         let execute = ExecuteHandler {
             accounts: EventSourcedAccounts(accounts),
         };

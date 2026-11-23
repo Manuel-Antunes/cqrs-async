@@ -10,7 +10,7 @@
  │                      ▼        ▼           │   │                    ▼              │
  │   PostRepository (port)  EventPublisher   │   │   PostSummaryRepository (port)    │
  │                      │        │           │   │                    ▲              │
- │           EventSourced<Post> (engine)     │   │                    │ write        │
+ │     publisher: Events / InlinePublisher   │   │                    │ write        │
  │                      │ append (+condition)│   │        PostSummaryProjection      │
  │                      ▼                     │   │          (EventHandler)           │
  │               EventStore  ════════════════════════►  TrackingProcessor            │
@@ -80,7 +80,7 @@ presentation ──► application ──► domain
 |---|---|---|
 | `domain` | Aggregates, events, domain errors | `Aggregate` (usually derived), `EventAppender`, `DomainEvent`/`TagResolver` derives |
 | `application` | Commands, queries and their handlers; projections, policies; repository ports (write and read side); the gateways | Messages, handlers, `Appender`, `Loaded<A>`, `EventHandler` |
-| `infrastructure` | Adapters: repositories (the posts' over the event store, the read model's), notifiers, interceptors | Port traits it implements, `cqrs::load` |
+| `infrastructure` | Adapters: repositories (the posts' over the event store, the read model's), notifiers, interceptors | Port traits it implements, `AggregateLoader` |
 | `presentation` | HTTP/GraphQL, written against a ports trait (`BlogApi`) | `CommandGateway`, `QueryGateway`, `QuerySubscriptions`, `EventFeed` bounds |
 | composition root (`config.rs`) | Creates the stores and services; builds the application's `Cqrs` unit from the event and token stores (the unit makes the events, which are the publisher, and gives it to the command gateway) | `Cqrs::new`, stores |
 
@@ -98,8 +98,8 @@ application logic, and where it is stored is a port.
 | Aggregate | `@EventSourcedEntity` | `AggregateRoot` | a plain struct with `#[derive(AggregateRoot)]` (or `impl Aggregate`) |
 | Entity built from tags | `@EventSourcedEntity(tagKey = ...)` | — | `#[aggregate(tag = "course")]` |
 | Event tags | `@EventTag`, `TagResolver` | — | `#[tag]` with `#[derive(TagResolver)]`, or `impl TagResolver` |
-| Dynamic consistency boundary | `EventCriteria`, `AppendCondition` | — | same names; `Appender::source`, `EventSourced::load_in` |
-| Repository | `Repository`, `EventSourcedRepository` | the user's own provider | the application's own port and adapter (as in NestJS), loading with `cqrs::load` |
+| Dynamic consistency boundary | `EventCriteria`, `AppendCondition` | — | same names; `Appender::source`, `AggregateLoader::load_in` |
+| Repository | `Repository`, `EventSourcedRepository` | the user's own provider | the application's own port and adapter (as in NestJS), loading with an `AggregateLoader` |
 | Committing a decision | end of the `ProcessingContext` | `EventPublisher` injected, `aggregate.commit()` | `events.commit(entity)` in the handler; the `EventPublisher<E>` is injected into the gateway (`with_publisher`) |
 | Event handling component | class with `@EventHandler` methods | `@EventsHandler` | `impl EventHandler<E, Tx>`: one `handle` that matches on the event enum |
 | Projection name | `@Namespace` | — | `#[cqrs::projection(namespace = "...")]` |
@@ -113,7 +113,7 @@ application logic, and where it is stored is a port.
 | Subscription queries | `QueryUpdateEmitter`, `subscriptionQuery` | — | `QueryUpdateEmitter<Q>`, `SubscriptionQueries`, `QuerySubscriptions<Q>` |
 | Sagas | stateful event handlers | `@Saga` over an RxJS stream | `EventFeed::subscribe` (a `Stream`), or an event handler that sends commands |
 | Upcasting | `Upcaster` | — | `Upcaster`, `upcast(type, version, fn)` |
-| Snapshots | snapshot trigger | — | `EventSourced::with_snapshots(store, every)` |
+| Snapshots | snapshot trigger | — | `AggregateLoader::with_snapshots(store, every)` |
 | Aggregate tests | `AggregateTestFixture` | — | `testing::AggregateFixture` |
 
 Where the shapes differ, the reason is almost always the same: Axon
@@ -125,15 +125,13 @@ tuple members or trait impls, and the compiler does the routing.
 
 The blog wires its application twice, from the same handlers:
 
-- **Inline** (`blog::in_memory()`): `EventSourced::with_processor(store,
-  (projection, policy))`. Handlers run right after each commit, in the
+- **Inline** (`blog::in_memory()`): `InlinePublisher::new(store)
+  .with_processor((projection, policy))`. Handlers run right after each commit, in the
   caller's task; no runtime, deterministic, what domain and flow tests use.
-  A failing handler never undoes the commit: after a commit made by a
-  command handler the failure goes to the engine's `on_failure` policy
-  (logged at error level by default); the engine's own `append*` methods
-  return it in `Saved::processing`.
-- **Asynchronous** (`blog::start()`): `Events::new(store)`; the engine
-  (`events.event_sourced()`) only broadcasts its commits, and each handler runs in its own tracking
+  A failing handler never undoes the commit: the failure goes to the
+  publisher's `on_failure` policy (logged at error level by default).
+- **Asynchronous** (`blog::start()`): `Events::new(store)`, which is the
+  publisher: it stores and broadcasts each commit, and each handler runs in its own tracking
   processor (`events.projection(p).spawn()`), with tokens, retries and a
   unit of work. Commands return once committed; read models follow
   (eventually consistent), and subscription queries wait for them when a

@@ -28,25 +28,25 @@ commit checks. The domain never sees it, and nobody can change the post
 through it: it derefs to `&Post` only.
 
 The adapter, in infrastructure, rebuilds each post from its events in the
-event store, with the framework's `cqrs::load`:
+event store, with the framework's `AggregateLoader`:
 
 ```rust
 // src/infrastructure/event_sourced_post_repository.rs
-use cqrs::{EventStore, Loaded, StoreError};
+use cqrs::{AggregateLoader, EventStore, Loaded, StoreError};
 
 pub struct EventSourcedPostRepository<S> {
-    store: S,
+    loader: AggregateLoader<Post, S>,
 }
 
 impl<S> EventSourcedPostRepository<S> {
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self { loader: AggregateLoader::new(store) }
     }
 }
 
 impl<S: EventStore<PostEvent>> PostRepository for EventSourcedPostRepository<S> {
     async fn find(&self, id: PostId) -> Result<Option<Loaded<Post>>, StoreError> {
-        cqrs::load(&self.store, &id).await
+        self.loader.load(&id).await
     }
 }
 ```
@@ -260,12 +260,12 @@ let PostCommandOutput::CreatePost(id) = gateway.send(command).await? else { unre
 
 ## Trying it
 
-The publisher here is an `EventSourced` engine over the same in-memory
+The publisher here is an `InlinePublisher` over the same in-memory
 store the repository reads (part 4 builds it for you):
 
 ```rust
 use std::sync::Arc;
-use cqrs::{CommandGateway, EventSourced, InMemoryEventStore, WithPublisher, testing::block_on};
+use cqrs::{CommandGateway, InMemoryEventStore, InlinePublisher, WithPublisher, testing::block_on};
 
 #[test]
 fn a_post_is_created_retitled_and_published() {
@@ -273,7 +273,7 @@ fn a_post_is_created_retitled_and_published() {
         let store = Arc::new(InMemoryEventStore::new());
         let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));
         let commands = PostCommandGateway::new(Arc::clone(&posts))
-            .with_publisher(EventSourced::<Post, _>::new(store));
+            .with_publisher(InlinePublisher::new(store));
 
         let id = commands.send(CreatePost { title: "Draft".into() }).await.unwrap();
         commands.send(RetitlePost { id, title: "Final".into() }).await.unwrap();

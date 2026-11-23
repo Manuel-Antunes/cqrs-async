@@ -1,11 +1,11 @@
 //! Domain tests: no store, no async. Given past events, when a decision
 //! runs, then expect the events it appended or the error.
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use blog::domain::{Post, PostError, PostEvent, PostId};
 use cqrs::{
-    Aggregate, EventSourced, InMemoryEventStore,
+    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InlinePublisher, Loaded, Pending,
     testing::{AggregateFixture, block_on},
 };
 
@@ -132,39 +132,28 @@ impl<Unit: Send + Sync + 'static> Aggregate for Counter<Unit> {
     }
 }
 
-#[derive(Debug)]
-struct Error(String);
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
-    }
-}
-
-impl From<cqrs::StoreError> for Error {
-    fn from(error: cqrs::StoreError) -> Self {
-        Self(error.to_string())
-    }
-}
-
-impl From<cqrs::NotFound<u32>> for Error {
-    fn from(error: cqrs::NotFound<u32>) -> Self {
-        Self(error.to_string())
-    }
-}
-
 #[test]
 fn framework_free_decisions_work_with_the_repository() {
     struct Clicks;
-    let counters = EventSourced::<Counter<Clicks>, _>::new(InMemoryEventStore::new());
+    let store = Arc::new(InMemoryEventStore::new());
+    let loader = AggregateLoader::<Counter<Clicks>, _>::new(Arc::clone(&store));
+    let publisher = InlinePublisher::new(store);
+    // Load (or start), decide with a plain `Vec`, commit.
+    let click = || async {
+        let counter = match loader.load(&1).await.unwrap() {
+            Some(counter) => counter,
+            None => Loaded::new(Counter::initial(&1)),
+        };
+        let mut events = Vec::new();
+        counter.increment(2, &mut events)?;
+        publisher.commit(counter, Pending::new(events)).await.unwrap();
+        Ok::<_, String>(())
+    };
     block_on(async {
-        let created: Result<(), Error> = counters.create(&1, |c, events| c.increment(2, events)).await;
-        created.unwrap();
-        let updated: Result<(), Error> = counters.update(&1, |c, events| c.increment(2, events)).await;
-        updated.unwrap();
-        let refused: Result<(), Error> = counters.update(&1, |c, events| c.increment(2, events)).await;
-        assert_eq!(refused.unwrap_err().0, "limit 2 reached");
-        assert_eq!(counters.load(&1).await.unwrap().unwrap().value, 2);
+        click().await.unwrap();
+        click().await.unwrap();
+        assert_eq!(click().await.unwrap_err(), "limit 2 reached");
+        assert_eq!(loader.load(&1).await.unwrap().unwrap().value, 2);
     });
 }
 

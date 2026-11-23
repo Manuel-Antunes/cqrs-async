@@ -13,9 +13,9 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventSourced, Events, HandlerError,
-    InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, ProcessingContext, StoreError, StreamId,
-    TrackingOptions, TransactionalDeadLetters, retry_dead_letters, segment_of,
+    Aggregate, AggregateLoader, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventPublisher, Events,
+    HandlerError, InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Loaded, Pending, ProcessingContext,
+    StoreError, StreamId, TrackingOptions, TransactionalDeadLetters, retry_dead_letters, segment_of,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -48,16 +48,17 @@ type Store = Arc<InMemoryEventStore<Ticked>>;
 
 struct World {
     events: Events<Ticked, Store, Arc<InMemoryTokenStore>>,
-    clocks: EventSourced<Clock, Store, Events<Ticked, Store, Arc<InMemoryTokenStore>>>,
+    clocks: AggregateLoader<Clock, Store>,
     tokens: Arc<InMemoryTokenStore>,
 }
 
 impl World {
     fn new() -> Self {
         let tokens = Arc::new(InMemoryTokenStore::default());
-        let events = Events::new(Arc::new(InMemoryEventStore::new())).with_tokens(Arc::clone(&tokens));
+        let store = Arc::new(InMemoryEventStore::new());
+        let events = Events::new(Arc::clone(&store)).with_tokens(Arc::clone(&tokens));
         Self {
-            clocks: events.event_sourced(),
+            clocks: AggregateLoader::new(store),
             events,
             tokens,
         }
@@ -70,8 +71,12 @@ impl World {
             None => Loaded::new(Clock::initial(&id)),
         };
         let next = clock.ticks + 1;
-        let saved = self.clocks.append(clock, vec![Ticked(next)]).await.unwrap();
-        saved.events[0].position
+        let committed = self
+            .events
+            .commit(clock, Pending::new(vec![Ticked(next)]))
+            .await
+            .unwrap();
+        committed.expect("one event was committed")
     }
 
     fn options(segments: u32, max_segments: u32) -> TrackingOptions {

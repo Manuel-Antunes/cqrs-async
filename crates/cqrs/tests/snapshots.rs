@@ -1,11 +1,15 @@
 //! Snapshots: a load from a snapshot ends in the same state as a full
-//! replay, and a broken snapshot store only costs a full replay.
+//! replay, a load that replayed enough keeps one, and a broken snapshot
+//! store only costs a full replay.
 
-use std::future::{Future, ready};
+use std::{
+    future::{Future, ready},
+    sync::Arc,
+};
 
 use cqrs::{
-    Aggregate, EventAppender, EventSourced, InMemoryEventStore, InMemorySnapshots, NotFound, SnapshotStore, StoreError,
-    testing::block_on,
+    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Loaded,
+    Pending, SnapshotStore, StoreError, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -35,98 +39,126 @@ impl Aggregate for Sum {
     }
 }
 
-impl Sum {
-    /// A decision: `&self` plus an appender.
-    fn add(&self, n: u64, events: &mut impl EventAppender<Added>) -> Result<(), Error> {
-        events.append(Added(n));
-        Ok(())
+type Store = Arc<InMemoryEventStore<Added>>;
+
+/// What the recommended path is made of: a publisher that command handlers
+/// commit through, and a loader in the repository's adapter. The test body
+/// plays the handler: load, decide, commit.
+struct App<N = ()> {
+    loader: AggregateLoader<Sum, Store, N>,
+    publisher: InlinePublisher<Added, Store>,
+}
+
+fn app() -> App {
+    let store = Store::default();
+    App {
+        loader: AggregateLoader::new(Arc::clone(&store)),
+        publisher: InlinePublisher::new(store),
     }
 }
 
-/// What the tests' decisions and saves can fail with.
-#[derive(Debug, PartialEq)]
-enum Error {
-    Store(StoreError),
-    NotFound,
-}
+impl<N: SnapshotStore<Sum>> App<N> {
+    /// One command of one event: adds `n`, loading what was there.
+    fn add(&self, n: u64) {
+        let sum = block_on(self.loader.load(&1))
+            .unwrap()
+            .unwrap_or_else(|| Loaded::new(Sum::initial(&1)));
+        block_on(self.publisher.commit(sum, Pending::new(vec![Added(n)]))).unwrap();
+    }
 
-impl From<StoreError> for Error {
-    fn from(error: StoreError) -> Self {
-        Self::Store(error)
+    fn add_n(&self, n: u64) {
+        (1..=n).for_each(|i| self.add(i));
+    }
+
+    fn load(&self) -> Loaded<Sum> {
+        block_on(self.loader.load(&1)).unwrap().unwrap()
     }
 }
 
-impl From<NotFound<u32>> for Error {
-    fn from(_: NotFound<u32>) -> Self {
-        Self::NotFound
-    }
-}
-
-/// Saves `n` commands of one event each, as a real application would.
-fn add_n<P, N>(sums: &EventSourced<Sum, InMemoryEventStore<Added>, P, N>, n: u64)
-where
-    P: cqrs::EventProcessor<Added>,
-    N: SnapshotStore<Sum>,
-{
-    for i in 1..=n {
-        let saved: Result<(), Error> = if i == 1 {
-            block_on(sums.create(&1, |sum, events| sum.add(i, events)))
-        } else {
-            block_on(sums.update(&1, |sum, events| sum.add(i, events)))
-        };
-        saved.unwrap();
+impl App {
+    fn with_snapshots<N>(self, snapshots: N, every: u64) -> App<N> {
+        App {
+            loader: self.loader.with_snapshots(snapshots, every),
+            publisher: self.publisher,
+        }
     }
 }
 
 #[test]
 fn loading_from_a_snapshot_equals_a_full_replay() {
-    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 10);
-    add_n(&sums, 25);
+    let snapshots = Arc::new(InMemorySnapshots::default());
+    let with = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    with.add_n(25);
 
-    let loaded = block_on(sums.load(&1)).unwrap().unwrap();
-    assert_eq!(loaded.total, (1..=25).sum::<u64>());
-    assert_eq!(loaded.version(), Some(25));
+    // Each command loaded before committing, so the 21st load replayed 10
+    // events and kept a snapshot at version 20; these loads start from it.
+    assert_eq!(
+        block_on(snapshots.load(&1)).unwrap().map(|(_, version)| version),
+        Some(20)
+    );
+    let first = with.load();
+    let from_snapshot = with.load();
+    assert_eq!(from_snapshot.total, (1..=25).sum::<u64>());
+    assert_eq!(from_snapshot.version(), Some(25));
+    assert_eq!(*first, *from_snapshot);
 
     // Same events, no snapshots: same state.
-    let plain = EventSourced::<Sum, _>::new(InMemoryEventStore::new());
-    add_n(&plain, 25);
-    assert_eq!(*block_on(plain.load(&1)).unwrap().unwrap(), *loaded);
+    let plain = app();
+    plain.add_n(25);
+    assert_eq!(*plain.load(), *from_snapshot);
 }
 
 #[test]
 fn a_load_starts_from_the_snapshot_and_replays_only_the_tail() {
-    let snapshots = InMemorySnapshots::default();
-    snapshots_of(&snapshots, 25); // snapshot at 20, events 21..=25 after it
-    // Mark the snapshot: only a load that starts from it can see the mark.
-    let (mut marked, at) = block_on(snapshots.load(&1)).unwrap().unwrap();
-    marked.total = 1_000_000;
-    block_on(snapshots.save(&marked, at + 1)).unwrap(); // newer, so it replaces
-    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(Shared(&snapshots), 10);
-    add_n(&sums, 0);
-    // Different store, same snapshot: proves the stream is read after the snapshot only.
-    let loaded = block_on(sums.load(&1)).unwrap().unwrap();
-    assert_eq!(loaded.total, 1_000_000);
-    assert_eq!(loaded.version(), Some(21));
+    let snapshots = Arc::new(InMemorySnapshots::default());
+    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    app.add_n(25);
+    // A newer snapshot (version 21; the one taken while adding is at 20) that
+    // no replay could have produced: only a load that starts from it sees the
+    // mark.
+    block_on(snapshots.save(
+        &Sum {
+            id: 1,
+            total: 1_000_000,
+        },
+        21,
+    ))
+    .unwrap();
+
+    let loaded = app.load();
+    assert_eq!(loaded.total, 1_000_000 + (22..=25).sum::<u64>());
+    assert_eq!(loaded.version(), Some(25));
 }
 
 #[test]
-fn snapshots_are_taken_every_n_events_and_keep_the_newest() {
-    let snapshots = InMemorySnapshots::default();
-    snapshots_of(&snapshots, 25);
+fn a_snapshot_is_kept_when_a_load_replayed_enough_and_only_then() {
+    let snapshots = Arc::new(InMemorySnapshots::default());
+    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    app.add_n(9);
+    app.load();
+    assert!(
+        block_on(snapshots.load(&1)).unwrap().is_none(),
+        "9 events replayed: not enough"
+    );
+
+    app.add(10); // the 10th event: the next load replays 10
+    app.load();
     let (sum, version) = block_on(snapshots.load(&1)).unwrap().unwrap();
-    assert_eq!(version, 20);
-    assert_eq!(sum.total, (1..=20).sum::<u64>());
+    assert_eq!((sum.total, version), ((1..=10).sum::<u64>(), 10));
+
+    app.add(11);
+    app.load(); // replays 1 event after the snapshot
+    assert_eq!(
+        block_on(snapshots.load(&1)).unwrap().unwrap().1,
+        10,
+        "the snapshot was not replaced"
+    );
 }
 
-fn snapshots_of(snapshots: &InMemorySnapshots<Sum>, n: u64) {
-    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(Shared(snapshots), 10);
-    add_n(&sums, n);
-}
+/// Lends a snapshot store to a loader for the test.
+struct Shared(Arc<InMemorySnapshots<Sum>>);
 
-/// Lends a snapshot store to a repository for the test.
-struct Shared<'a>(&'a InMemorySnapshots<Sum>);
-
-impl SnapshotStore<Sum> for Shared<'_> {
+impl SnapshotStore<Sum> for Shared {
     fn load(&self, id: &u32) -> impl Future<Output = Result<Option<(Sum, u64)>, StoreError>> + Send {
         self.0.load(id)
     }
@@ -151,59 +183,41 @@ impl SnapshotStore<Sum> for Broken {
 
 #[test]
 fn a_broken_snapshot_store_only_costs_a_full_replay() {
-    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(Broken, 2);
-    add_n(&sums, 5); // saves keep working
-    let loaded = block_on(sums.load(&1)).unwrap().unwrap();
+    let app = app().with_snapshots(Broken, 2);
+    app.add_n(5); // loads and commits keep working
+    let loaded = app.load();
     assert_eq!(loaded.total, 15);
     assert_eq!(loaded.version(), Some(5));
 }
 
 #[test]
 fn optimistic_concurrency_still_holds_with_snapshots() {
-    let sums = EventSourced::new(InMemoryEventStore::new()).with_snapshots(InMemorySnapshots::default(), 1);
-    add_n(&sums, 3);
-    let first = block_on(sums.load(&1)).unwrap().unwrap();
-    let second = block_on(sums.load(&1)).unwrap().unwrap();
-    block_on(sums.append(first, vec![Added(10)])).unwrap();
+    let app = app().with_snapshots(InMemorySnapshots::default(), 1);
+    app.add_n(3);
+    let (first, second) = (app.load(), app.load());
+    block_on(app.publisher.commit(first, Pending::new(vec![Added(10)]))).unwrap();
     assert!(matches!(
-        block_on(sums.append(second, vec![Added(20)])),
+        block_on(app.publisher.commit(second, Pending::new(vec![Added(20)]))),
         Err(StoreError::Conflict { actual: Some(4), .. })
     ));
 }
 
-/// What the recommended path does: command handlers commit through the
-/// publisher, and the application's repository adapter loads. With snapshots
-/// every 2 events, a snapshot must exist after the third commit.
-///
-/// Fails today: the publisher's commit never takes a snapshot, and
-/// `cqrs::load` (what the guide's repository adapter calls) never reads one.
-/// The fix is Phase 2 of the migration plan (one loader with snapshots), which
-/// removes the `ignore`.
+/// The recommended path: command handlers commit through the publisher, the
+/// repository adapter loads with the loader. With snapshots every 2 events, a
+/// snapshot exists after the third command (its load replayed 2 events).
+/// Reproduced in Phase 1 (item 1.4) against `cqrs::load`, which never read or
+/// kept one.
 #[test]
-#[ignore = "1.4 reproduction: fixed by the Phase 2 loader, which removes this ignore"]
-fn commits_through_the_publisher_take_snapshots_for_the_repository_to_load_from() {
-    use cqrs::{EventPublisher, Loaded, Pending};
-
-    let snapshots = InMemorySnapshots::default();
-    let store = std::sync::Arc::new(InMemoryEventStore::new());
-    let engine = EventSourced::<Sum, _>::new(std::sync::Arc::clone(&store)).with_snapshots(Shared(&snapshots), 2);
-    let pending = |n| Pending {
-        events: vec![Added(n)],
-        metadata: Default::default(),
-        condition: None,
-    };
-
-    // Three commits, each on what the repository adapter loads.
-    block_on(engine.commit(Loaded::new(Sum::initial(&1)), pending(1))).unwrap();
-    for n in 2..=3 {
-        let sum = block_on(cqrs::load::<Sum, _>(&*store, &1)).unwrap().unwrap();
-        block_on(engine.commit(sum, pending(n))).unwrap();
-    }
+fn commits_through_the_publisher_leave_snapshots_for_the_repository_to_load_from() {
+    let snapshots = Arc::new(InMemorySnapshots::default());
+    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 2);
+    app.add_n(3);
 
     let (snapshot, version) = block_on(snapshots.load(&1)).unwrap().expect("a snapshot was taken");
     assert_eq!(
         (snapshot.total, version),
         (3, 2),
-        "taken when the stream reached version 2"
+        "taken when the third command's load replayed 2 events"
     );
+    assert_eq!(app.load().total, 6);
 }

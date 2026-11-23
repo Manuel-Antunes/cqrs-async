@@ -8,7 +8,12 @@
 //! that API changes one module and the scenarios stay identical.
 
 use blog::domain::{Post, PostEvent, PostId};
-use cqrs::{EventSourced, EventStore, ExpectedVersion, InMemoryEventStore, Metadata, StreamId};
+use std::sync::Arc;
+
+use cqrs::{
+    AggregateLoader, EventPublisher, EventStore, ExpectedVersion, InMemoryEventStore, InlinePublisher, Loaded,
+    Metadata, Pending, SnapshotStore, StoreError, StreamId,
+};
 
 pub mod live;
 
@@ -119,5 +124,66 @@ pub async fn seed_posts<S: EventStore<PostEvent>>(store: &S, posts: u64, events_
     }
 }
 
-/// A repository with no processing, over the in-memory store.
-pub type PlainPosts = EventSourced<Post, InMemoryEventStore<PostEvent>>;
+/// The shared in-memory store of the posts.
+pub type PostsStore = Arc<InMemoryEventStore<PostEvent>>;
+
+/// What an application has around the in-memory store with no processing: a
+/// loader (its repository's adapter) and an inline publisher (what command
+/// handlers commit through).
+pub struct PlainPosts<N = ()> {
+    /// The store both share.
+    pub store: PostsStore,
+    /// Rebuilds posts.
+    pub loader: AggregateLoader<Post, PostsStore, N>,
+    /// Commits what is decided.
+    pub publisher: InlinePublisher<PostEvent, PostsStore>,
+}
+
+impl PlainPosts {
+    /// An empty store, loading without snapshots.
+    pub fn new() -> Self {
+        let store: PostsStore = Arc::new(InMemoryEventStore::new());
+        Self {
+            loader: AggregateLoader::new(Arc::clone(&store)),
+            publisher: InlinePublisher::new(Arc::clone(&store)),
+            store,
+        }
+    }
+}
+
+impl Default for PlainPosts {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<N> PlainPosts<N> {
+    /// Loads with a snapshot every `every` replayed events.
+    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> PlainPosts<N2> {
+        PlainPosts {
+            store: self.store,
+            loader: self.loader.with_snapshots(snapshots, every),
+            publisher: self.publisher,
+        }
+    }
+}
+
+impl<N: SnapshotStore<Post>> PlainPosts<N> {
+    /// The post `id`, found, if it has events.
+    ///
+    /// # Panics
+    ///
+    /// If the (in-memory) store fails.
+    pub async fn find(&self, id: PostId) -> Option<Loaded<Post>> {
+        self.loader.load(&id).await.expect("in-memory load")
+    }
+
+    /// Commits `events` to `post`, expecting the version it was loaded at.
+    ///
+    /// # Errors
+    ///
+    /// The store's.
+    pub async fn commit(&self, post: Loaded<Post>, events: Vec<PostEvent>) -> Result<Option<u64>, StoreError> {
+        self.publisher.commit(post, Pending::new(events)).await
+    }
+}

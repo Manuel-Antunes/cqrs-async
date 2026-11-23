@@ -11,8 +11,8 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, EventEnvelope, EventHandler, Events, Handler, HandlerError, InMemoryEventStore, LiveQueries,
-    ProcessingContext, QuerySubscriptions, RefreshedBy, StoreError,
+    Aggregate, EventEnvelope, EventHandler, EventPublisher, Events, Handler, HandlerError, InMemoryEventStore,
+    LiveQueries, ProcessingContext, QuerySubscriptions, RefreshedBy, StoreError,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -88,7 +88,8 @@ struct ClockQueries {
 type Store = Arc<InMemoryEventStore<ClockEvent>>;
 
 struct World {
-    clocks: cqrs::EventSourced<Clock, Store, Events<ClockEvent, Store>>,
+    clocks: cqrs::AggregateLoader<Clock, Store>,
+    events: Events<ClockEvent, Store>,
     queries: LiveQueries<ClockQueries, Events<ClockEvent, Store>, ClockEvent>,
     projection: cqrs::ProcessorHandle,
 }
@@ -106,7 +107,8 @@ impl World {
             &projection,
         );
         Self {
-            clocks: events.event_sourced(),
+            clocks: cqrs::AggregateLoader::new(Arc::clone(events.store())),
+            events,
             queries,
             projection,
         }
@@ -117,7 +119,10 @@ impl World {
             Some(clock) => clock,
             None => cqrs::Loaded::new(Clock::initial(&id)),
         };
-        self.clocks.append(clock, vec![event]).await.unwrap();
+        self.events
+            .commit(clock, cqrs::Pending::new(vec![event]))
+            .await
+            .unwrap();
     }
 }
 
@@ -261,7 +266,7 @@ async fn live_queries_follow_a_projection_split_across_instances() {
         events.clone(),
         events.global_progress("ticks"),
     );
-    let clocks = events.event_sourced::<Clock>();
+    let clocks = cqrs::AggregateLoader::<Clock, _>::new(Arc::clone(events.store()));
     let in_segment = |segment| {
         (1..)
             .find(|id| segment_of(&StreamId::of::<Clock>(id), 2) == segment)
@@ -278,7 +283,10 @@ async fn live_queries_follow_a_projection_split_across_instances() {
             Some(clock) => clock,
             None => cqrs::Loaded::new(Clock::initial(&id)),
         };
-        clocks.append(clock, vec![ClockEvent::Ticked]).await.unwrap();
+        events
+            .commit(clock, cqrs::Pending::new(vec![ClockEvent::Ticked]))
+            .await
+            .unwrap();
     }
     // Each update shows the projected state, whichever instance projected it.
     assert_eq!(next(&mut on_first).await, 1);

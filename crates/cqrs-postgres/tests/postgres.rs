@@ -19,9 +19,9 @@ use std::{
 
 use cqrs::SnapshotStore;
 use cqrs::{
-    Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventStore, Events,
-    ExpectedVersion, Gap, HandlerError, Metadata, ProcessingContext, StoreError, StreamId, SubscriptionOptions,
-    TokenStore, TrackingOptions, TransactionalDeadLetters, TransactionalTokenStore,
+    Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventPublisher, EventStore,
+    Events, ExpectedVersion, Gap, HandlerError, Metadata, Pending, ProcessingContext, StoreError, StreamId,
+    SubscriptionOptions, TokenStore, TrackingOptions, TransactionalDeadLetters, TransactionalTokenStore,
 };
 use cqrs_postgres::{
     PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, migrate, upcast,
@@ -93,6 +93,20 @@ macro_rules! database_or_skip {
             }
         }
     };
+}
+
+/// Commits `events` to the new aggregate `id` through `publisher` (the events
+/// service: stored, then broadcast); the position of the last one.
+async fn commit_new<A, P>(publisher: &P, id: A::Id, events: Vec<A::Event>) -> u64
+where
+    A: Aggregate,
+    P: EventPublisher<A::Event>,
+{
+    publisher
+        .commit(cqrs::Loaded::new(A::initial(&id)), Pending::new(events))
+        .await
+        .unwrap()
+        .expect("events were committed")
 }
 
 fn ticks(from: u64, count: u64) -> Vec<ClockEvent> {
@@ -450,7 +464,6 @@ async fn instances_share_segments_through_postgres() {
     let pool = database_or_skip!();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool));
-    let clocks = events.event_sourced::<Clock>();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
     let a = events
         .processor("shared", Arc::clone(&first))
@@ -463,8 +476,7 @@ async fn instances_share_segments_through_postgres() {
 
     let mut last = 0;
     for id in 1..=40 {
-        let new = cqrs::Loaded::new(Clock::initial(&id));
-        last = clocks.append(new, ticks(1, 1)).await.unwrap().events[0].position;
+        last = commit_new::<Clock, _>(&events, id, ticks(1, 1)).await;
     }
     tokio::time::timeout(Duration::from_secs(20), async {
         a.caught_up(last).await;
@@ -561,27 +573,10 @@ async fn a_processor_for_each_event_enum_advances_on_one_database() {
     let clock_processor = clock_events.processor("clocks", Arc::clone(&clock_seen)).spawn();
     let bell_processor = bell_events.processor("bells", Arc::clone(&bell_seen)).spawn();
 
-    let (clocks, bells) = (
-        clock_events.event_sourced::<Clock>(),
-        bell_events.event_sourced::<Bell>(),
-    );
     let (mut last_clock, mut last_bell) = (0, 0);
     for id in 1..=5 {
-        last_clock = clocks
-            .append(cqrs::Loaded::new(Clock::initial(&id)), ticks(1, 1))
-            .await
-            .unwrap()
-            .events[0]
-            .position;
-        last_bell = bells
-            .append(
-                cqrs::Loaded::new(Bell::initial(&id)),
-                vec![BellEvent::Rung { times: id }],
-            )
-            .await
-            .unwrap()
-            .events[0]
-            .position;
+        last_clock = commit_new::<Clock, _>(&clock_events, id, ticks(1, 1)).await;
+        last_bell = commit_new::<Bell, _>(&bell_events, id, vec![BellEvent::Rung { times: id }]).await;
     }
     tokio::time::timeout(Duration::from_secs(10), async {
         clock_processor.caught_up(last_clock).await;
@@ -664,7 +659,7 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
     let events = Events::new(store.clone()).with_tokens(PostgresTokenStore::new(pool.clone()));
-    let clocks = events.event_sourced::<Clock>();
+    let clocks = cqrs::AggregateLoader::<Clock, _>::new(store.clone());
     let handler = Poisoned::new(&stream(1));
     let processor = events
         .processor("parking", Arc::clone(&handler))
@@ -674,16 +669,10 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
 
     // Clock 1's first event fails and is parked; its second parks behind it.
     // Clock 2 flows.
-    let first = clocks
-        .append(cqrs::Loaded::new(Clock::initial(&1)), ticks(1, 1))
-        .await
-        .unwrap();
-    let second = clocks.append(first.aggregate, ticks(2, 1)).await.unwrap();
-    let other = clocks
-        .append(cqrs::Loaded::new(Clock::initial(&2)), ticks(1, 1))
-        .await
-        .unwrap();
-    let last = other.events[0].position;
+    let first = commit_new::<Clock, _>(&events, 1, ticks(1, 1)).await;
+    let again = clocks.load(&1).await.unwrap().unwrap();
+    let second = events.commit(again, Pending::new(ticks(2, 1))).await.unwrap().unwrap();
+    let last = commit_new::<Clock, _>(&events, 2, ticks(1, 1)).await;
     tokio::time::timeout(Duration::from_secs(20), processor.caught_up(last))
         .await
         .expect("the segment moved past the parked events");
@@ -701,7 +690,7 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
     assert!(queue.contains("parking", &sequence).await.unwrap());
     assert!(!queue.contains("another processor", &sequence).await.unwrap());
     let oldest = queue.first("parking", &sequence).await.unwrap().unwrap();
-    assert_eq!(oldest.event.position, first.events[0].position);
+    assert_eq!(oldest.event.position, first);
     assert_eq!(oldest.event.payload, ClockEvent::Ticked { n: 1 });
     assert_eq!(oldest.cause, "cannot handle this one");
 
@@ -720,7 +709,7 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
         [(stream(2).to_string(), 1), (sequence.clone(), 1), (sequence.clone(), 2)]
     );
     assert!(queue.sequences("parking").await.unwrap().is_empty());
-    assert_eq!(second.events[0].sequence, 2);
+    assert!(second > first);
 }
 
 /// Parking joins the unit of work: it commits with it, rolls back with it,
@@ -777,7 +766,6 @@ async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
     let pool = database_or_skip!();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool));
-    let clocks = events.event_sourced::<Clock>();
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
 
     let a = events
@@ -786,12 +774,7 @@ async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
         .spawn();
     let mut last = 0;
     for id in 1..=10 {
-        last = clocks
-            .append(cqrs::Loaded::new(Clock::initial(&id)), ticks(1, 1))
-            .await
-            .unwrap()
-            .events[0]
-            .position;
+        last = commit_new::<Clock, _>(&events, id, ticks(1, 1)).await;
     }
     tokio::time::timeout(Duration::from_secs(20), a.caught_up(last))
         .await
@@ -803,12 +786,7 @@ async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
         .with_options(options(2, u32::MAX))
         .spawn();
     for id in 11..=20 {
-        last = clocks
-            .append(cqrs::Loaded::new(Clock::initial(&id)), ticks(1, 1))
-            .await
-            .unwrap()
-            .events[0]
-            .position;
+        last = commit_new::<Clock, _>(&events, id, ticks(1, 1)).await;
     }
     // `caught_up` is per instance and per owned segment: wait until b owns
     // both (their claims expire a few ms apart) and is past `last`.
@@ -896,18 +874,22 @@ impl Aggregate for Tally {
 async fn snapshots_are_kept_per_aggregate_and_revision() {
     let pool = database_or_skip!();
     let snapshots = PostgresSnapshotStore::<Tally>::new(pool.clone());
-    let tallies =
-        cqrs::EventSourced::new(PostgresEventStore::new(pool.clone(), "clocks")).with_snapshots(snapshots.clone(), 2);
-    let mut tally = cqrs::Loaded::new(Tally::initial(&1));
+    let store = PostgresEventStore::new(pool.clone(), "clocks");
+    let tallies = cqrs::AggregateLoader::new(store.clone()).with_snapshots(snapshots.clone(), 2);
+    let publisher = cqrs::InlinePublisher::new(store);
     for n in 1..=3 {
-        tally = tallies
-            .append(tally, vec![ClockEvent::Ticked { n }])
+        let tally = match tallies.load(&1).await.unwrap() {
+            Some(tally) => tally,
+            None => cqrs::Loaded::new(Tally::initial(&1)),
+        };
+        publisher
+            .commit(tally, Pending::new(vec![ClockEvent::Ticked { n }]))
             .await
-            .unwrap()
-            .aggregate;
+            .unwrap();
     }
 
-    // Taken when the stream reached version 2; the load replays only event 3.
+    // Kept by the third command's load, which replayed 2 events (the stream
+    // was at version 2); the next load replays only event 3.
     assert_eq!(snapshots.load(&1).await.unwrap(), Some((Tally { id: 1, total: 3 }, 2)));
     let loaded = tallies.load(&1).await.unwrap().unwrap();
     assert_eq!((loaded.total, loaded.version()), (6, Some(3)));
@@ -1172,18 +1154,9 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         .unwrap();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
-    let clocks = events.event_sourced::<Clock>();
     let mut last = 0;
     for id in 1..=2 {
-        let new = cqrs::Loaded::new(Clock::initial(&id));
-        last = clocks
-            .append(new, ticks(1, 5))
-            .await
-            .unwrap()
-            .events
-            .last()
-            .unwrap()
-            .position;
+        last = commit_new::<Clock, _>(&events, id, ticks(1, 5)).await;
     }
 
     // Fails once at position 3, after its insert: the transaction rolls the
@@ -1273,16 +1246,7 @@ async fn a_processing_group_commits_all_its_read_models_or_none() {
     }
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
-    let new = cqrs::Loaded::new(Clock::initial(&1));
-    let last = events
-        .event_sourced::<Clock>()
-        .append(new, ticks(1, 4))
-        .await
-        .unwrap()
-        .events
-        .last()
-        .unwrap()
-        .position;
+    let last = commit_new::<Clock, _>(&events, 1, ticks(1, 4)).await;
 
     // `Totals` writes event 2, then `Counts` fails on it: both roll back,
     // and the retry applies event 2 once to each.
@@ -1469,18 +1433,9 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         .unwrap();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
         .with_tokens(PostgresTokenStore::new(pool.clone()));
-    let clocks = events.event_sourced::<Clock>();
     let mut last = 0;
     for id in 1..=4 {
-        let new = cqrs::Loaded::new(Clock::initial(&id));
-        last = clocks
-            .append(new, ticks(1, 50))
-            .await
-            .unwrap()
-            .events
-            .last()
-            .unwrap()
-            .position;
+        last = commit_new::<Clock, _>(&events, id, ticks(1, 50)).await;
     }
 
     // Everything is stored before it starts, so the batches fill up; the

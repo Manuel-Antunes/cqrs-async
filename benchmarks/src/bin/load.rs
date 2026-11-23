@@ -23,11 +23,11 @@ use blog::{
         BlogError,
         commands::{CreatePost, RetitlePost},
     },
-    domain::PostId,
+    domain::{Post, PostId},
     infrastructure::InMemoryPostSummaryRepository,
     presentation::{BlogApi, graphql, http},
 };
-use cqrs::{CommandGateway, QuerySubscriptions};
+use cqrs::{Aggregate, CommandGateway, QuerySubscriptions};
 use cqrs_benchmarks::{
     live::{Busy, Live, Noop, settle, start_blog},
     seed_posts,
@@ -282,11 +282,10 @@ async fn fan_out(report: &mut Report, scale: &Scale) {
 
         let started = Instant::now();
         for n in 1..=events {
-            let created: Result<(), BlogError> = live
-                .posts
-                .create(&PostId(n), |post, events| post.create("fan-out", events))
-                .await;
-            created.unwrap();
+            let post = cqrs::Loaded::new(Post::initial(&PostId(n)));
+            let mut events = Vec::new();
+            post.create("fan-out", &mut events).unwrap();
+            live.commit(post, events).await.unwrap();
         }
         let committed = started.elapsed();
         for task in tasks {

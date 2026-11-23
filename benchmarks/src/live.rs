@@ -11,8 +11,8 @@ use blog::{
     domain::{Post, PostEvent},
 };
 use cqrs::{
-    EventEnvelope, EventFeed, EventHandler, EventSourced, Events, HandlerError, InMemoryEventStore, ProcessingContext,
-    ProcessorHandle, StoreError,
+    AggregateLoader, EventEnvelope, EventFeed, EventHandler, EventPublisher, Events, HandlerError, InMemoryEventStore,
+    Loaded, Pending, ProcessingContext, ProcessorHandle, StoreError,
 };
 use futures_util::Stream;
 
@@ -26,8 +26,8 @@ pub struct Live {
     pub store: Store,
     /// Broadcast, subscriptions, processors.
     events: Events<PostEvent, Store>,
-    /// Posts, broadcasting each commit.
-    pub posts: EventSourced<Post, Store, Events<PostEvent, Store>>,
+    /// Rebuilds posts.
+    pub posts: AggregateLoader<Post, Store>,
 }
 
 impl Live {
@@ -35,8 +35,18 @@ impl Live {
     pub fn new() -> Self {
         let store: Store = Arc::new(InMemoryEventStore::new());
         let events = Events::new(Arc::clone(&store));
-        let posts = events.event_sourced();
+        let posts = AggregateLoader::new(Arc::clone(&store));
         Self { store, events, posts }
+    }
+
+    /// Commits `events` to `post` through the events service: stored, then
+    /// broadcast.
+    ///
+    /// # Errors
+    ///
+    /// The store's.
+    pub async fn commit(&self, post: Loaded<Post>, events: Vec<PostEvent>) -> Result<Option<u64>, StoreError> {
+        self.events.commit(post, Pending::new(events)).await
     }
 
     /// A catch-up subscription from `after`.

@@ -129,7 +129,7 @@ typed builder:
 pub type PostStore = Arc<InMemoryEventStore<PostEvent>>;
 
 pub fn in_memory() -> (
-    Cqrs<EventSourced<Post, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
+    Cqrs<InlinePublisher<PostEvent, PostStore, impl EventProcessor<PostEvent>>, impl PostCommands, impl PostQueries>,
     Arc<InMemoryPostSummaryRepository>,
     Arc<InMemoryNotifier>,
 ) {
@@ -141,7 +141,7 @@ pub fn in_memory() -> (
         PostSummaryProjection::new(Arc::clone(&summaries)),
         NotifyOnPublish::new(Arc::clone(&notifier)),
     );
-    let blog = Cqrs::from_publisher(EventSourced::with_processor(store, processors))
+    let blog = Cqrs::from_publisher(InlinePublisher::new(store).with_processor(processors))
         .commands(PostCommandGateway::new(posts))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
@@ -151,7 +151,7 @@ pub fn in_memory() -> (
 
 - **The store is created here and shared**: the repository reads it, the
   publisher writes it.
-- **The publisher** is an `EventSourced` engine over the store; with a
+- **The publisher** is an `InlinePublisher` over the store; with a
   processing group (the tuple), it feeds each handler every committed
   event, right after the commit. It is built by hand here
   (`Cqrs::from_publisher`) because it runs the handlers inline; from part 5
@@ -191,18 +191,14 @@ fn a_command_commits_events_and_the_projection_answers_queries() {
 ```
 
 Inline, a failing handler never undoes the commit, and does not stop the
-other handlers. The save reports it:
+other handlers. The publisher hands the failure to its `on_failure` policy
+(it logs it, unless you give it another with
+`InlinePublisher::on_failure(|failure| ..)`), and the command still succeeds:
 
 ```rust
 notifier.set_down(true);
-let post = blog.publisher().load(&id).await?.unwrap();
-let mut events = Vec::new();
-post.publish(&mut events)?;
-let saved = blog.publisher().append(post, events).await?;   // the engine's low-level commit
-
-let failure = saved.processing.unwrap_err();          // NotifyOnPublish failed...
-assert_eq!(saved.events.len(), 1);                     // ...but the event is stored
-assert!(summaries.find(id).await?.unwrap().published); // and the projection still ran
+blog.commands().send(PublishPost { id }).await?;       // NotifyOnPublish failed (logged)...
+assert!(summaries.find(id).await?.unwrap().published); // ...but the event is stored and the projection ran
 ```
 
 Inline processing has no retries and no positions: fine for tests and

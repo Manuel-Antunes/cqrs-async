@@ -10,7 +10,7 @@
 //!
 //! ```
 //! use std::{future::Future, sync::Arc};
-//! use cqrs::{Appender, CommandGateway, CommandHandler, EventAppender, EventSourced, InMemoryEventStore, Loaded, StoreError, WithPublisher, testing::block_on};
+//! use cqrs::{Appender, CommandGateway, CommandHandler, AggregateLoader, EventAppender, InlinePublisher, InMemoryEventStore, Loaded, StoreError, WithPublisher, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 //! enum CounterEvent { Added(u64) }
@@ -33,11 +33,11 @@
 //! }
 //!
 //! /// Its adapter, rebuilding counters from the store.
-//! struct StoredCounters(Arc<InMemoryEventStore<CounterEvent>>);
+//! struct StoredCounters(AggregateLoader<Counter, Arc<InMemoryEventStore<CounterEvent>>>);
 //!
 //! impl Counters for StoredCounters {
 //!     async fn find(&self, id: u32) -> Result<Option<Loaded<Counter>>, StoreError> {
-//!         cqrs::load(&self.0, &id).await
+//!         self.0.load(&id).await
 //!     }
 //! }
 //!
@@ -62,8 +62,8 @@
 //! struct Commands<R> { add: AddHandler<R> }
 //!
 //! let store = Arc::new(InMemoryEventStore::new());
-//! let commands = Commands { add: AddHandler { counters: StoredCounters(Arc::clone(&store)) } }
-//!     .with_publisher(EventSourced::<Counter, _>::new(store));
+//! let commands = Commands { add: AddHandler { counters: StoredCounters(AggregateLoader::new(Arc::clone(&store))) } }
+//!     .with_publisher(InlinePublisher::new(store));
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 })), Ok(2));
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 3 })), Ok(5));
 //! ```
@@ -154,6 +154,18 @@ pub struct Pending<E> {
     pub metadata: Metadata,
     /// Checked atomically with the append, if any.
     pub condition: Option<AppendCondition>,
+}
+
+impl<E> Pending<E> {
+    /// `events` without metadata nor condition: what a test commits through
+    /// a publisher.
+    pub fn new(events: Vec<E>) -> Self {
+        Self {
+            events,
+            metadata: Metadata::new(),
+            condition: None,
+        }
+    }
 }
 
 impl<E> Appender<E> {
@@ -248,25 +260,6 @@ impl<E, P> Appender<E, P> {
         self.record(outcome)
     }
 
-    /// Takes the pending events and hands them, with a copy of the metadata
-    /// and the condition, to `append`, which stores them and returns the
-    /// position of the last one (`None` if there was nothing to store).
-    /// Records the outcome like [`commit`](Self::commit) does: for code
-    /// committing some other way.
-    ///
-    /// # Errors
-    ///
-    /// What `append` returns.
-    pub async fn save_with<F, Fut>(&mut self, append: F) -> Result<(), StoreError>
-    where
-        F: FnOnce(Pending<E>) -> Fut,
-        Fut: Future<Output = Result<Option<u64>, StoreError>>,
-    {
-        let pending = self.take();
-        let outcome = append(pending).await;
-        self.record(outcome)
-    }
-
     /// The pending events, with a copy of the metadata and the condition.
     fn take(&mut self) -> Pending<E> {
         Pending {
@@ -332,7 +325,7 @@ impl<E, P> Extend<E> for Appender<E, P> {
 ///
 /// One publisher serves every aggregate of an event type.
 /// [`Events`](crate::Events) is one (it broadcasts the commit), and so is
-/// an [`EventSourced`](crate::EventSourced) (it feeds its processing group
+/// an [`InlinePublisher`](crate::InlinePublisher) (it feeds its processing group
 /// inline); a test double implements it to record what was committed.
 pub trait EventPublisher<E: DomainEvent>: Send + Sync {
     /// Commits `pending` to `entity`'s stream; returns the position of the
