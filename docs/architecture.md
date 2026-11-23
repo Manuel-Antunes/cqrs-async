@@ -128,8 +128,10 @@ The blog wires its application twice, from the same handlers:
 - **Inline** (`blog::in_memory()`): `EventSourced::with_processor(store,
   (projection, policy))`. Handlers run right after each commit, in the
   caller's task; no runtime, deterministic, what domain and flow tests use.
-  A failing handler is reported in `Saved::processing` but never undoes the
-  commit.
+  A failing handler never undoes the commit: after a commit made by a
+  command handler the failure goes to the engine's `on_failure` policy
+  (logged at error level by default); the engine's own `append*` methods
+  return it in `Saved::processing`.
 - **Asynchronous** (`blog::start()`): `Events::new(store)`; the engine
   (`events.event_sourced()`) only broadcasts its commits, and each handler runs in its own tracking
   processor (`events.projection(p).spawn()`), with tokens, retries and a

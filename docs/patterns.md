@@ -613,7 +613,9 @@ each commit, the engine feeds the new envelopes to each handler (`handle`,
 then `committed`), in the caller's task.
 
 **Rules.** A failing handler stops seeing that batch, is reported in
-`Saved::processing`, and never undoes the commit or blocks the others. No
+handed to the `on_failure` policy (`LogFailures` by default) or, for the
+engine's own `append*`, returned in `Saved::processing`, and never undoes the
+commit or blocks the others. No
 retries, no tokens: for tests and simple applications. `Events` is a
 processor too: as the engine's processor it only broadcasts the commit.
 

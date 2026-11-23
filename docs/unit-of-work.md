@@ -194,7 +194,9 @@ An `EventSourced` engine built with `with_processor(store, handlers)` feeds its
 handlers right after each append, in the caller's task. There is no
 transaction to share (`Tx = ()`): the append itself was the commit. Each
 event goes through `handle`, then `committed`; a failure stops that
-handler for the batch and is reported in `Saved::processing`, without
+handler for the batch; the failure is handed to the engine's `on_failure`
+policy (logged by default) for commits made through a command handler, or
+returned in `Saved::processing` by the engine's own `append*` methods. No
 retries.
 
 ## The command side

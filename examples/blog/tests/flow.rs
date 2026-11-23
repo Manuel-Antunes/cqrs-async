@@ -141,6 +141,22 @@ fn a_failing_handler_neither_undoes_the_commit_nor_blocks_the_others() {
 }
 
 #[test]
+fn a_failing_policy_behind_the_gateway_does_not_fail_the_command() {
+    block_on(async {
+        let (blog, summaries, notifier) = in_memory();
+        let id = blog.commands().send(CreatePost { title: "t".into() }).await.unwrap();
+        notifier.set_down(true);
+
+        // The event is committed and the projection ran; the notification
+        // policy failed, which the engine's `on_failure` policy handles
+        // (it logs), not the command's sender.
+        blog.commands().send(PublishPost { id }).await.unwrap();
+        assert!(summaries.find(id).await.unwrap().unwrap().published);
+        assert!(notifier.sent().is_empty());
+    });
+}
+
+#[test]
 fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
     use blog::application::{projections::PostSummaryProjection, queries::PostUpdates};
     use cqrs::{EventHandler, ProcessingContext};

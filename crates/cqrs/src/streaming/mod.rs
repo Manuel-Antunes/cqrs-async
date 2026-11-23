@@ -231,7 +231,7 @@ where
         entity: crate::Loaded<A>,
         pending: crate::Pending<E>,
     ) -> impl std::future::Future<Output = Result<Option<u64>, StoreError>> + Send {
-        crate::event_sourced::publish(&self.store, self, entity, pending)
+        crate::event_sourced::publish(&self.store, self, &crate::LogFailures, entity, pending)
     }
 }
 

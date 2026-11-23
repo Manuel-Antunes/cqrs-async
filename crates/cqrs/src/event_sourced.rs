@@ -196,6 +196,38 @@ tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5);
 tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5, H6 6);
 tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5, H6 6, H7 7);
 
+/// What happens to an [`EventProcessor`] failure after a commit that went
+/// through the [`EventPublisher`] port: nobody is left to return it to (the
+/// events are stored), so it is handed to the policy. Implemented for
+/// [`LogFailures`] and for any `Fn(&ProcessingFailure)`.
+pub trait OnFailure: Send + Sync {
+    /// Called once per commit whose inline handlers failed.
+    fn failed(&self, failure: &ProcessingFailure);
+}
+
+/// The default [`OnFailure`] policy: logs the failure at error level.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogFailures;
+
+impl OnFailure for LogFailures {
+    fn failed(&self, failure: &ProcessingFailure) {
+        for failed in &failure.failures {
+            tracing::error!(
+                handler = failed.handler,
+                position = failed.position,
+                error = %failed.error,
+                "inline event handler failed after the commit; the events are stored",
+            );
+        }
+    }
+}
+
+impl<F: Fn(&ProcessingFailure) + Send + Sync> OnFailure for F {
+    fn failed(&self, failure: &ProcessingFailure) {
+        self(failure);
+    }
+}
+
 /// Event sourcing for aggregates `A`: loads them by replaying their stream
 /// (from a snapshot, if any) and commits their new events with optimistic
 /// concurrency, then hands the commit to the processing group `P`.
@@ -206,7 +238,7 @@ tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5, H6 6, H7 7);
 /// let post = posts.load(&id).await?;                            // in your repository's adapter
 /// posts.commit(post, events).await?;                            // in a handler, as EventPublisher<Post>
 /// ```
-pub struct EventSourced<A, S, P = (), N = ()> {
+pub struct EventSourced<A, S, P = (), N = (), F = LogFailures> {
     /// Where the event streams live.
     store: S,
     /// Who receives the events after each commit.
@@ -218,6 +250,9 @@ pub struct EventSourced<A, S, P = (), N = ()> {
     /// How many times [`update`](Self::update) re-runs a decision whose
     /// commit lost an optimistic-concurrency race.
     conflict_retries: u32,
+    /// What happens when an inline handler fails after a commit made through
+    /// the [`EventPublisher`] port.
+    on_failure: F,
     /// Ties the engine to one aggregate type without storing one.
     aggregate: PhantomData<fn() -> A>,
 }
@@ -239,12 +274,13 @@ impl<A, S, P> EventSourced<A, S, P> {
             snapshots: (),
             snapshot_every: 0,
             conflict_retries: DEFAULT_CONFLICT_RETRIES,
+            on_failure: LogFailures,
             aggregate: PhantomData,
         }
     }
 }
 
-impl<A, S, P, N> EventSourced<A, S, P, N> {
+impl<A, S, P, N, F> EventSourced<A, S, P, N, F> {
     /// Keeps a snapshot in `snapshots` every `every` events, so loading
     /// replays at most `every - 1` events after the newest one. Worth it for
     /// long-lived aggregates; the stream stays the source of truth.
@@ -252,7 +288,7 @@ impl<A, S, P, N> EventSourced<A, S, P, N> {
     /// # Panics
     ///
     /// If `every` is zero.
-    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> EventSourced<A, S, P, N2> {
+    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> EventSourced<A, S, P, N2, F> {
         assert!(every > 0, "snapshot every 0 events");
         EventSourced {
             store: self.store,
@@ -260,6 +296,26 @@ impl<A, S, P, N> EventSourced<A, S, P, N> {
             snapshots,
             snapshot_every: every,
             conflict_retries: self.conflict_retries,
+            on_failure: self.on_failure,
+            aggregate: PhantomData,
+        }
+    }
+
+    /// What to do when an inline handler fails after a commit made through
+    /// the [`EventPublisher`] port (a command handler's `events.commit(..)`).
+    ///
+    /// The commit stands: the events are stored, and returning the failure to
+    /// the command's sender would tell it the command failed. So the failure
+    /// goes to `policy` instead. The default, [`LogFailures`], logs it at
+    /// error level; any `Fn(&ProcessingFailure)` can replace it.
+    pub fn on_failure<F2>(self, policy: F2) -> EventSourced<A, S, P, N, F2> {
+        EventSourced {
+            store: self.store,
+            processor: self.processor,
+            snapshots: self.snapshots,
+            snapshot_every: self.snapshot_every,
+            conflict_retries: self.conflict_retries,
+            on_failure: policy,
             aggregate: PhantomData,
         }
     }
@@ -286,7 +342,7 @@ impl<A, S, P, N> EventSourced<A, S, P, N> {
 /// Retries of a decision that lost a concurrency race, unless configured.
 const DEFAULT_CONFLICT_RETRIES: u32 = 8;
 
-impl<A, S, P, N> EventSourced<A, S, P, N>
+impl<A, S, P, N, F> EventSourced<A, S, P, N, F>
 where
     A: Aggregate,
     S: EventStore<A::Event>,
@@ -578,9 +634,10 @@ where
 /// Appends `pending` to `entity`'s stream in `store`, expecting the version
 /// it was loaded at, then hands the commit to `processor`: what every
 /// publisher does. The last position, if anything was appended.
-pub(crate) async fn publish<A, S, P>(
+pub(crate) async fn publish<A, S, P, F>(
     store: &S,
     processor: &P,
+    on_failure: &F,
     entity: Loaded<A>,
     pending: Pending<A::Event>,
 ) -> Result<Option<u64>, StoreError>
@@ -588,6 +645,7 @@ where
     A: Aggregate,
     S: EventStore<A::Event>,
     P: EventProcessor<A::Event>,
+    F: OnFailure,
 {
     let expected = entity.expected();
     let condition = AppendCondition::both(entity.condition, pending.condition);
@@ -596,26 +654,29 @@ where
         .append_if(&stream, expected, pending.events, &pending.metadata, condition.as_ref())
         .await?;
     // Processing failures do not undo the commit: a tracking processor
-    // retries; inline ones are the caller's to watch.
-    let _ = processor.process(&committed).await;
+    // retries; for inline ones the failure policy decides.
+    if let Err(failure) = processor.process(&committed).await {
+        on_failure.failed(&failure);
+    }
     Ok(committed.last().map(|event| event.position))
 }
 
 /// The engine publishes every aggregate of its event type: appends, then
 /// feeds its processing group (inline).
-impl<A0, S, P, N> EventPublisher<A0::Event> for EventSourced<A0, S, P, N>
+impl<A0, S, P, N, F> EventPublisher<A0::Event> for EventSourced<A0, S, P, N, F>
 where
     A0: Aggregate,
     S: EventStore<A0::Event>,
     P: EventProcessor<A0::Event>,
     N: Send + Sync,
+    F: OnFailure,
 {
     fn commit<A: Aggregate<Event = A0::Event>>(
         &self,
         entity: Loaded<A>,
         pending: Pending<A0::Event>,
     ) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
-        publish(&self.store, &self.processor, entity, pending)
+        publish(&self.store, &self.processor, &self.on_failure, entity, pending)
     }
 }
 

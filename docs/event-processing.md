@@ -205,5 +205,7 @@ let posts = EventSourced::<Post, _, _>::with_processor(InMemoryEventStore::new()
 ```
 
 Each commit returns once every handler ran (`handle`, then `committed`);
-failures are reported in `Saved::processing` and never undo the commit.
-No runtime, no tokens, no retries: tests and simple applications.
+failures never undo the commit: a command handler's commit hands them to the
+engine's `on_failure` policy (`LogFailures` by default, or any
+`Fn(&ProcessingFailure)`), and the engine's own `append*` methods return them
+in `Saved::processing`. No runtime, no tokens, no retries: tests and simple applications.
