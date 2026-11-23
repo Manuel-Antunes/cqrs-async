@@ -62,6 +62,31 @@ impl StoredEvent {
     }
 }
 
+impl StoredEvent {
+    /// Decodes an event read as JSON text: straight into `E` when `upcaster`
+    /// does not apply to its type and version (the usual case), through
+    /// [`decode`](Self::decode) otherwise. The event, with the type name and
+    /// version it ends up at.
+    ///
+    /// # Errors
+    ///
+    /// If the payload does not decode into `E`.
+    pub fn decode_text<E: DeserializeOwned>(
+        event_type: String,
+        version: u32,
+        payload: &str,
+        upcaster: &impl Upcaster,
+    ) -> Result<(E, String, u32), StoreError> {
+        let invalid = |error: serde_json::Error| StoreError::Backend(format!("cannot decode {event_type} v{version}: {error}"));
+        if !upcaster.applies(&event_type, version) {
+            let event = serde_json::from_str(payload).map_err(invalid)?;
+            return Ok((event, event_type, version));
+        }
+        let payload = serde_json::from_str(payload).map_err(invalid)?;
+        Self { event_type, version, payload }.decode(upcaster)
+    }
+}
+
 /// Rewrites stored events from an older shape into a newer one, before they
 /// are decoded. Implemented by [`Upcast`] (one type, one version step), by
 /// `()` (nothing to do) and by tuples of up to 8, which run in order: put
@@ -69,10 +94,23 @@ impl StoredEvent {
 pub trait Upcaster: Send + Sync {
     /// Rewrites `event` in place if it applies to it, bumping its version.
     fn upcast(&self, event: &mut StoredEvent);
+
+    /// Whether [`upcast`](Self::upcast) would change an event of
+    /// `event_type` at `version`. When it would not, the store decodes the
+    /// payload straight into the event type, with no intermediate
+    /// [`Value`]. `true` (the default) is always correct, only slower.
+    fn applies(&self, event_type: &str, version: u32) -> bool {
+        let _ = (event_type, version);
+        true
+    }
 }
 
 impl Upcaster for () {
     fn upcast(&self, _: &mut StoredEvent) {}
+
+    fn applies(&self, _: &str, _: u32) -> bool {
+        false
+    }
 }
 
 /// Implements [`Upcaster`] for a tuple: each element in turn.
@@ -81,6 +119,10 @@ macro_rules! tuple_upcaster {
         impl<$($upcaster: Upcaster),+> Upcaster for ($($upcaster,)+) {
             fn upcast(&self, event: &mut StoredEvent) {
                 $(self.$index.upcast(event);)+
+            }
+
+            fn applies(&self, event_type: &str, version: u32) -> bool {
+                $(self.$index.applies(event_type, version))||+
             }
         }
     };
@@ -119,6 +161,10 @@ impl<F: Fn(&mut Value) + Send + Sync> Upcaster for Upcast<F> {
             event.version += 1;
         }
     }
+
+    fn applies(&self, event_type: &str, version: u32) -> bool {
+        event_type == self.event_type && version == self.from
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +172,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn events_no_step_applies_to_decode_straight_from_text() {
+        let chain = (upcast("created", 1, |p| p["tags"] = json!([])), upcast("created", 2, |p| p["draft"] = json!(true)));
+        assert!(chain.applies("created", 1) && chain.applies("created", 2));
+        assert!(!chain.applies("created", 3) && !chain.applies("published", 1) && !().applies("created", 1));
+
+        let (current, _, version): (Value, _, _) = StoredEvent::decode_text("created".into(), 3, r#"{"a":1}"#, &chain).unwrap();
+        assert_eq!((current, version), (json!({ "a": 1 }), 3));
+        let (old, _, version): (Value, _, _) = StoredEvent::decode_text("created".into(), 1, "{}", &chain).unwrap();
+        assert_eq!((old, version), (json!({ "tags": [], "draft": true }), 3));
+    }
 
     #[test]
     fn steps_apply_in_order_and_only_to_their_type_and_version() {

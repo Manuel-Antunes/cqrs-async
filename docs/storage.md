@@ -51,14 +51,14 @@ let snapshots = PostgresSnapshotStore::<Post>::new(pool.clone()).with_revision(1
 let events = Events::new(store).with_tokens(tokens);
 ```
 
-Events need `Serialize + DeserializeOwned` (payloads are `jsonb`). Every
+Events need `Serialize + DeserializeOwned` (payloads are stored as `json`). Every
 process sharing the database shares the log, the tokens and the claims.
 
 ### Tables
 
 | Table | |
 |---|---|
-| `cqrs_events` | one row per event: position (PK), stream type/id, sequence (unique per stream), event type and version, payload and metadata (`jsonb`), `recorded_at` |
+| `cqrs_events` | one row per event: position (PK), stream type/id, sequence (unique per stream), event type and version, payload and metadata (`json`: stored as written, returned as is), `recorded_at` |
 | `cqrs_event_tags (tag, position)` | the tag index criteria read through |
 | `cqrs_snapshots` | newest snapshot per stream, with its revision |
 | `cqrs_tokens (processor, segment)` | position, gaps, owner, claim expiry, replay bound |
@@ -155,10 +155,29 @@ let store = PostgresEventStore::<PostEvent>::new(pool).with_upcasters((
 ```
 
 Each upcaster takes the JSON of one `(type, version)` to the next version;
-a tuple chains them in order. On read, a payload runs through every
-upcaster that matches its type and version, then is decoded. Upcasters
-are the `json` feature of the core (`StoredEvent`, `Upcaster`, `upcast`),
-shared by any store that keeps JSON.
+a tuple chains them in order. On read, the store asks the chain whether any
+step applies to the event's type and version (`Upcaster::applies`, a
+comparison of a name and an integer):
+
+- **none applies** (every event already at its current version, the usual
+  case): the stored text is decoded straight into the event type
+  (`serde_json::from_str`), with no intermediate document;
+- **some apply**: the text is parsed into a `serde_json::Value`, each
+  matching step rewrites it, then it is decoded.
+
+So upcasting costs nothing for current events. Upcasters are the `json`
+feature of the core (`StoredEvent`, `Upcaster`, `upcast`), shared by any
+store that keeps JSON.
+
+### How this compares
+
+| | cqrs-es 0.5 | Axon Framework 5 | here |
+|---|---|---|---|
+| Format | JSON, fixed | pluggable `Converter` (Jackson by default; Avro, CBOR) | JSON, fixed |
+| Type and version | `String` type + semver `String` | `MessageType`: qualified name + version | `#[event(name, version)]`: `&'static str` + `u32` |
+| Upcasting | `Vec<Box<dyn EventUpcaster>>`, the semver parsed per event and upcaster | declarative event transformation on read (5.2) | static tuple of `upcast(type, version, fn)` |
+| Decoding on read | text → `Value` → upcasters → type, always | lazily, when a handler asks for a type | text → type directly; through `Value` only when an upcaster applies |
+| PostgreSQL column | `json` | not documented | `json` |
 
 ## Writing a store
 

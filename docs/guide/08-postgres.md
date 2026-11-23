@@ -15,7 +15,7 @@ cqrs-postgres = { path = "../../crates/cqrs-postgres" }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
 ```
 
-Events must be serializable (payloads are `jsonb`): `PostEvent` derives
+Events must be serializable (payloads are stored as `json`): `PostEvent` derives
 serde since part 1.
 
 ## Two stores, one pool

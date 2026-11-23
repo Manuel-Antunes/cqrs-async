@@ -28,7 +28,7 @@ Latest run (Apple M4 Pro, PostgreSQL 17 in Docker on the same machine,
 | read model rebuild, events/s | 32257 | 1548 | 20.8× |
 | read model after the run: events lost | 0 | 258 | |
 | read model after the run: money lost | 0 | 1324 | |
-| 5000-event aggregate, full replay, p50 / p99 | 5.6 / 8.1 ms | 5.9 / 7.1 ms | 0.95× / 1.14× |
+| 5000-event aggregate, full replay, p50 / p99 (after the `json` change, A/B) | 4.0 / 7.1 ms | 5.1 / 7.3 ms | 0.79× / 0.97× |
 | 5000-event aggregate, snapshot every 100, p50 / p99 | 1.4 / 3.6 ms | 2.8 / 7.5 ms | 0.51× / 0.48× |
 
 Every run is in `benchmarks/results/versus.md`, with the setup and how
@@ -47,6 +47,16 @@ each number is measured.
   a transaction with its token.
 - **Rebuild.** A processor reads the log in pages through one shared
   reader and routes events to 8 segments in parallel.
+
+### Serialization
+
+Events are stored as `json` (text, as written) and decoded straight into
+the event type unless an upcaster applies. Against the earlier `jsonb`
+columns with a `Value` per event (A/B, same machine and load): a full
+replay of a 5,000-event aggregate went from 5.40 to 4.02 ms at the median
+and from 8.61 to 7.10 ms at p99, against cqrs-es's 5.12 and 7.32 ms in the
+same runs. Details in `benchmarks/results/versus.md` and
+[Storage § Upcasting](storage.md#upcasting).
 
 ### Batches
 

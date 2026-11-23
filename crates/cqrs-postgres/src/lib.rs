@@ -91,6 +91,7 @@ const SCHEMA: &str = concat!(
     "SELECT pg_advisory_xact_lock(7239048102394);\n",
     include_str!("../migrations/0001_cqrs.sql"),
     include_str!("../migrations/0002_parallel_appends.sql"),
+    include_str!("../migrations/0003_json_payloads.sql"),
 );
 
 /// Any database failure, as the core sees it.

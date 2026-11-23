@@ -68,8 +68,10 @@ struct EventRow {
     sequence: i64,
     event_type: String,
     event_version: i32,
-    payload: serde_json::Value,
-    metadata: serde_json::Value,
+    /// As stored (`json`): decoded straight into the event type.
+    payload: String,
+    /// As stored (`json`).
+    metadata: String,
     recorded_us: i64,
 }
 
@@ -81,7 +83,8 @@ macro_rules! select_events {
     ($($where:literal)+, $($arg:expr),* $(,)?) => {
         sqlx::query_as!(
             EventRow,
-            "SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata, \
+            "SELECT position, stream_type, stream_id, sequence, event_type, event_version, \
+             payload::text AS \"payload!\", metadata::text AS \"metadata!\", \
              (extract(epoch FROM recorded_at) * 1000000)::bigint AS \"recorded_us!\" FROM cqrs_events WHERE "
             $(+ $where)+,
             $($arg),*
@@ -232,7 +235,7 @@ where
             SELECT s.xmin AS "xmin!", s.xmax AS "xmax!",
                    e.position AS "position?", e.stream_type AS "stream_type?", e.stream_id AS "stream_id?",
                    e.sequence AS "sequence?", e.event_type AS "event_type?", e.event_version AS "event_version?",
-                   e.payload AS "payload?", e.metadata AS "metadata?", e.recorded_us AS "recorded_us?"
+                   e.payload::text AS "payload?", e.metadata::text AS "metadata?", e.recorded_us AS "recorded_us?"
             FROM snapshot s LEFT JOIN LATERAL (
                 (SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata,
                         (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us
@@ -316,14 +319,14 @@ async fn head<'c>(executor: impl PgExecutor<'c>) -> Result<u64, StoreError> {
 
 /// A row as an envelope, upcast to the current shape.
 fn envelope<E: DeserializeOwned>(row: EventRow, upcaster: &impl Upcaster) -> Result<EventEnvelope<E>, StoreError> {
-    let stored = StoredEvent { event_type: row.event_type, version: row.event_version as u32, payload: row.payload };
-    let (payload, event_type, event_version) = stored.decode(upcaster)?;
+    let (payload, event_type, event_version) =
+        StoredEvent::decode_text(row.event_type, row.event_version as u32, &row.payload, upcaster)?;
     Ok(EventEnvelope {
         position: row.position as u64,
         stream: StreamId::new(row.stream_type, row.stream_id),
         sequence: row.sequence as u64,
         recorded_at: from_micros(row.recorded_us),
-        metadata: serde_json::from_value(row.metadata).map_err(backend)?,
+        metadata: serde_json::from_str(&row.metadata).map_err(backend)?,
         payload,
         event_type,
         event_version,
@@ -403,7 +406,7 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
             (position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)
         SELECT positions.position, $1, $2, allowed.version + batch.n,
                batch.item->>'type', (batch.item->>'version')::integer, batch.item->'payload', $6
-        FROM allowed, positions, jsonb_array_elements($5) WITH ORDINALITY AS batch(item, n)
+        FROM allowed, positions, json_array_elements($5::json) WITH ORDINALITY AS batch(item, n)
         WHERE positions.n = batch.n
         RETURNING position AS "position!", sequence AS "sequence!", (extract(epoch FROM recorded_at) * 1000000)::bigint AS "recorded_us!""#,
         stream.aggregate_type(),
