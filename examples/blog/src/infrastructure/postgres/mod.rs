@@ -18,7 +18,7 @@ mod post_repository;
 /// The read model.
 mod post_summaries;
 
+pub use cqrs_sea_orm::SeaOrm;
 pub use migration::Migrator;
 pub use post_repository::SeaOrmPostRepository;
 pub use post_summaries::SeaOrmPostSummaries;
-pub use cqrs_sea_orm::SeaOrm;

@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use cqrs::{Cqrs, Events, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Intercepted};
-use cqrs_postgres::{PostgresEventStore, PostgresTokenStore, PostgresTransactions, sqlx::PgPool};
+use cqrs_postgres::sqlx::PgPool;
 use sea_orm::{DbErr, SqlxPostgresConnector};
 use sea_orm_migration::MigratorTrait;
 
@@ -170,7 +170,7 @@ pub fn start_in_memory()
 
 /// The post events on PostgreSQL: the store keeps them in the log `posts`,
 /// the processors' tokens and units of work are the database's.
-pub type PgPostEvents = Events<PostEvent, PostgresEventStore<PostEvent>, PostgresTokenStore, PostgresTransactions>;
+pub type PgPostEvents = cqrs_postgres::PgEvents<PostEvent>;
 
 /// Wires and starts the blog on PostgreSQL, with SeaORM: runs the blog's
 /// migrations (the library's tables among them), then the same unit as
@@ -192,9 +192,7 @@ pub async fn start(
 ) -> Result<Running<impl PostCommands, impl PostQueries + PostSubscriptions, SeaOrmPostSummaries, PgPostEvents>, DbErr>
 {
     Migrator::up(&SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone()), None).await?;
-    let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()))
-        .with_transactions(PostgresTransactions::new(pool.clone()));
+    let events = cqrs_postgres::Postgres::new(pool.clone()).events::<PostEvent>("posts");
     let updates = Arc::new(PostUpdates::default());
     let summaries = Arc::new(SeaOrmPostSummaries::new(pool.clone()));
     let notifier = Arc::new(InMemoryNotifier::default());

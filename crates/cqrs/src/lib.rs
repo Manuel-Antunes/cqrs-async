@@ -109,6 +109,8 @@ pub use streaming::{
 };
 pub use token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
 pub use transaction::TransactionManager;
+#[cfg(feature = "tokio")]
+pub use unit::Units;
 pub use unit::{Cqrs, CqrsBuilder};
 #[cfg(feature = "json")]
 pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};

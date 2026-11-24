@@ -121,3 +121,60 @@ async fn each_namespace_runs_on_its_own_and_only_read_models_replay() {
     assert_eq!(*projection.alerted.lock().unwrap(), [1, 2, 3], "not sent twice");
     running.stop().await;
 }
+
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+enum Rang {
+    Ring,
+}
+
+#[cqrs::projection(name = "bell", events = Rang, namespaces("rings"))]
+#[derive(Default)]
+struct BellProjection {
+    rings: std::sync::atomic::AtomicU64,
+}
+
+#[cqrs::event_handler(namespace = "rings")]
+impl EventHandler for BellProjection {
+    async fn handle(&self, _: &EventEnvelope<Rang>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+        self.rings.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// One unit per aggregate root, each on its own log, run together: a tuple
+/// of units settles and stops as one.
+#[tokio::test(start_paused = true)]
+async fn units_of_several_roots_run_together() {
+    use cqrs::{Cqrs, Units};
+    let (clock, bell) = (
+        std::sync::Arc::new(ClockProjection::default()),
+        std::sync::Arc::new(BellProjection::default()),
+    );
+    clock.alerts_up.store(true, Ordering::SeqCst);
+    let clocks = Events::new(InMemoryEventStore::new());
+    let bells = Events::new(InMemoryEventStore::new());
+    let app = (
+        Cqrs::new(clocks.clone())
+            .projection(std::sync::Arc::clone(&clock))
+            .build(),
+        Cqrs::new(bells.clone())
+            .projection(std::sync::Arc::clone(&bell))
+            .build(),
+    );
+    tick(&clocks, 1, 2).await;
+    bells
+        .store()
+        .append(
+            &mut (),
+            &StreamId::new("bell", "1"),
+            ExpectedVersion::Any,
+            vec![Rang::Ring],
+            &Metadata::new(),
+        )
+        .await
+        .unwrap();
+    app.settled().await;
+    assert_eq!(clock.counted.lock().unwrap().len(), 2);
+    assert_eq!(bell.rings.load(Ordering::SeqCst), 1);
+    app.stop().await;
+}

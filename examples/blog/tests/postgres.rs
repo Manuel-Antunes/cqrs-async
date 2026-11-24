@@ -28,15 +28,12 @@ use blog::{
     infrastructure::{SeaOrmPostRepository, SeaOrmPostSummaries, postgres::Migrator},
 };
 use cqrs::{
-    Appender, CommandGateway, EventChain, EventEnvelope, EventInterceptor, Events, HandlerError, Intercepted, New,
+    Appender, CommandGateway, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, New,
     ProcessingContext, QueryGateway, StoreError, TrackingOptions,
 };
-use cqrs_postgres::{
-    PostgresEventStore, PostgresTokenStore, PostgresTransactions,
-    sqlx::{
-        self, PgPool,
-        postgres::{PgConnectOptions, PgPoolOptions},
-    },
+use cqrs_postgres::sqlx::{
+    self, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
 };
 use sea_orm::SqlxPostgresConnector;
 use sea_orm_migration::MigratorTrait;
@@ -134,9 +131,7 @@ async fn the_blog_runs_on_postgres_and_a_restart_picks_up_where_it_was() {
 
 /// The post events on PostgreSQL, as the blog wires them.
 fn post_events(pool: &PgPool) -> blog::PgPostEvents {
-    Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()))
-        .with_transactions(PostgresTransactions::new(pool.clone()))
+    cqrs_postgres::Postgres::new(pool.clone()).events("posts")
 }
 
 /// What a command's unit of work does, by hand: opens the transaction, has

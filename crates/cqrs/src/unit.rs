@@ -183,6 +183,79 @@ where
     }
 }
 
+/// Units that run together, one per aggregate root: a tuple of them is one
+/// (`(posts, users).settled().await`), as is each [`Cqrs`].
+#[cfg(feature = "tokio")]
+pub trait Units: Send + Sync {
+    /// Stops every processor of every unit, each after its current event.
+    fn stop(&self) -> impl std::future::Future<Output = ()> + Send;
+
+    /// Returns once every unit handled what was committed to it before the
+    /// call.
+    fn settled(&self) -> impl std::future::Future<Output = ()> + Send;
+}
+
+#[cfg(feature = "tokio")]
+impl<C, Q, Ev, S, T, M> Units for Cqrs<C, Q, Events<Ev, S, T, M>>
+where
+    C: Send + Sync,
+    Q: Send + Sync,
+    Ev: DomainEvent,
+    S: ReadLog<Ev> + Clone + 'static,
+    T: Send + Sync,
+    M: Send + Sync,
+{
+    fn stop(&self) -> impl std::future::Future<Output = ()> + Send {
+        Cqrs::stop(self)
+    }
+
+    fn settled(&self) -> impl std::future::Future<Output = ()> + Send {
+        Cqrs::settled(self)
+    }
+}
+
+/// A unit without events (inline processing): settled once a command
+/// returns.
+#[cfg(feature = "tokio")]
+impl<C: Send + Sync, Q: Send + Sync> Units for Cqrs<C, Q, ()> {
+    fn stop(&self) -> impl std::future::Future<Output = ()> + Send {
+        Cqrs::stop(self)
+    }
+
+    async fn settled(&self) {}
+}
+
+/// Implements [`Units`] for a tuple: each in turn.
+#[cfg(feature = "tokio")]
+macro_rules! tuple_units {
+    ($($unit:ident $index:tt),+) => {
+        impl<$($unit: Units),+> Units for ($($unit,)+) {
+            async fn stop(&self) {
+                $(self.$index.stop().await;)+
+            }
+
+            async fn settled(&self) {
+                $(self.$index.settled().await;)+
+            }
+        }
+    };
+}
+
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2, D 3);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2, D 3, F 4);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5, H 6);
+#[cfg(feature = "tokio")]
+tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
+
 /// Builds a [`Cqrs`] unit step by step; each step's type says what is
 /// set. `C` is the commands, `Q` the queries, `E` the events and `U` the
 /// query update emitters, `()` until set.

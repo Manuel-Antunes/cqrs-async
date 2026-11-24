@@ -7,6 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# `Postgres::events`: the events service of a log, its processors running on
+# Tokio (as sqlx does here).
+default = ["tokio"]
+tokio = ["cqrs/tokio"]
+
 [dependencies]
 cqrs = { workspace = true, default-features = false, features = ["json"] }
 serde = "1"

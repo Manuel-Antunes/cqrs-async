@@ -8,12 +8,15 @@
 //! the processor's token.
 //!
 //! ```text
-//! let pool = PgPool::connect(&url).await?;
-//! cqrs_postgres::migrate(&pool).await?;
-//! let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
-//!     .with_tokens(PostgresTokenStore::new(pool.clone()))
-//!     .with_transactions(PostgresTransactions::new(pool));
+//! let pg = cqrs_postgres::Postgres::new(PgPool::connect(&url).await?);
+//! pg.migrate().await?;                                   // or MIGRATIONS, in your tool
+//! let posts = Cqrs::new(pg.events::<PostEvent>("posts")) // one log per aggregate root
+//!     .commands(..).projection(..).build();
+//! let users = Cqrs::new(pg.events::<UserEvent>("users")).build();
 //! ```
+//!
+//! [`Postgres`] is only a shortcut: the same by hand is
+//! `Events::new(PostgresEventStore::new(pool, "posts")).with_tokens(PostgresTokenStore::new(pool)).with_transactions(PostgresTransactions::new(pool))`.
 //!
 //! # Global order (Axon's JDBC design)
 //!
@@ -81,6 +84,74 @@ pub use sqlx;
 
 use cqrs::StoreError;
 use sqlx::PgPool;
+
+/// The events service of one log over PostgreSQL: its store, the tokens
+/// and the transactions its processors (and commands) run in.
+#[cfg(feature = "tokio")]
+pub type PgEvents<E, U = ()> = cqrs::Events<E, PostgresEventStore<E, U>, PostgresTokenStore, PostgresTransactions>;
+
+/// The infrastructure every aggregate root of an application shares on one
+/// database, defined once: the pool, the token store and the transactions.
+/// Each root gets its own log ([`events`](Self::events)); cloning is cheap
+/// (handles over the pool).
+#[derive(Clone)]
+pub struct Postgres {
+    /// The connections.
+    pool: PgPool,
+    /// The processors' tokens, shared by every log (keyed by processor).
+    tokens: PostgresTokenStore,
+    /// The units of work, of processors and commands.
+    transactions: PostgresTransactions,
+}
+
+impl Postgres {
+    /// The infrastructure over `pool`.
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            tokens: PostgresTokenStore::new(pool.clone()),
+            transactions: PostgresTransactions::new(pool.clone()),
+            pool,
+        }
+    }
+
+    /// The pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    /// The store of the log `log`.
+    pub fn store<E>(&self, log: &str) -> PostgresEventStore<E> {
+        PostgresEventStore::new(self.pool.clone(), log)
+    }
+
+    /// The token store.
+    pub fn tokens(&self) -> &PostgresTokenStore {
+        &self.tokens
+    }
+
+    /// The transaction manager.
+    pub fn transactions(&self) -> &PostgresTransactions {
+        &self.transactions
+    }
+
+    /// The events service of the log `log`: what `Cqrs::new` takes for one
+    /// aggregate root.
+    #[cfg(feature = "tokio")]
+    pub fn events<E>(&self, log: &str) -> PgEvents<E> {
+        cqrs::Events::new(self.store(log))
+            .with_tokens(self.tokens.clone())
+            .with_transactions(self.transactions.clone())
+    }
+
+    /// Runs the [`MIGRATIONS`] (see [`migrate`]).
+    ///
+    /// # Errors
+    ///
+    /// If the database refuses the statements.
+    pub async fn migrate(&self) -> Result<(), StoreError> {
+        migrate(&self.pool).await
+    }
+}
 
 /// The schema, as SQL migrations in order (name, statements): for the
 /// application's own migration tool (`sqlx migrate`, `sea-orm-migration`,
