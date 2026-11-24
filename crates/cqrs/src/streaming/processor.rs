@@ -535,41 +535,78 @@ where
         progress: Arc<Progress>,
         mut stop: watch::Receiver<bool>,
     ) {
-        if let Some(mut inbox) = inbox {
-            let batch_size = self.options.batch_size.max(1);
-            let mut received = Vec::with_capacity(batch_size);
-            let mut batch = Vec::with_capacity(batch_size);
-            loop {
-                let next = tokio::select! {
-                    _ = stop.changed() => return,
-                    next = inbox.recv() => next,
-                };
-                // Closed: detached by the reader (or it stopped). Read alone.
-                let Some(first) = next else { break };
-                received.push(first);
-                // What is already waiting, never waiting for more.
-                while received.len() < batch_size {
-                    let Ok(next) = inbox.try_recv() else { break };
-                    received.push(next);
-                }
-                let count = received.len() as u64;
-                for (event, read) in received.drain(..) {
-                    if !cursor.covers(event.position) {
-                        // What the reader saw up to this event, and what this
-                        // segment had seen before it was routed.
-                        let seen = cursor.union(&read);
-                        cursor.clone_from(&seen);
-                        batch.push((event, seen));
-                    }
-                }
-                if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await {
-                    return;
-                }
-                batch.clear();
-                done.fetch_add(count, Ordering::Release);
-            }
+        if let Some(inbox) = inbox
+            && !self
+                .work_routed(&owner, segment, &mut cursor, inbox, &done, &progress, &mut stop)
+                .await
+        {
+            return;
         }
+        self.work_alone(&owner, segment, count, cursor, &progress, &mut stop)
+            .await;
+    }
 
+    /// The routed mode: handles what the shared reader queues in `inbox`,
+    /// in batches of what is already there, moving `cursor`. `true` once
+    /// detached (the inbox closed): read alone from `cursor`; `false`:
+    /// stop.
+    #[allow(clippy::too_many_arguments)]
+    async fn work_routed(
+        &self,
+        owner: &str,
+        segment: u32,
+        cursor: &mut Cursor,
+        mut inbox: mpsc::Receiver<(Arc<EventEnvelope<E>>, Cursor)>,
+        done: &AtomicU64,
+        progress: &Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> bool {
+        let batch_size = self.options.batch_size.max(1);
+        let mut received = Vec::with_capacity(batch_size);
+        let mut batch = Vec::with_capacity(batch_size);
+        loop {
+            let next = tokio::select! {
+                _ = stop.changed() => return false,
+                next = inbox.recv() => next,
+            };
+            // Closed: detached by the reader (or it stopped). Read alone.
+            let Some(first) = next else { break };
+            received.push(first);
+            // What is already waiting, never waiting for more.
+            while received.len() < batch_size {
+                let Ok(next) = inbox.try_recv() else { break };
+                received.push(next);
+            }
+            let count = received.len() as u64;
+            for (event, read) in received.drain(..) {
+                if !cursor.covers(event.position) {
+                    // What the reader saw up to this event, and what this
+                    // segment had seen before it was routed.
+                    let seen = cursor.union(&read);
+                    cursor.clone_from(&seen);
+                    batch.push((event, seen));
+                }
+            }
+            if !self.handle_batch(&batch, segment, owner, progress, stop).await {
+                return false;
+            }
+            batch.clear();
+            done.fetch_add(count, Ordering::Release);
+        }
+        true
+    }
+
+    /// The autonomous mode: reads the log from `cursor` on its own,
+    /// handling this segment's events in batches, until stopped.
+    async fn work_alone(
+        &self,
+        owner: &str,
+        segment: u32,
+        count: u32,
+        mut cursor: Cursor,
+        progress: &Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) {
         let batch_size = self.options.batch_size.max(1);
         let mut batch = Vec::with_capacity(batch_size);
         let mut backoff = Backoff::new(&self.options);
@@ -590,7 +627,7 @@ where
                         // so the processor's overall progress keeps moving.
                         () = tokio::time::sleep(IDLE_FLUSH), if unsaved > 0 => {
                             unsaved = 0;
-                            if !self.store_position(segment, &owner, &cursor).await {
+                            if !self.store_position(segment, owner, &cursor).await {
                                 return;
                             }
                             continue;
@@ -601,7 +638,7 @@ where
                     Some(Ok(next)) => next,
                     Some(Err(error)) => {
                         tracing::warn!(processor = %self.name, segment, %error, "cannot read events");
-                        if backoff.wait(&mut stop).await {
+                        if backoff.wait(stop).await {
                             return;
                         }
                         continue 'subscribe; // resume from the last cursor
@@ -622,8 +659,8 @@ where
                         unsaved += 1;
                         if unsaved >= 256 {
                             unsaved = 0;
-                            if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await
-                                || !self.store_position(segment, &owner, &seen).await
+                            if !self.handle_batch(&batch, segment, owner, progress, stop).await
+                                || !self.store_position(segment, owner, &seen).await
                             {
                                 return;
                             }
@@ -643,7 +680,7 @@ where
                         None => break,
                     }
                 }
-                if !self.handle_batch(&batch, segment, &owner, &progress, &mut stop).await {
+                if !self.handle_batch(&batch, segment, owner, progress, stop).await {
                     return;
                 }
                 batch.clear();
