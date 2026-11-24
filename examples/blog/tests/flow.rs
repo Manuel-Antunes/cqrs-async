@@ -174,17 +174,31 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
-    use cqrs::{InMemoryEventStore, Metadata, dispatch_command};
+    use cqrs::{Appender, CommandHandler, InMemoryEventStore, Metadata, dispatch_command};
 
     block_on(async {
-        // A handler holds its repository; the unit of work is the caller's.
+        // A handler is a method of the gateway: called with an appender, it
+        // decides and records, and nothing is written.
         let store = InMemoryEventStore::new();
-        let handler = CreatePostHandler::new(Arc::new(EventSourcedPostRepository::new(store.clone())));
-        let unit = InlinePublisher::new(store);
-        let id = dispatch_command(&handler, CreatePost { title: "direct".into() }, Metadata::new(), &unit)
+        let gateway = PostCommandGateway::new(EventSourcedPostRepository::new(store.clone()), ());
+        let mut events = Appender::new();
+        let id = gateway
+            .handle(&CreatePost { title: "direct".into() }, &mut events, &mut ())
             .await
             .unwrap();
-        assert_eq!(id, PostId(1));
+        assert_eq!((id, events.writes().len()), (PostId(1), 1));
+
+        // In a unit of work of the caller's: it commits (the repository
+        // handed out id 1 already, to the run above).
+        let unit = InlinePublisher::new(store);
+        let id = dispatch_command(&gateway, CreatePost { title: "direct".into() }, Metadata::new(), &unit)
+            .await
+            .unwrap();
+        assert_eq!(id, PostId(2));
+        assert_eq!(
+            dispatch_command(&gateway, PublishPost { id }, Metadata::new(), &unit).await,
+            Ok(())
+        );
     });
 }
 
@@ -198,19 +212,20 @@ fn components_depend_on_gateway_ports() {
 }
 
 #[test]
-fn a_gateway_can_be_written_by_hand_without_the_derive() {
+fn a_gateway_can_be_written_by_hand_without_the_attribute() {
     use blog::{
         application::projections::PostProjection,
         domain::PostId,
         infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository},
     };
-    use cqrs::{Dispatch, Handler, InMemoryEventStore, Metadata, dispatch_command};
+    use cqrs::{Dispatch, InMemoryEventStore, Metadata, QueryHandler, dispatch_command};
 
-    /// What `#[derive(Gateway)]` writes, one `Dispatch` impl per message.
+    /// What `#[command_gateway]` / `#[query_gateway]` write, one `Dispatch`
+    /// impl per message: here commands and queries in one gateway, over the
+    /// blog's handlers.
     struct ByHand<R, U> {
-        create: CreatePostHandler<R>,
-        publish: PublishPostHandler<R>,
-        find: FindPostHandler<InMemoryPostSummaryRepository>,
+        commands: PostCommandGateway<R, ()>,
+        queries: PostQueryGateway<InMemoryPostSummaryRepository>,
         unit: U,
     }
 
@@ -220,7 +235,7 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
         U: cqrs::UnitOfWork<blog::domain::PostEvent, cqrs::InTransaction<R::Tx>>,
     {
         async fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> Result<PostId, BlogError> {
-            dispatch_command(&self.create, message, metadata, &self.unit).await
+            dispatch_command(&self.commands, message, metadata, &self.unit).await
         }
     }
 
@@ -230,7 +245,7 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
         U: cqrs::UnitOfWork<blog::domain::PostEvent, cqrs::InTransaction<R::Tx>>,
     {
         async fn dispatch_with(&self, message: PublishPost, metadata: Metadata) -> Result<(), BlogError> {
-            dispatch_command(&self.publish, message, metadata, &self.unit).await
+            dispatch_command(&self.commands, message, metadata, &self.unit).await
         }
     }
 
@@ -240,7 +255,7 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
             message: FindPost,
             metadata: Metadata,
         ) -> Result<Option<blog::application::queries::PostSummary>, BlogError> {
-            self.find.handle_with(message, metadata).await
+            self.queries.handle_with(message, metadata).await
         }
     }
 
@@ -251,11 +266,9 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
             summaries.clone(),
             Arc::new(InMemoryNotifier::default()),
         ));
-        let posts = Arc::new(EventSourcedPostRepository::new(store));
         let gateway = ByHand {
-            create: CreatePostHandler::new(Arc::clone(&posts)),
-            publish: PublishPostHandler::new(posts),
-            find: FindPostHandler::new(summaries),
+            commands: PostCommandGateway::new(EventSourcedPostRepository::new(store), ()),
+            queries: PostQueryGateway::new(summaries),
             unit: publisher,
         };
 
@@ -272,32 +285,19 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
 }
 
 #[test]
-fn the_command_and_query_enums_route_each_variant_to_its_handler() {
+fn commands_and_queries_cross_the_wire_as_their_own_types() {
     block_on(async {
         let (blog, _, _) = in_memory();
 
-        // As a transport would: deserialized, then sent as one message type.
-        let created: PostCommand = serde_json::from_str(r#"{"CreatePost": {"title": "Over the wire"}}"#).unwrap();
-        let PostCommandOutput::CreatePost(id) = blog.commands().send(created).await.unwrap() else {
-            panic!("a CreatePost answers with its id");
-        };
-        let publish = PostCommand::from(PublishPost { id });
-        assert_eq!(
-            blog.commands().send(publish).await,
-            Ok(PostCommandOutput::PublishPost(()))
-        );
-        // Errors come back as the enum's error.
-        let again = blog.commands().send(PostCommand::from(PublishPost { id })).await;
+        // As a transport would: deserialized, then sent.
+        let created: CreatePost = serde_json::from_str(r#"{"title": "Over the wire"}"#).unwrap();
+        let id = blog.commands().send(created).await.unwrap();
+        assert_eq!(blog.commands().send(PublishPost { id }).await, Ok(()));
+        let again = blog.commands().send(PublishPost { id }).await;
         assert_eq!(again, Err(BlogError::Domain(PostError::AlreadyPublished)));
 
-        let found = blog.queries().query(PostQuery::from(FindPost { id })).await.unwrap();
-        let PostQueryOutput::FindPost(Some(summary)) = found else {
-            panic!("the post is projected in-process");
-        };
-        assert!(summary.published);
-        assert_eq!(
-            serde_json::to_string(&PostCommand::from(PublishPost { id })).unwrap(),
-            r#"{"PublishPost":{"id":1}}"#
-        );
+        let found = blog.queries().query(FindPost { id }).await.unwrap();
+        assert!(found.is_some_and(|summary| summary.published));
+        assert_eq!(serde_json::to_string(&PublishPost { id }).unwrap(), r#"{"id":1}"#);
     });
 }

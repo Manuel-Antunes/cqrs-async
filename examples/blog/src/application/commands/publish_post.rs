@@ -1,9 +1,10 @@
-use std::sync::Arc;
-
 use cqrs::{Appender, CommandHandler, NotFound};
 
 use crate::{
-    application::{BlogError, commands::PostRepository},
+    application::{
+        BlogError,
+        commands::{PostCommandGateway, PostRepository},
+    },
     domain::{PostEvent, PostId},
 };
 
@@ -15,22 +16,10 @@ pub struct PublishPost {
     pub id: PostId,
 }
 
-/// Handles [`PublishPost`]: loads the post, lets the domain publish it and
-/// commits the result; nothing is committed if the domain refuses.
-pub struct PublishPostHandler<R> {
-    /// Where posts are found and kept.
-    posts: Arc<R>,
-}
-
-impl<R> PublishPostHandler<R> {
-    /// A handler over `posts`.
-    pub fn new(posts: Arc<R>) -> Self {
-        Self { posts }
-    }
-}
-
+/// Loads the post, lets the domain publish it and saves the result;
+/// nothing is committed if the domain refuses.
 #[cqrs::command_handler]
-impl<R: PostRepository> CommandHandler for PublishPostHandler<R> {
+impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P> {
     async fn handle(
         &self,
         command: &PublishPost,

@@ -68,14 +68,18 @@ impl<N: SnapshotStore<OurAccount>> Accounts for EventSourcedAccounts<N> {
     }
 }
 
-pub struct ExecuteHandler<R> {
+/// The bank's commands: one, `Execute`.
+#[cqrs::command_gateway(handles(Execute))]
+pub struct Bank<R, P> {
     accounts: R,
+    #[gateway(unit)]
+    events: P,
 }
 
 /// Without a transaction: the account's events are appended in one
 /// statement once the handler returns (`Autocommit`).
 #[cqrs::command_handler]
-impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
+impl<R: Accounts, P> CommandHandler<Execute> for Bank<R, P> {
     async fn handle(&self, command: &Execute, events: &mut Appender<AccountEvent>) -> Result<(), BankError> {
         // An account starts empty: `Open` is decided on that state.
         let account =
@@ -91,14 +95,6 @@ impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
     fn conflict_retries(&self) -> u32 {
         0
     }
-}
-
-#[derive(cqrs::Gateway)]
-#[gateway(commands)]
-pub struct Bank<R, P> {
-    execute: ExecuteHandler<R>,
-    #[gateway(unit)]
-    events: P,
 }
 
 /// `account_views`, one row per account, written in the processor's
@@ -219,11 +215,8 @@ where
             .with_tokens(PostgresTokenStore::new(pool.clone()))
             .with_transactions(PostgresTransactions::new(pool.clone()));
         let accounts = Arc::new(snapshots(AggregateLoader::new(events.store().clone())));
-        let execute = ExecuteHandler {
-            accounts: EventSourcedAccounts(accounts),
-        };
         let bank = Arc::new(Bank {
-            execute,
+            accounts: EventSourcedAccounts(accounts),
             events: events.clone(),
         });
         let views = started(events.processor("views", AccountViews).with_options(options()).spawn()).await;

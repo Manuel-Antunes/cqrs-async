@@ -8,8 +8,9 @@
 //!
 //! - [`Aggregate`] / [`EventAppender`]: domain side; decisions are `&self`
 //!   methods that append events to the appender they are given (Axon 5).
-//! - [`Command`] / [`Query`] messages and their [`Handler`]s (one struct per
-//!   message): application side.
+//! - [`Command`] / [`Query`] messages and their handlers
+//!   ([`CommandHandler<C>`], [`QueryHandler<Q>`], one impl per message):
+//!   application side.
 //! - [`EventStore`] / [`AggregateLoader`] / [`InlinePublisher`]: persistence with optimistic
 //!   concurrency; events reach the [`EventProcessor`] only after commit.
 //!   Handlers record what they decided in their [`Appender`]
@@ -17,9 +18,10 @@
 //!   it and commits, in the handler's transaction if it takes one;
 //!   repositories are the application's own ports, whose adapters load with
 //!   an [`AggregateLoader`].
-//! - `#[derive(Gateway)]` (a struct of handlers, routed by their message
-//!   type): dispatch. A gateway is a [`Dispatch`] impl per message: the
-//!   derive writes them, and they can be written by hand.
+//! - `#[command_gateway]` / `#[query_gateway]` (a struct handling the
+//!   messages it lists in `handles(...)`, one handler impl each): dispatch.
+//!   A gateway is a [`Dispatch`] impl per message: the attribute writes
+//!   them, and they can be written by hand.
 //! - [`Cqrs`]: an application's unit (publisher, gateways, events and
 //!   processors), wired by a typed builder.
 //! - [`EventFeed`]: the committed events as a `Stream`, a first-class port;
@@ -28,7 +30,8 @@
 //!
 //! # Features
 //!
-//! - `derive` (default): the derives and `#[derive(Gateway)]`.
+//! - `derive` (default): the derives and attributes (`#[command_gateway]`,
+//!   `#[projection]`...).
 //! - `json`: events stored as JSON, upcasters, and the `Json` codec.
 //! - `protobuf`: the `Protobuf` [`Codec`], for `prost` messages.
 //! - `tokio` (default): live event processing, [`Events`]: catch-up
@@ -88,9 +91,10 @@ pub use inline::{
 };
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
 pub use loader::{AggregateLoader, Loaded, New, NotFound};
+pub use message::Handles;
 pub use message::{
-    Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
-    ProcessingContext, Query, QueryGateway,
+    Command, CommandGateway, Dispatch, ErrorOf, EventHandler, HandlerError, Message, OutputOf, ProcessingContext,
+    Query, QueryGateway, QueryHandler,
 };
 #[doc(hidden)]
 pub use projection::{HasNamespace, NamespaceHandler, namespace_id};
@@ -117,15 +121,15 @@ pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};
 
 #[cfg(feature = "derive")]
 pub use cqrs_derive::{
-    AggregateRoot, Command, Commands, DomainEvent, Gateway, Queries, Query, QueryUpdates, aggregate, command,
-    command_handler, event_handler, projection, query, query_handler,
+    AggregateRoot, Command, DomainEvent, Query, QueryUpdates, aggregate, command, command_gateway, command_handler,
+    event_handler, projection, query, query_gateway, query_handler,
 };
 
 /// Everything a domain or application module usually needs.
 pub mod prelude {
     pub use crate::{
         Aggregate, Appender, Command, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
-        EventFeed, EventHandler, EventPublisher, Handler, HandlerError, Message, Query, QueryGateway,
+        EventFeed, EventHandler, EventPublisher, HandlerError, Message, Query, QueryGateway, QueryHandler,
         QuerySubscriptions, TagResolver,
     };
 }

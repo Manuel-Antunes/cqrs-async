@@ -159,26 +159,12 @@ impl EventPublisher<CounterEvent> for Engine {
 
 type Counters = Arc<Engine>;
 
-/// Opens counters: needs nothing, as a creation decides on nothing.
-struct OpenHandler;
-
-/// Written by hand, without `#[command_handler]`: the unit of work is named,
-/// and `handle` takes its transaction (none here, `()`).
-impl CommandHandler for OpenHandler {
-    type Command = Open;
-    type Event = CounterEvent;
-    type Unit = cqrs::Autocommit;
-
-    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u32, Error> {
-        events.append(CounterEvent::Opened);
-        events.record(cqrs::New::<Counter>(*id));
-        Ok(*id)
-    }
-}
-
-/// Adds, and counts its runs. On its first run it can sneak a competing
-/// change in, as another writer would between the load and the save.
-struct AddHandler {
+/// Both commands, on one gateway. Adding counts its runs; on its first run
+/// it can sneak a competing change in, as another writer would between the
+/// load and the save.
+#[cqrs::command_gateway(handles(Open, Add))]
+struct Gateway {
+    #[gateway(unit)]
     counters: Counters,
     runs: AtomicU32,
     racing: bool,
@@ -186,7 +172,7 @@ struct AddHandler {
     forget_save: bool,
 }
 
-impl AddHandler {
+impl Gateway {
     fn new(counters: &Counters) -> Self {
         Self {
             counters: Arc::clone(counters),
@@ -198,16 +184,30 @@ impl AddHandler {
     }
 }
 
-impl CommandHandler for AddHandler {
-    type Command = Add;
+/// Opening needs nothing, as a creation decides on nothing. Written by
+/// hand, without `#[command_handler]`: the unit of work is named, `handle`
+/// takes its transaction (none here, `()`), and the gateway is told it
+/// handles `Open` (`Handles`, which the attribute writes otherwise).
+impl CommandHandler<Open> for Gateway {
     type Event = CounterEvent;
     type Unit = cqrs::Autocommit;
 
+    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u32, Error> {
+        events.append(CounterEvent::Opened);
+        events.record(cqrs::New::<Counter>(*id));
+        Ok(*id)
+    }
+}
+
+impl cqrs::Handles<Open> for Gateway {}
+
+#[cqrs::command_handler]
+impl CommandHandler<Add> for Gateway {
     fn conflict_retries(&self) -> u32 {
         self.retries
     }
 
-    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
+    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
         let counter = self.counters.load(&command.id).await?.ok_or(NotFound(command.id))?;
         if self.runs.fetch_add(1, Ordering::Relaxed) == 0 && self.racing {
             let other = self.counters.load(&command.id).await?.unwrap();
@@ -221,31 +221,12 @@ impl CommandHandler for AddHandler {
     }
 }
 
-/// Both commands, routed by a derived gateway.
-#[derive(cqrs::Gateway)]
-#[gateway(commands)]
-struct Gateway {
-    open: OpenHandler,
-    add: AddHandler,
-    #[gateway(unit)]
-    counters: Counters,
-}
-
 fn counters() -> Counters {
     let store: Store = InMemoryEventStore::new();
     Arc::new(Engine {
         loader: AggregateLoader::new(store.clone()),
         publisher: InlinePublisher::new(store),
     })
-}
-
-/// The gateway, committing through the counters' engine.
-fn gateway(counters: &Counters, add: AddHandler) -> Gateway {
-    Gateway {
-        open: OpenHandler,
-        add,
-        counters: Arc::clone(counters),
-    }
 }
 
 fn total(counters: &Counters, id: u32) -> u64 {
@@ -255,7 +236,7 @@ fn total(counters: &Counters, id: u32) -> u64 {
 #[test]
 fn a_command_commits_what_its_handler_appended() {
     let counters = counters();
-    let gateway = gateway(&counters, AddHandler::new(&counters));
+    let gateway = Gateway::new(&counters);
     assert_eq!(block_on(gateway.send(Open(1))), Ok(1));
     assert_eq!(block_on(gateway.send(Add { id: 1, n: 5 })), Ok(5));
     assert_eq!(total(&counters, 1), 5);
@@ -264,7 +245,7 @@ fn a_command_commits_what_its_handler_appended() {
 #[test]
 fn an_existing_entity_is_required_unless_the_command_creates_it() {
     let counters = counters();
-    let gateway = gateway(&counters, AddHandler::new(&counters));
+    let gateway = Gateway::new(&counters);
     assert_eq!(block_on(gateway.send(Add { id: 7, n: 1 })), Err(Error::NotFound(7)));
     block_on(gateway.send(Open(7))).unwrap();
     // Creating twice: a conflict, not retried (re-running would conflict again).
@@ -277,7 +258,7 @@ fn an_existing_entity_is_required_unless_the_command_creates_it() {
 #[test]
 fn a_refused_decision_saves_nothing() {
     let counters = counters();
-    let gateway = gateway(&counters, AddHandler::new(&counters));
+    let gateway = Gateway::new(&counters);
     block_on(gateway.send(Open(1))).unwrap();
     assert_eq!(block_on(gateway.send(Add { id: 1, n: 500 })), Err(Error::TooMuch));
     assert_eq!(block_on(counters.load(&1)).unwrap().unwrap().version(), Some(1));
@@ -286,29 +267,29 @@ fn a_refused_decision_saves_nothing() {
 #[test]
 fn a_lost_race_runs_the_handler_again_on_the_fresh_entity() {
     let counters = counters();
-    let racing = AddHandler {
+    let racing = Gateway {
         racing: true,
-        ..AddHandler::new(&counters)
+        ..Gateway::new(&counters)
     };
-    let gateway = gateway(&counters, racing);
+    let gateway = racing;
     block_on(gateway.send(Open(1))).unwrap();
 
     // First run decides on total 0, loses to the competing +10; the rerun
     // decides on 10 and returns 15.
     assert_eq!(block_on(gateway.send(Add { id: 1, n: 5 })), Ok(15));
-    assert_eq!(gateway.add.runs.load(Ordering::Relaxed), 2);
+    assert_eq!(gateway.runs.load(Ordering::Relaxed), 2);
     assert_eq!(total(&counters, 1), 15);
 }
 
 #[test]
 fn retries_run_out_with_a_conflict() {
     let counters = counters();
-    let racing = AddHandler {
+    let racing = Gateway {
         racing: true,
         retries: 0,
-        ..AddHandler::new(&counters)
+        ..Gateway::new(&counters)
     };
-    let gateway = gateway(&counters, racing);
+    let gateway = racing;
     block_on(gateway.send(Open(1))).unwrap();
     assert!(matches!(
         block_on(gateway.send(Add { id: 1, n: 5 })),
@@ -323,7 +304,7 @@ fn dispatching_is_send() {
         value
     }
     let counters = counters();
-    let gateway = gateway(&counters, AddHandler::new(&counters));
+    let gateway = Gateway::new(&counters);
     // Compiles only if the whole chain is `Send`: ready for `tokio::spawn`.
     assert_eq!(block_on(assert_send(gateway.send(Open(3)))), Ok(3));
 }
@@ -331,8 +312,7 @@ fn dispatching_is_send() {
 /// Records the counter twice in one command: once fresh, once stale.
 struct Twice(Counters);
 
-impl CommandHandler for Twice {
-    type Command = Add;
+impl CommandHandler<Add> for Twice {
     type Event = CounterEvent;
     type Unit = cqrs::InTransaction<()>;
 
@@ -353,7 +333,7 @@ fn a_unit_that_cannot_roll_back_is_not_run_again_after_a_partial_write() {
     // loses the race, so re-running would append it twice. The conflict
     // reaches the caller instead.
     let counters = counters();
-    block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
+    block_on(Gateway::new(&counters).send(Open(1))).unwrap();
     let twice = Twice(Arc::clone(&counters));
     assert!(matches!(
         block_on(cqrs::dispatch_command(
@@ -370,8 +350,7 @@ fn a_unit_that_cannot_roll_back_is_not_run_again_after_a_partial_write() {
 #[test]
 fn several_entities_without_a_transaction_are_refused() {
     struct TwiceWithoutTransaction(Counters);
-    impl CommandHandler for TwiceWithoutTransaction {
-        type Command = Add;
+    impl CommandHandler<Add> for TwiceWithoutTransaction {
         type Event = CounterEvent;
         type Unit = cqrs::Autocommit;
         async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
@@ -379,7 +358,7 @@ fn several_entities_without_a_transaction_are_refused() {
         }
     }
     let counters = counters();
-    block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
+    block_on(Gateway::new(&counters).send(Open(1))).unwrap();
     let handler = TwiceWithoutTransaction(Arc::clone(&counters));
     assert!(matches!(
         block_on(cqrs::dispatch_command(
@@ -398,11 +377,11 @@ fn several_entities_without_a_transaction_are_refused() {
 #[should_panic(expected = "never recorded")]
 fn forgetting_to_save_panics_in_debug_builds() {
     let counters = counters();
-    let forgetful = AddHandler {
+    let forgetful = Gateway {
         forget_save: true,
-        ..AddHandler::new(&counters)
+        ..Gateway::new(&counters)
     };
-    let gateway = gateway(&counters, forgetful);
+    let gateway = forgetful;
     block_on(gateway.send(Open(1))).unwrap();
     let _ = block_on(gateway.send(Add { id: 1, n: 5 }));
 }
@@ -412,12 +391,12 @@ fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
     let counters = counters();
     let correlation = cqrs::Metadata::from([("correlation_id".to_owned(), "req-42".to_owned())]);
 
-    let gateway = gateway(&counters, AddHandler::new(&counters));
+    let gateway = Gateway::new(&counters);
     block_on(gateway.send_with(Open(1), correlation.clone())).unwrap();
     // Called directly too, and kept across a re-run after a lost race.
-    let racing = AddHandler {
+    let racing = Gateway {
         racing: true,
-        ..AddHandler::new(&counters)
+        ..Gateway::new(&counters)
     };
     block_on(cqrs::dispatch_command(
         &racing,

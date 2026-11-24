@@ -3,15 +3,15 @@
 //! them adds fields or rewrites a type.
 
 mod aggregate_root;
+mod gateway;
 mod handlers;
-mod message_set;
 mod projection;
 mod query_updates;
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{ToTokens, quote};
 use syn::{Data, DeriveInput, Error, Ident, LitInt, LitStr, Result, Type, parse_macro_input, spanned::Spanned};
 
 /// Path to the `cqrs` crate, even when a consumer renamed the dependency.
@@ -26,42 +26,53 @@ fn krate() -> TokenStream2 {
     }
 }
 
-/// An enum of commands becomes a command: `CreatePost(CreatePost), ...`.
+/// On a struct that handles commands, one `CommandHandler<C>` impl each:
+/// `#[cqrs::command_gateway(handles(CreatePost, PublishPost))]` makes it
+/// their gateway. Each command listed is routed to its impl
+/// (`Dispatch<C>`), in a unit of work of the field marked
+/// `#[gateway(unit)]`; a command listed without its impl
+/// (`#[cqrs::command_handler]`) does not compile.
 ///
-/// `#[commands(error = E)]` is the error it fails with (each variant's
-/// error converts `Into` it); its output is a generated `{Enum}Output`
-/// with the same variants holding each command's output (`output = Name`
-/// renames it, `derive(...)` derives traits on it). Each command converts
-/// `From` into the enum. A gateway marked `#[gateway(commands = Enum)]`
-/// takes the enum and hands each variant to its handler: what a transport
-/// (a queue, a deserialized request) dispatches.
-///
-/// `port = Name` also generates a trait bounded by `CommandGateway` of every
-/// command (and of the enum), implemented by every gateway that routes them:
+/// `commands = Name` also generates a trait bounded by `CommandGateway` of
+/// every command listed, implemented by every gateway that routes them:
 /// what code depending on the commands names (`impl PostCommands`), whatever
 /// gateway, interceptors or unit stand behind it.
 ///
 /// ```ignore
-/// #[derive(Commands)]
-/// #[commands(error = BlogError, derive(Debug, PartialEq))]
-/// enum PostCommand { CreatePost(CreatePost), PublishPost(PublishPost) }
+/// #[cqrs::command_gateway(commands = PostCommands, handles(CreatePost, PublishPost))]
+/// pub struct PostCommandGateway<R, P> {
+///     posts: R,
+///     #[gateway(unit)]
+///     events: P,
+/// }
+///
+/// #[cqrs::command_handler]
+/// impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> { .. }
 /// ```
-#[proc_macro_derive(Commands, attributes(commands))]
-pub fn derive_commands(input: TokenStream) -> TokenStream {
-    into_stream(message_set::message_set(
-        parse_macro_input!(input),
-        "commands",
-        "Command",
+#[proc_macro_attribute]
+pub fn command_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    let parser = |input: syn::parse::ParseStream| gateway::GatewayArguments::parse(gateway::Kind::Commands, input);
+    let arguments = parse_macro_input!(arguments with parser);
+    into_stream(gateway::gateway(
+        gateway::Kind::Commands,
+        arguments,
+        parse_macro_input!(item),
     ))
 }
 
-/// The query counterpart of `#[derive(Commands)]`: `#[queries(error = E)]`,
-/// routed by `#[gateway(queries = Enum)]`. `port = Name` generates the
-/// query port, and `subscriptions = Name` a trait bounded by
-/// `QuerySubscriptions` of every query.
-#[proc_macro_derive(Queries, attributes(queries))]
-pub fn derive_queries(input: TokenStream) -> TokenStream {
-    into_stream(message_set::message_set(parse_macro_input!(input), "queries", "Query"))
+/// The query counterpart of `#[command_gateway]`: `handles(Q, ...)`, each
+/// routed to the struct's `QueryHandler<Q>` impl. `queries = Name` generates
+/// the trait of every gateway answering them, and `subscriptions = Name` a
+/// trait bounded by `QuerySubscriptions` of every query listed.
+#[proc_macro_attribute]
+pub fn query_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    let parser = |input: syn::parse::ParseStream| gateway::GatewayArguments::parse(gateway::Kind::Queries, input);
+    let arguments = parse_macro_input!(arguments with parser);
+    into_stream(gateway::gateway(
+        gateway::Kind::Queries,
+        arguments,
+        parse_macro_input!(item),
+    ))
 }
 
 /// A struct of `QueryUpdateEmitter<Q>` fields says where each query's
@@ -124,14 +135,16 @@ pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
     into_stream(aggregate_root::aggregate_root(parse_macro_input!(input)))
 }
 
-/// On `impl CommandHandler for H`: adds `type Command` and `type Event`,
-/// read from `handle(&self, command: &Command, events: &mut Appender<Event>)`.
-/// Types written by hand are kept.
+/// On `impl CommandHandler<C> for H`: adds `type Event` and `type Unit`,
+/// read from `handle(&self, command: &C, events: &mut Appender<Event>[, tx:
+/// &mut Tx])`, and `C` if the trait leaves it out. Types written by hand are
+/// kept. It also marks `H` as handling `C`, for the gateway that lists it.
 ///
 /// ```ignore
 /// #[command_handler]
-/// impl<R: PostRepository, P: EventPublisher<PostEvent>> CommandHandler for PublishPostHandler<R, P> {
-///     async fn handle(&self, command: &PublishPost, events: &mut Appender<PostEvent>) -> Result<(), BlogError> { ... }
+/// impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P> {
+///     async fn handle(&self, command: &PublishPost, events: &mut Appender<PostEvent>, tx: &mut R::Tx)
+///         -> Result<(), BlogError> { ... }
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -144,8 +157,9 @@ pub fn command_handler(arguments: TokenStream, item: TokenStream) -> TokenStream
     into_stream(handlers::command_handler(parse_macro_input!(item)))
 }
 
-/// On `impl Handler for H`: adds `type Message`, read from
-/// `handle(&self, query: Query)`. A type written by hand is kept.
+/// On `impl QueryHandler<Q> for H`: adds `Q` if the trait leaves it out,
+/// read from `handle(&self, query: Q)`, and marks `H` as answering `Q`, for
+/// the gateway that lists it.
 #[proc_macro_attribute]
 pub fn query_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
     if !arguments.is_empty() {
@@ -540,264 +554,4 @@ fn message(input: DeriveInput, attribute: &str, marker: &str) -> Result<TokenStr
         #[automatically_derived]
         impl #impl_generics #krate::#marker for #name #ty_generics #where_clause {}
     })
-}
-
-// ---------------------------------------------------------------------------
-// #[derive(Gateway)]
-// ---------------------------------------------------------------------------
-
-/// A struct of handlers becomes a gateway: for every field `f: H` it
-/// implements `Dispatch<<H as Handler>::Message>`, forwarding to `self.f`.
-///
-/// ```ignore
-/// #[derive(Gateway)]
-/// struct PostCommands<R> {
-///     create: CreatePostHandler<R>,
-///     publish: PublishPostHandler<R>,
-///     #[gateway(skip)]
-///     config: Settings,
-/// }
-/// ```
-///
-/// No message is named: the route comes from each handler's
-/// `type Message`. Two fields handling the same message are rejected by the
-/// compiler (E0119, conflicting implementations); a field that is not a
-/// handler fails on its `Handler` bound unless marked `#[gateway(skip)]`.
-///
-/// `#[gateway(commands = Enum)]` (or `queries = Enum`) also lets it take an
-/// enum of `#[derive(Commands)]`, routing each variant to its handler.
-#[proc_macro_derive(Gateway, attributes(gateway))]
-pub fn derive_gateway(input: TokenStream) -> TokenStream {
-    into_stream(gateway(parse_macro_input!(input)))
-}
-
-/// Expansion of `#[derive(Gateway)]`: one `Dispatch` impl per non-skipped
-/// field, plus a compile-time `Handler` check for fields that do not depend
-/// on the struct's generics.
-fn gateway(input: DeriveInput) -> Result<TokenStream2> {
-    let Data::Struct(data) = &input.data else {
-        return Err(Error::new_spanned(&input.ident, "`Gateway` is derived on structs"));
-    };
-
-    let krate = krate();
-    let name = &input.ident;
-    let kind = message_set::gateway_kind(&input)?;
-    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
-    let mut impls = Vec::new();
-
-    // The unit of work the commands run in: the field marked
-    // `#[gateway(unit)]`.
-    let mut unit = None;
-    for (index, field) in data.fields.iter().enumerate() {
-        if role(field)? == Role::Unit {
-            if unit.is_some() {
-                return Err(Error::new_spanned(field, "a gateway has one `#[gateway(unit)]`"));
-            }
-            let access = field.ident.as_ref().map_or_else(
-                || {
-                    let index = syn::Index::from(index);
-                    quote!(#index)
-                },
-                |ident| quote!(#ident),
-            );
-            unit = Some((access, field.ty.clone()));
-        }
-    }
-    if kind.commands && unit.is_none() {
-        return Err(Error::new_spanned(
-            name,
-            "a command gateway needs the unit of work its commands run in: a field marked `#[gateway(unit)]` \
-             (e.g. the unit's `Events`, or an `InlinePublisher`)",
-        ));
-    }
-
-    for (index, field) in data.fields.iter().enumerate() {
-        if role(field)? != Role::Handler {
-            continue;
-        }
-        let access = field.ident.as_ref().map_or_else(
-            || {
-                let index = syn::Index::from(index);
-                quote!(#index)
-            },
-            |ident| quote!(#ident),
-        );
-        let handler = &field.ty;
-        let handler_trait = if kind.commands {
-            quote!(CommandHandler)
-        } else {
-            quote!(Handler)
-        };
-
-        // A forgotten `#[gateway(skip)]` otherwise only shows up as a
-        // confusing E0119. The check is only sound for types that do not use
-        // the struct's generics: for those the derive cannot see the bounds
-        // the handler impl needs.
-        if !mentions_generics(handler, &input.generics) {
-            impls.push(quote_spanned! {handler.span()=>
-                #[allow(dead_code)]
-                const _: () = {
-                    fn is_handler<T: #krate::#handler_trait>() {}
-                    fn check() {
-                        is_handler::<#handler>();
-                    }
-                };
-            });
-        }
-
-        if kind.commands {
-            let (unit_access, unit_ty) = unit.as_ref().expect("checked above");
-            let message = quote!(<#handler as #krate::CommandHandler>::Command);
-            let mut generics = input.generics.clone();
-            let where_clause = generics.make_where_clause();
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(#handler: #krate::CommandHandler));
-            where_clause.predicates.push(syn::parse_quote!(
-                #unit_ty: #krate::UnitOfWork<
-                    <#handler as #krate::CommandHandler>::Event,
-                    <#handler as #krate::CommandHandler>::Unit,
-                >
-            ));
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(#krate::ErrorOf<#message>: ::core::convert::From<#krate::StoreError>));
-            where_clause.predicates.push(syn::parse_quote!(
-                #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
-            ));
-            impls.push(quote_spanned! {handler.span()=>
-                #[automatically_derived]
-                impl #impl_generics #krate::Dispatch<#message> for #name #ty_generics #where_clause {
-                    fn dispatch_with(
-                        &self,
-                        message: #message,
-                        metadata: #krate::Metadata,
-                    ) -> impl ::core::future::Future<Output = ::core::result::Result<
-                        #krate::OutputOf<#message>,
-                        #krate::ErrorOf<#message>,
-                    >> + ::core::marker::Send {
-                        #krate::dispatch_command(&self.#access, message, metadata, &self.#unit_access)
-                    }
-                }
-            });
-            continue;
-        }
-
-        let message = quote!(<#handler as #krate::Handler>::Message);
-        let mut generics = input.generics.clone();
-        let where_clause = generics.make_where_clause();
-        where_clause
-            .predicates
-            .push(syn::parse_quote!(#handler: #krate::Handler));
-        // `Dispatch` is `Send + Sync`, and the `Handler` bound above only
-        // covers this field. One bound on the whole struct, not one per
-        // field: per-field bounds make N impls × N predicates, and the build
-        // time grows quadratically with the number of handlers.
-        where_clause.predicates.push(syn::parse_quote!(
-            #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
-        ));
-        impls.push(quote_spanned! {handler.span()=>
-            #[automatically_derived]
-            impl #impl_generics #krate::Dispatch<#message> for #name #ty_generics #where_clause {
-                fn dispatch_with(
-                    &self,
-                    message: #message,
-                    metadata: #krate::Metadata,
-                ) -> impl ::core::future::Future<Output = ::core::result::Result<
-                    #krate::OutputOf<#message>,
-                    #krate::ErrorOf<#message>,
-                >> + ::core::marker::Send {
-                    <#handler as #krate::Handler>::handle_with(&self.#access, message, metadata)
-                }
-            }
-        });
-    }
-
-    if impls.is_empty() {
-        return Err(Error::new_spanned(name, "a gateway needs at least one handler field"));
-    }
-
-    // `#[gateway(commands = Enum)]` / `#[gateway(queries = Enum)]`: the
-    // enum itself, each variant routed through the impls above.
-    for set in &kind.sets {
-        let mut generics = input.generics.clone();
-        let where_clause = generics.make_where_clause();
-        where_clause
-            .predicates
-            .push(syn::parse_quote!(#set: #krate::DispatchVia<Self>));
-        where_clause.predicates.push(syn::parse_quote!(
-            #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
-        ));
-        impls.push(quote_spanned! {set.span()=>
-            #[automatically_derived]
-            impl #impl_generics #krate::Dispatch<#set> for #name #ty_generics #where_clause {
-                fn dispatch_with(
-                    &self,
-                    message: #set,
-                    metadata: #krate::Metadata,
-                ) -> impl ::core::future::Future<Output = ::core::result::Result<
-                    #krate::OutputOf<#set>,
-                    #krate::ErrorOf<#set>,
-                >> + ::core::marker::Send {
-                    <#set as #krate::DispatchVia<Self>>::dispatch_via(message, self, metadata)
-                }
-            }
-        });
-    }
-    Ok(quote!(#(#impls)*))
-}
-
-/// What a gateway's field is.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
-    /// A handler (the default).
-    Handler,
-    /// `#[gateway(skip)]`: not a handler, e.g. a shared service.
-    Skipped,
-    /// `#[gateway(unit)]`: the unit of work commands run in.
-    Unit,
-}
-
-/// The role `#[gateway(...)]` gives the field.
-fn role(field: &syn::Field) -> Result<Role> {
-    let mut role = Role::Handler;
-    for attr in field.attrs.iter().filter(|attr| attr.path().is_ident("gateway")) {
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("skip") {
-                role = Role::Skipped;
-                Ok(())
-            } else if meta.path.is_ident("unit") {
-                role = Role::Unit;
-                Ok(())
-            } else {
-                Err(meta.error("expected `skip` or `unit`"))
-            }
-        })?;
-    }
-    Ok(role)
-}
-
-/// Whether `ty` mentions any of the generic parameters (types, lifetimes or
-/// consts) declared by `generics`.
-fn mentions_generics(ty: &Type, generics: &syn::Generics) -> bool {
-    let names: Vec<String> = generics
-        .params
-        .iter()
-        .map(|param| match param {
-            syn::GenericParam::Type(param) => param.ident.to_string(),
-            syn::GenericParam::Lifetime(param) => param.lifetime.ident.to_string(),
-            syn::GenericParam::Const(param) => param.ident.to_string(),
-        })
-        .collect();
-
-    /// Searches the token tree, groups included, for any of `names`.
-    fn walk(tokens: TokenStream2, names: &[String]) -> bool {
-        tokens.into_iter().any(|token| match token {
-            proc_macro2::TokenTree::Ident(ident) => names.contains(&ident.to_string()),
-            proc_macro2::TokenTree::Group(group) => walk(group.stream(), names),
-            _ => false,
-        })
-    }
-
-    !names.is_empty() && walk(ty.to_token_stream(), &names)
 }

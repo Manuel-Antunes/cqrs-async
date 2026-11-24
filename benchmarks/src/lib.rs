@@ -28,54 +28,44 @@ pub fn now<F: std::future::Future>(future: F) -> F::Output {
 
 /// A trivial command and its handler: dispatch cost with no work behind it.
 pub mod ping {
-    use cqrs::Handler;
-
     /// Returns its input plus one.
     #[cqrs::command(output = u64, error = cqrs::StoreError)]
     pub struct Ping(pub u64);
 
-    /// Handles [`Ping`].
-    pub struct PingHandler;
+    /// Answers its input plus one: routing with no unit of work.
+    #[cqrs::query(output = u64, error = cqrs::StoreError)]
+    pub struct Echo(pub u64);
 
-    impl Handler for PingHandler {
-        type Message = Ping;
+    /// A query gateway with one route.
+    #[cqrs::query_gateway(handles(Echo))]
+    pub struct PingGateway;
 
-        async fn handle(&self, ping: Ping) -> Result<u64, cqrs::StoreError> {
-            Ok(ping.0 + 1)
+    #[cqrs::query_handler]
+    impl cqrs::QueryHandler<Echo> for PingGateway {
+        async fn handle(&self, echo: Echo) -> Result<u64, cqrs::StoreError> {
+            Ok(echo.0 + 1)
         }
     }
 
-    /// A derived gateway with one route.
-    #[derive(cqrs::Gateway)]
-    pub struct PingGateway {
-        /// The only handler.
-        pub ping: PingHandler,
-    }
-
-    /// What [`PingCommandHandler`] would record.
+    /// What [`PingCommands`] would record.
     #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
     pub struct Pinged;
 
-    /// Handles [`Ping`] as a command handler: through an appender and a
-    /// unit of work, recording nothing.
-    pub struct PingCommandHandler;
-
-    #[cqrs::command_handler]
-    impl cqrs::CommandHandler for PingCommandHandler {
-        async fn handle(&self, ping: &Ping, _: &mut cqrs::Appender<Pinged>) -> Result<u64, cqrs::StoreError> {
-            Ok(ping.0 + 1)
-        }
-    }
-
     /// A gateway of commands with one route.
-    #[derive(cqrs::Gateway)]
-    #[gateway(commands)]
+    #[cqrs::command_gateway(handles(Ping))]
     pub struct PingCommands<P> {
-        /// The only handler.
-        pub ping: PingCommandHandler,
         /// The unit of work (one that stores nothing).
         #[gateway(unit)]
         pub events: P,
+    }
+
+    /// Handles [`Ping`] as a command handler: through an appender and a
+    /// unit of work, recording nothing.
+    #[cqrs::command_handler]
+    impl<P> cqrs::CommandHandler<Ping> for PingCommands<P> {
+        async fn handle(&self, ping: &Ping, _: &mut cqrs::Appender<Pinged>) -> Result<u64, cqrs::StoreError> {
+            Ok(ping.0 + 1)
+        }
     }
 
     /// A unit of work that stores nothing.

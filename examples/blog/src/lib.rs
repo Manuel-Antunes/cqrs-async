@@ -69,61 +69,49 @@
 //! let _ = blog.commands().send(FindPost { id: PostId(1) });
 //! ```
 //!
-//! The gateway checks below define their handlers in the doctest itself: a
-//! derived gateway must live in the crate of its handlers (Rust's coherence
-//! check cannot see through another crate's `Handler::Message`).
-//!
-//! Two handlers for the same command in one gateway:
-//!
-//! ```compile_fail,E0119
-//! use blog::{application::{BlogError, commands::CreatePost}, domain::PostId};
-//!
-//! struct Creates;
-//! impl cqrs::Handler for Creates {
-//!     type Message = CreatePost;
-//!     async fn handle(&self, _: CreatePost) -> Result<PostId, BlogError> { Ok(PostId(1)) }
-//! }
-//! struct AlsoCreates;
-//! impl cqrs::Handler for AlsoCreates {
-//!     type Message = CreatePost;
-//!     async fn handle(&self, _: CreatePost) -> Result<PostId, BlogError> { Ok(PostId(2)) }
-//! }
-//!
-//! #[derive(cqrs::Gateway)]
-//! struct Twice { create: Creates, again: AlsoCreates }
-//! ```
-//!
-//! A gateway taking an enum of commands one of which it does not handle
-//! (rejected where the gateway is defined):
+//! A gateway listing a command it has no handler for (rejected where the
+//! gateway is declared):
 //!
 //! ```compile_fail,E0277
-//! use blog::{application::{BlogError, commands::{CreatePost, PublishPost}}, domain::PostId};
+//! use blog::{application::{BlogError, commands::{CreatePost, PublishPost}}, domain::{PostEvent, PostId}};
+//! use cqrs::{Appender, CommandHandler};
 //!
-//! struct Creates;
-//! impl cqrs::Handler for Creates {
-//!     type Message = CreatePost;
-//!     async fn handle(&self, _: CreatePost) -> Result<PostId, BlogError> { Ok(PostId(1)) }
+//! #[cqrs::command_gateway(handles(CreatePost, PublishPost))]
+//! struct OnlyCreates<P> {
+//!     #[gateway(unit)]
+//!     events: P,
 //! }
 //!
-//! #[derive(cqrs::Commands)]
-//! #[commands(error = BlogError)]
-//! enum Writes { CreatePost(CreatePost), PublishPost(PublishPost) }
-//!
-//! #[derive(cqrs::Gateway)]
-//! #[gateway(commands = Writes)]
-//! struct OnlyCreates { create: Creates }
+//! #[cqrs::command_handler]
+//! impl<P> CommandHandler<CreatePost> for OnlyCreates<P> {
+//!     async fn handle(&self, _: &CreatePost, _: &mut Appender<PostEvent>) -> Result<PostId, BlogError> { Ok(PostId(1)) }
+//! }
 //! ```
 //!
-//! A field that is not a handler, without `#[gateway(skip)]`:
+//! A query listed by a command gateway:
 //!
 //! ```compile_fail,E0277
-//! #[derive(cqrs::Gateway)]
-//! struct Broken {
-//!     find: blog::application::queries::FindPostHandler<blog::infrastructure::InMemoryPostSummaryRepository>,
-//!     label: String,
+//! use blog::application::queries::FindPost;
+//!
+//! #[cqrs::command_gateway(handles(FindPost))]
+//! struct Confused<P> {
+//!     #[gateway(unit)]
+//!     events: P,
 //! }
+//! # impl<P> cqrs::Handles<FindPost> for Confused<P> {}
 //! ```
 //!
+//! The same command listed twice:
+//!
+//! ```compile_fail
+//! use blog::application::commands::CreatePost;
+//!
+//! #[cqrs::command_gateway(handles(CreatePost, CreatePost))]
+//! struct Twice<P> {
+//!     #[gateway(unit)]
+//!     events: P,
+//! }
+//! ```
 
 #![warn(missing_docs)]
 

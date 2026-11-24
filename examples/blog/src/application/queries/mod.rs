@@ -10,23 +10,9 @@ mod post_summary;
 
 use std::sync::Arc;
 
-pub use find_post::{FindPost, FindPostHandler};
-pub use list_published::{ListPublished, ListPublishedHandler};
+pub use find_post::FindPost;
+pub use list_published::ListPublished;
 pub use post_summary::{PostSummary, PostSummaryRepository, PostSummaryStore};
-
-use crate::application::BlogError;
-
-/// Every query of the read side, as one message. Also generates the ports
-/// [`PostQueries`] (asking them all) and [`PostSubscriptions`] (subscribing
-/// to them all).
-#[derive(Clone, Debug, cqrs::Queries)]
-#[queries(error = BlogError, port = PostQueries, subscriptions = PostSubscriptions, derive(Debug, PartialEq))]
-pub enum PostQuery {
-    /// See [`FindPost`].
-    FindPost(FindPost),
-    /// See [`ListPublished`].
-    ListPublished(ListPublished),
-}
 
 /// Where the projection pushes the queries' new results (Axon's
 /// `QueryUpdateEmitter`), one emitter per query type: subscribers to a query
@@ -39,23 +25,23 @@ pub struct PostUpdates {
     pub published: cqrs::QueryUpdateEmitter<ListPublished>,
 }
 
-/// Read side: routes each query to the field whose handler declares it, or
-/// each [`PostQuery`] variant to its handler.
-#[derive(cqrs::Gateway)]
-#[gateway(queries = PostQuery)]
+/// Read side: answers every query of the posts from the read model, one
+/// `QueryHandler` impl each (in the query's file). Also generates the
+/// traits [`PostQueries`] (asking them all) and [`PostSubscriptions`]
+/// (subscribing to them all).
+#[cqrs::query_gateway(
+    queries = PostQueries,
+    subscriptions = PostSubscriptions,
+    handles(FindPost, ListPublished)
+)]
 pub struct PostQueryGateway<M> {
-    /// Handles [`FindPost`].
-    find: FindPostHandler<M>,
-    /// Handles [`ListPublished`].
-    list_published: ListPublishedHandler<M>,
+    /// The read model, shared with the projection that writes it.
+    summaries: Arc<M>,
 }
 
 impl<M> PostQueryGateway<M> {
-    /// Builds every query handler over the same read model.
+    /// The gateway over the read model.
     pub fn new(summaries: Arc<M>) -> Self {
-        Self {
-            find: FindPostHandler::new(Arc::clone(&summaries)),
-            list_published: ListPublishedHandler::new(summaries),
-        }
+        Self { summaries }
     }
 }

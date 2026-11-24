@@ -1,15 +1,27 @@
-//! Interceptors around a derived gateway: order, metadata, refusal, results.
+//! Interceptors around a gateway: order, metadata, refusal, results.
 
 use std::sync::Mutex;
 
 use cqrs::{
-    Command, CommandGateway, Handler, Intercepted, Interceptor, Message, Metadata, QueryGateway, testing::block_on,
+    Appender, Command, CommandGateway, CommandHandler, InMemoryEventStore, InlinePublisher, Intercepted, Interceptor,
+    Message, Metadata, QueryGateway, QueryHandler, StoreError, testing::block_on,
 };
 
 #[derive(Debug, PartialEq)]
 enum Error {
     Unauthorized,
+    Store,
 }
+
+impl From<StoreError> for Error {
+    fn from(_: StoreError) -> Self {
+        Self::Store
+    }
+}
+
+/// What renaming would decide; this test records none.
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+struct Renamed;
 
 #[cqrs::command(output = String, error = Error)]
 struct Rename(String);
@@ -17,38 +29,40 @@ struct Rename(String);
 #[cqrs::query(output = u32, error = Error)]
 struct Count;
 
-/// Answers with the `user` it was sent by.
-struct RenameHandler;
+/// The commands, in units of work of an inline publisher.
+#[cqrs::command_gateway(handles(Rename))]
+struct Commands {
+    #[gateway(unit)]
+    events: InlinePublisher<Renamed, InMemoryEventStore<Renamed>>,
+}
 
-impl Handler for RenameHandler {
-    type Message = Rename;
-
-    async fn handle(&self, _: Rename) -> Result<String, Error> {
-        unreachable!("always dispatched with metadata")
+impl Commands {
+    fn new() -> Self {
+        Self {
+            events: InlinePublisher::new(InMemoryEventStore::new()),
+        }
     }
+}
 
-    async fn handle_with(&self, Rename(name): Rename, metadata: Metadata) -> Result<String, Error> {
+/// Answers with the `user` it was sent by.
+#[cqrs::command_handler]
+impl CommandHandler<Rename> for Commands {
+    async fn handle(&self, Rename(name): &Rename, events: &mut Appender<Renamed>) -> Result<String, Error> {
         Ok(format!(
             "{name} by {}",
-            metadata.get("user").map_or("nobody", String::as_str)
+            events.metadata().get("user").map_or("nobody", String::as_str)
         ))
     }
 }
 
-struct CountHandler;
+#[cqrs::query_gateway(handles(Count))]
+struct Queries;
 
-impl Handler for CountHandler {
-    type Message = Count;
-
+#[cqrs::query_handler]
+impl QueryHandler<Count> for Queries {
     async fn handle(&self, _: Count) -> Result<u32, Error> {
         Ok(7)
     }
-}
-
-#[derive(cqrs::Gateway)]
-struct Gateway {
-    rename: RenameHandler,
-    count: CountHandler,
 }
 
 /// Records what passes, before and after.
@@ -99,13 +113,7 @@ fn token(value: &str) -> Metadata {
 fn interceptors_run_in_order_around_the_handler_and_can_refuse() {
     // A tuple runs in order: the journal sees every attempt, then
     // authentication refuses or lets it through to the second journal.
-    let commands = Intercepted::new(
-        Gateway {
-            rename: RenameHandler,
-            count: CountHandler,
-        },
-        (Journal::default(), Authenticate, Journal::default()),
-    );
+    let commands = Intercepted::new(Commands::new(), (Journal::default(), Authenticate, Journal::default()));
 
     assert_eq!(
         block_on(commands.send_with(Rename("post".into()), token("secret"))),
@@ -138,13 +146,7 @@ fn interceptors_run_in_order_around_the_handler_and_can_refuse() {
 
 #[test]
 fn an_interceptor_for_every_message_wraps_queries_too() {
-    let queries = Intercepted::new(
-        Gateway {
-            rename: RenameHandler,
-            count: CountHandler,
-        },
-        Journal::default(),
-    );
+    let queries = Intercepted::new(Queries, Journal::default());
     assert_eq!(block_on(queries.query(Count)), Ok(7));
     fn is_query_gateway<G: QueryGateway<Count>>(_: &G) {}
     is_query_gateway(&queries);

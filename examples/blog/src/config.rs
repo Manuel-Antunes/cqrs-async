@@ -16,7 +16,7 @@
 //! The application never knows which: the repository is a port
 //! ([`PostRepository`](crate::application::commands::PostRepository)),
 //! and each wiring picks its adapter. What the unit exposes is named by the
-//! ports the message enums generate ([`PostCommands`], [`PostQueries`],
+//! traits the gateways generate ([`PostCommands`], [`PostQueries`],
 //! [`PostSubscriptions`]).
 
 use std::sync::Arc;
@@ -83,7 +83,7 @@ pub fn in_memory_with(
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
     let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_projection(projection);
     let blog = Cqrs::from_publisher(publisher)
-        .commands(|events| PostCommandGateway::new(Arc::new(posts_over(&store)), events))
+        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
     (blog, summaries, notifier)
@@ -151,7 +151,7 @@ pub fn start_in_memory()
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
     let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(Events::new(store.clone()))
-        .commands(|events| PostCommandGateway::new(Arc::new(posts_over(&store)), events))
+        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))
@@ -202,7 +202,7 @@ pub async fn start(
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
     let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(events)
-        .commands(|events| PostCommandGateway::new(Arc::new(SeaOrmPostRepository), events))
+        .commands(|events| PostCommandGateway::new(SeaOrmPostRepository, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))

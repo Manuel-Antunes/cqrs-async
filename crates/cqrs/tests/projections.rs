@@ -71,28 +71,21 @@ impl EventHandler for Totals {
 }
 
 /// Answers from the read model.
-struct TotalOfHandler(Arc<Totals>);
+#[cqrs::query_gateway(handles(TotalOf, GrandTotal))]
+struct Queries(Arc<Totals>);
 
 #[cqrs::query_handler]
-impl cqrs::Handler for TotalOfHandler {
+impl cqrs::QueryHandler<TotalOf> for Queries {
     async fn handle(&self, query: TotalOf) -> Result<Option<u64>, ()> {
         Ok(self.0.sums.lock().unwrap().get(&query.clock).copied())
     }
 }
 
-struct GrandTotalHandler(Arc<Totals>);
-
 #[cqrs::query_handler]
-impl cqrs::Handler for GrandTotalHandler {
+impl cqrs::QueryHandler<GrandTotal> for Queries {
     async fn handle(&self, _: GrandTotal) -> Result<u64, ()> {
         Ok(self.0.sums.lock().unwrap().values().sum())
     }
-}
-
-#[derive(cqrs::Gateway)]
-struct Queries {
-    total: TotalOfHandler,
-    grand: GrandTotalHandler,
 }
 
 /// Emits only, holds nothing; no namespace: it runs in a group.
@@ -138,13 +131,7 @@ async fn subscriptions_get_the_current_result_then_the_updates_for_their_query()
         sums: Mutex::default(),
         updates: Arc::clone(&updates),
     });
-    let queries = SubscriptionQueries::new(
-        Queries {
-            total: TotalOfHandler(Arc::clone(&totals)),
-            grand: GrandTotalHandler(Arc::clone(&totals)),
-        },
-        Arc::clone(&updates),
-    );
+    let queries = SubscriptionQueries::new(Queries(Arc::clone(&totals)), Arc::clone(&updates));
     tick(&events, "a", 1).await;
     let projection = events.processor("totals", Arc::clone(&totals)).spawn();
     within(projection.caught_up(1)).await;

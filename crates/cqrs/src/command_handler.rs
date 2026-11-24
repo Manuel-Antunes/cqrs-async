@@ -2,9 +2,12 @@
 //! its `ProcessingContext`): the handler decides, records what it decided,
 //! and the gateway commits.
 //!
-//! One struct per use case, holding the services it needs (usually the
-//! application's own repository). `#[command_handler]` reads the command,
-//! the event type and the unit of work from the signature of `handle`:
+//! The gateway is the handler: one struct holding the services its commands
+//! need (usually the application's own repository), with one
+//! `CommandHandler<C>` impl per command. `#[command_handler]` reads the
+//! command, the event type and the unit of work from the signature of
+//! `handle`; `#[command_gateway]` routes the commands it lists to those impls,
+//! each in a unit of work of its `#[gateway(unit)]` field:
 //!
 //! ```
 //! use std::future::Future;
@@ -37,10 +40,16 @@
 //!     }
 //! }
 //!
-//! struct AddHandler<R> { counters: R }
+//! /// The gateway, and the unit of work its commands run in.
+//! #[cqrs::command_gateway(handles(Add))]
+//! struct CounterCommands<R, P> {
+//!     counters: R,
+//!     #[gateway(unit)]
+//!     events: P,
+//! }
 //!
 //! #[cqrs::command_handler]
-//! impl<R: Counters> CommandHandler for AddHandler<R> {
+//! impl<R: Counters, P> CommandHandler<Add> for CounterCommands<R, P> {
 //!     async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, StoreError> {
 //!         // A counter starts at zero: adding to a missing one creates it.
 //!         let counter = self.counters.find(command.id).await?.unwrap_or_else(|| New(command.id).into());
@@ -50,18 +59,9 @@
 //!     }
 //! }
 //!
-//! /// The gateway, and the unit of work its commands run in.
-//! #[derive(cqrs::Gateway)]
-//! #[gateway(commands)]
-//! struct Commands<R, P> {
-//!     add: AddHandler<R>,
-//!     #[gateway(unit)]
-//!     events: P,
-//! }
-//!
 //! let store = InMemoryEventStore::new();
-//! let commands = Commands {
-//!     add: AddHandler { counters: StoredCounters(AggregateLoader::new(store.clone())) },
+//! let commands = CounterCommands {
+//!     counters: StoredCounters(AggregateLoader::new(store.clone())),
 //!     events: InlinePublisher::new(store),
 //! };
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 }))?, 2);
@@ -99,7 +99,7 @@
 //! # #[cqrs::command(error = ())] struct Ping;
 //! struct PingHandler;
 //! #[cqrs::command_handler]
-//! impl CommandHandler for PingHandler {
+//! impl CommandHandler<Ping> for PingHandler {
 //!     async fn handle(&self, command: Ping, events: &mut Appender<()>) -> Result<(), ()> { Ok(()) }
 //! }
 //! ```
@@ -115,12 +115,42 @@
 //! # #[cqrs::command(error = StoreError)] struct Tick;
 //! struct TickHandler;
 //! #[cqrs::command_handler]
-//! impl CommandHandler for TickHandler {
+//! impl CommandHandler<Tick> for TickHandler {
 //!     async fn handle(&self, _: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
 //!         events.record(New::<Bell>(1)); // a bell rings, it does not tick
 //!         Ok(())
 //!     }
 //! }
+//! ```
+//!
+//! A gateway routes what it lists in `handles(...)`, and only that: a
+//! command listed without its handler impl does not compile, where the
+//! gateway is declared,
+//!
+//! ```compile_fail,E0277
+//! # use cqrs::{Appender, CommandHandler, StoreError};
+//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
+//! # #[cqrs::command(error = StoreError)] struct Tick;
+//! # #[cqrs::command(error = StoreError)] struct Ring;
+//! #[cqrs::command_gateway(handles(Tick, Ring))]
+//! struct Clock<P> {
+//!     #[gateway(unit)]
+//!     events: P,
+//! }
+//!
+//! #[cqrs::command_handler]
+//! impl<P> CommandHandler<Tick> for Clock<P> {
+//!     async fn handle(&self, _: &Tick, _: &mut Appender<Ticked>) -> Result<(), StoreError> { Ok(()) }
+//! }
+//! // No `CommandHandler<Ring>`.
+//! ```
+//!
+//! and a command gateway needs the unit of work its commands run in:
+//!
+//! ```compile_fail
+//! # #[cqrs::command(error = cqrs::StoreError)] struct Tick;
+//! #[cqrs::command_gateway(handles(Tick))]
+//! struct Clock; // no `#[gateway(unit)]` field
 //! ```
 
 use std::{future::Future, marker::PhantomData};
@@ -446,12 +476,18 @@ impl<E: DomainEvent, U: UnitMode, T: UnitOfWork<E, U>> UnitOfWork<E, U> for std:
     }
 }
 
-/// Handles one command: finds what it needs (through the application's
+/// Handles command `C`: finds what it needs (through the application's
 /// repositories), lets the domain append events, and records them for the
 /// entity they change (`events.record(entity)`). Its unit of work commits.
-pub trait CommandHandler: Send + Sync {
-    /// The command handled.
-    type Command: Command + Sync;
+///
+/// The command is a generic parameter: one struct (the gateway,
+/// `#[cqrs::command_gateway]`) handles several commands, one impl each,
+/// sharing its dependencies.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not handle `{C}`",
+    note = "implement `CommandHandler<{C}>` for it, usually with `#[cqrs::command_handler]`"
+)]
+pub trait CommandHandler<C: Command + Sync>: Send + Sync {
     /// The events it decides on.
     type Event: DomainEvent;
     /// Its unit of work: [`Autocommit`], or [`InTransaction<Tx>`] when
@@ -467,10 +503,10 @@ pub trait CommandHandler: Send + Sync {
     /// besides writing in `tx`, it must have no side effects.
     fn handle(
         &self,
-        command: &Self::Command,
+        command: &C,
         events: &mut Appender<Self::Event>,
         tx: &mut <Self::Unit as UnitMode>::Tx,
-    ) -> impl Future<Output = Result<OutputOf<Self::Command>, ErrorOf<Self::Command>>> + Send;
+    ) -> impl Future<Output = Result<OutputOf<C>, ErrorOf<C>>> + Send;
 
     /// How many times the handler re-runs after losing a race (0: never).
     fn conflict_retries(&self) -> u32 {
@@ -503,16 +539,17 @@ fn lost_race(error: &StoreError) -> bool {
 /// What the handler returns, or the store's error (converted), after the
 /// retries for a lost race. In [`Autocommit`], recording more than one
 /// entity is an error: their appends would not be atomic.
-pub async fn dispatch_command<H, U>(
+pub async fn dispatch_command<C, H, U>(
     handler: &H,
-    command: H::Command,
+    command: C,
     metadata: Metadata,
     unit: &U,
-) -> Result<OutputOf<H::Command>, ErrorOf<H::Command>>
+) -> Result<OutputOf<C>, ErrorOf<C>>
 where
-    H: CommandHandler,
+    C: Command + Sync,
+    H: CommandHandler<C>,
     U: UnitOfWork<H::Event, H::Unit>,
-    ErrorOf<H::Command>: From<StoreError>,
+    ErrorOf<C>: From<StoreError>,
 {
     let mut retries = handler.conflict_retries();
     loop {

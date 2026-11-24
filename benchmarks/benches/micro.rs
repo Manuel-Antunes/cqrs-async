@@ -9,10 +9,10 @@ use std::{
 
 use blog::domain::{Post, PostId};
 use cqrs::Aggregate;
-use cqrs::{CommandGateway, Handler, InMemoryEventStore, InMemorySnapshots, ReadLog};
+use cqrs::{CommandGateway, InMemoryEventStore, InMemorySnapshots, QueryGateway, QueryHandler, ReadLog};
 use cqrs_benchmarks::{
     PlainPosts, now,
-    ping::{Ping, PingGateway, PingHandler},
+    ping::{Echo, Ping, PingGateway},
     seed_post, seed_posts,
 };
 
@@ -20,21 +20,21 @@ fn main() {
     divan::main();
 }
 
-/// Sending a trivial command: the cost of routing itself.
+/// Asking a trivial query: the cost of routing itself.
 mod dispatch {
     use super::*;
 
     /// Baseline: calling the handler directly.
     #[divan::bench]
     fn direct_call() -> u64 {
-        now(PingHandler.handle(Ping(black_box(1)))).unwrap()
+        now(PingGateway.handle(Echo(black_box(1)))).unwrap()
     }
 
-    /// Through `#[derive(Gateway)]`.
+    /// Through `#[query_gateway]`.
     #[divan::bench]
     fn derived_gateway(bencher: divan::Bencher) {
-        let gateway = PingGateway { ping: PingHandler };
-        bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
+        let gateway = PingGateway;
+        bencher.bench_local(|| now(gateway.query(Echo(black_box(1)))).unwrap());
     }
 }
 
@@ -182,22 +182,22 @@ mod interceptors {
     /// The gateway alone (baseline).
     #[divan::bench]
     fn command_plain(bencher: divan::Bencher) {
-        let gateway = PingGateway { ping: PingHandler };
-        bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
+        let gateway = PingGateway;
+        bencher.bench_local(|| now(gateway.query(Echo(black_box(1)))).unwrap());
     }
 
     /// The gateway through one interceptor that only calls `next`.
     #[divan::bench]
     fn command_intercepted(bencher: divan::Bencher) {
-        let gateway = Intercepted::new(PingGateway { ping: PingHandler }, Pass);
-        bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
+        let gateway = Intercepted::new(PingGateway, Pass);
+        bencher.bench_local(|| now(gateway.query(Echo(black_box(1)))).unwrap());
     }
 
     /// The same, through a chain of four.
     #[divan::bench]
     fn command_intercepted_4(bencher: divan::Bencher) {
-        let gateway = Intercepted::new(PingGateway { ping: PingHandler }, (Pass, Pass, Pass, Pass));
-        bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
+        let gateway = Intercepted::new(PingGateway, (Pass, Pass, Pass, Pass));
+        bencher.bench_local(|| now(gateway.query(Echo(black_box(1)))).unwrap());
     }
 
     /// One post's `Retitled` event, as the blog's projection gets it.
@@ -256,17 +256,14 @@ mod interceptors {
 /// is the gateway's call.
 mod unit {
     use cqrs::Cqrs;
-    use cqrs_benchmarks::ping::{NoStore, PingCommandHandler, PingCommands};
+    use cqrs_benchmarks::ping::{NoStore, PingCommands};
 
     use super::*;
 
     /// A gateway of commands and its unit of work (baseline).
     #[divan::bench]
     fn command_gateway(bencher: divan::Bencher) {
-        let gateway = PingCommands {
-            ping: PingCommandHandler,
-            events: NoStore,
-        };
+        let gateway = PingCommands { events: NoStore };
         bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
     }
 
@@ -274,10 +271,7 @@ mod unit {
     #[divan::bench]
     fn command_through_unit(bencher: divan::Bencher) {
         let unit = Cqrs::from_publisher(NoStore)
-            .commands(|events| PingCommands {
-                ping: PingCommandHandler,
-                events,
-            })
+            .commands(|events| PingCommands { events })
             .queries(())
             .build();
         bencher.bench_local(|| now(unit.commands().send(Ping(black_box(1)))).unwrap());

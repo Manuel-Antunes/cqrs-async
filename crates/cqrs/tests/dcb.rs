@@ -124,18 +124,22 @@ struct Subscribe {
 type Store = InMemoryEventStore<SchoolEvent>;
 type Publisher = Arc<InlinePublisher<SchoolEvent, Store>>;
 
-/// Subscribes to each course in turn: several entities in one command, so
-/// it takes the unit's transaction (in memory, `()`). On its first run it
-/// can let another student take a seat between its loads and its save.
-struct SubscribeHandler {
+/// The gateway. Subscribing can let another student take a seat between its
+/// loads and its save, on its first run.
+#[cqrs::command_gateway(handles(Subscribe))]
+struct Gateway {
     courses: Arc<AggregateLoader<Course, Store>>,
     students: Arc<AggregateLoader<Student, Store>>,
     runs: AtomicU32,
     sneak_in: Option<u32>,
+    #[gateway(unit)]
+    events: Publisher,
 }
 
+/// Subscribes to each course in turn: several entities in one command, so
+/// it takes the unit's transaction (in memory, `()`).
 #[cqrs::command_handler]
-impl CommandHandler for SubscribeHandler {
+impl CommandHandler<Subscribe> for Gateway {
     async fn handle(&self, command: &Subscribe, events: &mut Appender<SchoolEvent>, _: &mut ()) -> Result<(), Error> {
         let first_run = self.runs.fetch_add(1, Ordering::Relaxed) == 0;
         for &course in &command.courses {
@@ -154,14 +158,6 @@ impl CommandHandler for SubscribeHandler {
         }
         Ok(())
     }
-}
-
-#[derive(cqrs::Gateway)]
-#[gateway(commands)]
-struct Gateway {
-    subscribe: SubscribeHandler,
-    #[gateway(unit)]
-    events: Publisher,
 }
 
 /// The gateway, over the store the test also writes to.
@@ -213,17 +209,14 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
         .unwrap();
     }
     let publisher: Publisher = Arc::new(InlinePublisher::new(store.clone()));
-    let handler = SubscribeHandler {
-        courses: Arc::new(AggregateLoader::new(store.clone())),
-        students: Arc::new(AggregateLoader::new(store.clone())),
-        runs: AtomicU32::new(0),
-        sneak_in,
-    };
     (
-        store,
+        store.clone(),
         Wired {
             gateway: Gateway {
-                subscribe: handler,
+                courses: Arc::new(AggregateLoader::new(store.clone())),
+                students: Arc::new(AggregateLoader::new(store)),
+                runs: AtomicU32::new(0),
+                sneak_in,
                 events: publisher,
             },
         },
@@ -309,7 +302,7 @@ fn a_decision_on_stale_loads_is_refused_and_decided_again() {
         Err(Error::Full)
     );
     assert_eq!(
-        gateway.inner().subscribe.runs.load(Ordering::Relaxed),
+        gateway.inner().runs.load(Ordering::Relaxed),
         2,
         "refused once, then decided on fresh loads"
     );
@@ -326,9 +319,9 @@ fn a_read_only_aggregate_is_checked_too() {
     // Student 1 subscribes elsewhere while course 2 is being decided: the
     // course did not change, the student did, and the student was loaded.
     let (store, gateway) = gateway(None);
-    let course = block_on(gateway.inner().subscribe.courses.load(&2)).unwrap().unwrap();
+    let course = block_on(gateway.inner().courses.load(&2)).unwrap().unwrap();
     let mut events = Appender::with_metadata(Metadata::new());
-    let student = block_on(gateway.inner().subscribe.students.load_in(&1, &mut events)).unwrap();
+    let student = block_on(gateway.inner().students.load_in(&1, &mut events)).unwrap();
     assert!(student.is_none(), "no subscription yet: absence is checked too");
     subscribe_directly(&store, 3, 1);
     course.subscribe(1, None, &mut events).unwrap();
@@ -351,7 +344,7 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
     // The same aggregate recorded twice in one unit: its own first events
     // do not refuse the second write.
     let (_, other) = gateway(None);
-    let courses = &other.inner().subscribe.courses;
+    let courses = &other.inner().courses;
     let mut events = Appender::with_metadata(Metadata::new());
     let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
     events.append(SchoolEvent::Subscribed { course: 2, student: 5 });
@@ -371,7 +364,7 @@ fn a_new_aggregate_root_is_created_in_its_own_stream() {
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
     events.record(course);
     commit(&mut events, gateway.publisher()).unwrap();
-    let loaded = block_on(gateway.inner().subscribe.courses.load(&9)).unwrap().unwrap();
+    let loaded = block_on(gateway.inner().courses.load(&9)).unwrap().unwrap();
     assert_eq!(loaded.capacity, 3);
     assert_eq!(store.all().last().unwrap().stream, StreamId::of::<Course>(&9));
 }

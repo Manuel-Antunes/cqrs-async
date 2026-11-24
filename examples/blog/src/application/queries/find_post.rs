@@ -1,8 +1,6 @@
-use std::sync::Arc;
+use cqrs::QueryHandler;
 
-use cqrs::Handler;
-
-use super::{PostSummary, PostSummaryRepository};
+use super::{PostQueryGateway, PostSummary, PostSummaryRepository};
 use crate::{application::BlogError, domain::PostId};
 
 /// One post, published or not; `None` if it does not exist (yet).
@@ -13,21 +11,9 @@ pub struct FindPost {
     pub id: PostId,
 }
 
-/// Handles [`FindPost`] by reading the read model.
-pub struct FindPostHandler<M> {
-    /// The read model to answer from.
-    summaries: Arc<M>,
-}
-
-impl<M> FindPostHandler<M> {
-    /// A handler over `summaries`.
-    pub fn new(summaries: Arc<M>) -> Self {
-        Self { summaries }
-    }
-}
-
+/// Answers from the read model.
 #[cqrs::query_handler]
-impl<M: PostSummaryRepository> Handler for FindPostHandler<M> {
+impl<M: PostSummaryRepository> QueryHandler<FindPost> for PostQueryGateway<M> {
     async fn handle(&self, query: FindPost) -> Result<Option<PostSummary>, BlogError> {
         Ok(self.summaries.find(query.id).await?)
     }

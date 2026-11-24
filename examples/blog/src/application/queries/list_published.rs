@@ -1,8 +1,6 @@
-use std::sync::Arc;
+use cqrs::QueryHandler;
 
-use cqrs::Handler;
-
-use super::{PostSummary, PostSummaryRepository};
+use super::{PostQueryGateway, PostSummary, PostSummaryRepository};
 use crate::application::BlogError;
 
 /// Every published post, ordered by id.
@@ -10,21 +8,9 @@ use crate::application::BlogError;
 #[derive(Clone, Debug)]
 pub struct ListPublished;
 
-/// Handles [`ListPublished`] by reading the read model.
-pub struct ListPublishedHandler<M> {
-    /// The read model to answer from.
-    summaries: Arc<M>,
-}
-
-impl<M> ListPublishedHandler<M> {
-    /// A handler over `summaries`.
-    pub fn new(summaries: Arc<M>) -> Self {
-        Self { summaries }
-    }
-}
-
+/// Answers from the read model.
 #[cqrs::query_handler]
-impl<M: PostSummaryRepository> Handler for ListPublishedHandler<M> {
+impl<M: PostSummaryRepository> QueryHandler<ListPublished> for PostQueryGateway<M> {
     async fn handle(&self, _: ListPublished) -> Result<Vec<PostSummary>, BlogError> {
         Ok(self.summaries.published().await?)
     }

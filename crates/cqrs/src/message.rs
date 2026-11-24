@@ -1,5 +1,6 @@
 //! Messages and their handlers: [`Command`]s change state, [`Query`]s read
-//! it, each answered by exactly one [`Handler`]. Committed events go to
+//! it, each answered by exactly one handler
+//! ([`CommandHandler`](crate::CommandHandler), [`QueryHandler`]). Committed events go to
 //! [`EventHandler`]s. Gateways ([`CommandGateway`], [`QueryGateway`]) are
 //! the ports callers send through.
 
@@ -7,7 +8,7 @@ use std::{fmt, future::Future, sync::Arc};
 
 use crate::{DomainEvent, EventEnvelope, Metadata};
 
-/// Something a [`Handler`] answers. The output and error types belong to the
+/// Something a handler answers. The output and error types belong to the
 /// message, not to the handler: whoever sends a message knows exactly what
 /// comes back without knowing who handles it.
 ///
@@ -35,41 +36,34 @@ pub trait Command: Message {}
 )]
 pub trait Query: Message {}
 
-/// Handles exactly one message type, named by the associated type: one
-/// struct per use case, holding the dependencies that use case needs.
+/// Answers one query type `Q`: the read side's use case (Axon's
+/// `@QueryHandler`). A struct answers several queries with one impl per
+/// query, sharing its dependencies (usually the read model): it is the query
+/// gateway itself (`#[cqrs::query_gateway]`).
 ///
-/// The message is an associated type, not a generic parameter, so a gateway
-/// can route by the handler's type alone. It is one trait for commands and
-/// queries; whether the message is a [`Command`] or a [`Query`] decides how it
-/// can be sent.
+/// The query is a generic parameter, so one type implements it once per
+/// query; whether the message is a [`Command`] or a [`Query`] decides how it
+/// can be sent, and commands have their own [`CommandHandler`](crate::CommandHandler).
 ///
 /// The returned future is concrete (`impl Future`): calls are statically
 /// dispatched and nothing is boxed. Implement it with a plain `async fn`.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a handler",
-    note = "implement `Handler` for it; in a `#[derive(Gateway)]`, mark fields that are not handlers with `#[gateway(skip)]`"
+    message = "`{Self}` does not answer `{Q}`",
+    note = "implement `QueryHandler<{Q}>` for it, usually with `#[cqrs::query_handler]`"
 )]
-pub trait Handler: Send + Sync {
-    /// The one message this handler answers.
-    type Message: Message;
+pub trait QueryHandler<Q: Query>: Send + Sync {
+    /// Runs the use case for `query`.
+    fn handle(&self, query: Q) -> impl Future<Output = Result<OutputOf<Q>, ErrorOf<Q>>> + Send;
 
-    /// Runs the use case for `message`.
-    fn handle(
-        &self,
-        message: Self::Message,
-    ) -> impl Future<Output = Result<OutputOf<Self::Message>, ErrorOf<Self::Message>>> + Send;
-
-    /// Runs the use case for `message`, sent with `metadata` (correlation
-    /// id, user...). What gateways call. By default the metadata is ignored;
-    /// a [`CommandHandler`](crate::CommandHandler) stores it with the events
-    /// it saves.
+    /// Runs the use case for `query`, sent with `metadata` (correlation id,
+    /// user...). What gateways call. By default the metadata is ignored.
     fn handle_with(
         &self,
-        message: Self::Message,
+        query: Q,
         metadata: Metadata,
-    ) -> impl Future<Output = Result<OutputOf<Self::Message>, ErrorOf<Self::Message>>> + Send {
+    ) -> impl Future<Output = Result<OutputOf<Q>, ErrorOf<Q>>> + Send {
         let _ = metadata;
-        self.handle(message)
+        self.handle(query)
     }
 }
 
@@ -81,24 +75,32 @@ pub type ErrorOf<M> = <M as Message>::Error;
 
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
-impl<H: Handler> Handler for Arc<H> {
-    type Message = H::Message;
-
-    fn handle(
-        &self,
-        message: H::Message,
-    ) -> impl Future<Output = Result<OutputOf<H::Message>, ErrorOf<H::Message>>> + Send {
-        (**self).handle(message)
+impl<Q: Query, H: QueryHandler<Q>> QueryHandler<Q> for Arc<H> {
+    fn handle(&self, query: Q) -> impl Future<Output = Result<OutputOf<Q>, ErrorOf<Q>>> + Send {
+        (**self).handle(query)
     }
 
     fn handle_with(
         &self,
-        message: H::Message,
+        query: Q,
         metadata: Metadata,
-    ) -> impl Future<Output = Result<OutputOf<H::Message>, ErrorOf<H::Message>>> + Send {
-        (**self).handle_with(message, metadata)
+    ) -> impl Future<Output = Result<OutputOf<Q>, ErrorOf<Q>>> + Send {
+        (**self).handle_with(query, metadata)
     }
 }
+
+/// That a type has a handler impl for `M`, whatever its bounds: written by
+/// `#[command_handler]` / `#[query_handler]` next to the impl, and required
+/// by `#[command_gateway]` / `#[query_gateway]` for every message they list,
+/// so a listed message without its handler is a compile error where the
+/// gateway is declared. A handler implemented without the attribute writes
+/// it by hand, without bounds: `impl<R> Handles<FindPost> for Posts<R> {}`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` lists `{M}` in `handles(...)` but has no handler for it",
+    label = "no `#[cqrs::command_handler]` / `#[cqrs::query_handler]` impl for `{M}`",
+    note = "write `#[cqrs::command_handler] impl CommandHandler<{M}> for ...` (or `QueryHandler<{M}>`), or remove `{M}` from `handles(...)`"
+)]
+pub trait Handles<M> {}
 
 /// What a processor hands an event handler with each event (Axon's
 /// `ProcessingContext`): the unit of work it runs in, and whether the event
@@ -353,12 +355,13 @@ tuple_event_handler!(A 0, B 1, C 2, D 3, F 4, G 5, H 6);
 tuple_event_handler!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
 
 /// Routes one message type to its handler. Implemented by
-/// `#[derive(Gateway)]`, once per handler field; callers use the
-/// [`CommandGateway`] / [`QueryGateway`] methods.
+/// `#[command_gateway]` / `#[query_gateway]`, once per message in
+/// `handles(...)`; callers use the [`CommandGateway`] / [`QueryGateway`]
+/// methods.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no handler for `{M}`",
     label = "nothing in this gateway handles `{M}`",
-    note = "add a field whose type implements `Handler<Message = {M}>`"
+    note = "add `{M}` to the gateway's `handles(...)`, with its handler impl"
 )]
 pub trait Dispatch<M: Message>: Send + Sync {
     /// Hands `message` and its `metadata` to the handler responsible for
@@ -377,24 +380,6 @@ impl<M: Message, G: Dispatch<M>> Dispatch<M> for Arc<G> {
     ) -> impl Future<Output = Result<M::Output, M::Error>> + Send {
         (**self).dispatch_with(message, metadata)
     }
-}
-
-/// An enum of messages (`#[derive(Commands)]` / `#[derive(Queries)]`)
-/// whose every variant `G` dispatches: what lets a gateway marked
-/// `#[gateway(commands = Enum)]` take the enum itself.
-#[diagnostic::on_unimplemented(
-    message = "`{G}` does not handle every message of `{Self}`",
-    label = "some variant of `{Self}` has no handler in `{G}`",
-    note = "add a handler field for each variant's message, or remove the variant"
-)]
-pub trait DispatchVia<G: ?Sized>: Message {
-    /// Hands the variant's message and `metadata` to `gateway`, wrapping
-    /// its answer in the matching variant of the output enum.
-    fn dispatch_via(
-        self,
-        gateway: &G,
-        metadata: Metadata,
-    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
 /// A nameable port for sending one command type: what other components

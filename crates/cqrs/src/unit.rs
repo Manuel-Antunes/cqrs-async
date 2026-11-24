@@ -33,8 +33,9 @@
 //! checked at compile time (`projection` needs events), and the unit it
 //! builds holds the concrete types: calls through it are as static as
 //! calls on the gateways themselves. An application names what it exposes
-//! with the port traits its message enums generate
-//! (`#[commands(port = PostCommands)]`), not with the unit's type.
+//! with the traits its gateways generate
+//! (`#[command_gateway(commands = PostCommands, ..)]`), not with the unit's
+//! type.
 
 use std::sync::Arc;
 

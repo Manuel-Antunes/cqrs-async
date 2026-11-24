@@ -1,9 +1,10 @@
-use std::sync::Arc;
-
 use cqrs::{Appender, CommandHandler, New};
 
 use crate::{
-    application::{BlogError, commands::PostRepository},
+    application::{
+        BlogError,
+        commands::{PostCommandGateway, PostRepository},
+    },
     domain::{Post, PostEvent, PostId},
 };
 
@@ -15,23 +16,10 @@ pub struct CreatePost {
     pub title: String,
 }
 
-/// Handles [`CreatePost`]: takes the next id from the repository, lets the
-/// domain create the post, records it (expecting it not to exist yet) and
-/// saves it.
-pub struct CreatePostHandler<R> {
-    /// Where posts are kept.
-    posts: Arc<R>,
-}
-
-impl<R> CreatePostHandler<R> {
-    /// A handler saving to `posts`.
-    pub fn new(posts: Arc<R>) -> Self {
-        Self { posts }
-    }
-}
-
+/// Takes the next id from the repository, lets the domain create the post,
+/// records it (expecting it not to exist yet) and saves it.
 #[cqrs::command_handler]
-impl<R: PostRepository> CommandHandler for CreatePostHandler<R> {
+impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> {
     async fn handle(
         &self,
         command: &CreatePost,

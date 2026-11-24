@@ -12,9 +12,9 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, EmitUpdates, EventEnvelope, EventHandler, EventPublisher, Events, Handler, HandlerError,
-    InMemoryEventStore, ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateEmitter, StoreError,
-    SubscriptionQueries, emit_updates, head_of,
+    Aggregate, EmitUpdates, EventEnvelope, EventHandler, EventPublisher, Events, HandlerError, InMemoryEventStore,
+    ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateEmitter, StoreError, SubscriptionQueries,
+    emit_updates, head_of,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -71,19 +71,14 @@ impl EventHandler<ClockEvent> for Ticks {
 #[derive(Clone, Debug)]
 struct TicksOf(u32);
 
-struct TicksOfHandler(Arc<Ticks>);
+#[cqrs::query_gateway(handles(TicksOf))]
+struct ClockQueries(Arc<Ticks>);
 
-impl Handler for TicksOfHandler {
-    type Message = TicksOf;
-
+#[cqrs::query_handler]
+impl cqrs::QueryHandler<TicksOf> for ClockQueries {
     async fn handle(&self, TicksOf(id): TicksOf) -> Result<u64, StoreError> {
         Ok(self.0.of(&id.to_string()))
     }
-}
-
-#[derive(cqrs::Gateway)]
-struct ClockQueries {
-    ticks: TicksOfHandler,
 }
 
 /// Where the queries' new results go.
@@ -140,13 +135,8 @@ impl Instance {
             emitter,
             std::future::pending(),
         ));
-        let queries = SubscriptionQueries::new(
-            ClockQueries {
-                ticks: TicksOfHandler(Arc::clone(ticks)),
-            },
-            updates,
-        )
-        .after_projection(events.clone(), progress);
+        let queries = SubscriptionQueries::new(ClockQueries(Arc::clone(ticks)), updates)
+            .after_projection(events.clone(), progress);
         Self {
             queries,
             projection,
