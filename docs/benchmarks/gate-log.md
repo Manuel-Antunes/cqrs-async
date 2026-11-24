@@ -137,3 +137,28 @@ our 3840 cmd/s is among the highest absolute values recorded: cqrs-es was
 fast in this run, not ours slow. Open account p99 was 38 ms against 14 ms.
 Not decided: needs the A/B against `5437e6e` on a quiet machine (the
 append path changed in 7.4: AppendEvents with a transaction argument).
+
+## 2026-11-24, after the command's unit of work (7b.1b, `9f0e243`)
+
+One versus run (median of 3), load average 8-11. The append path of a
+command without a transaction (`Autocommit`, what the versus handler is)
+changed: the handler records, the gateway appends.
+
+| Measure | Passes if | Result | Run before (`926476c`) |
+|---|---|---:|---:|
+| open account, cmd/s | >= 1.10 | 1.15 (4345) | 1.05 (3840) |
+| mixed load, cmd/s | >= 1.25 | 1.34 (3952) | 1.35 (3888) |
+| mixed load, p99 | <= 0.76 | 0.81 (18.4 ms) | 0.76 (18.8 ms) |
+| mixed load, all done | <= 0.77 | 0.76 | 0.75 |
+| hot account, cmd/s | >= 1.00 | 1.24 | 1.35 |
+| read model rebuild | >= 16 | 22.4 | 21.8 |
+| 5000-event replay, p50 | <= 0.95 | 0.85 | 0.82 |
+| with snapshot every 100, p50 | <= 0.61 | 0.62 (1.09 ms) | 0.53 (1.12 ms) |
+| events or money lost | 0 | 0 (cqrs-es: 170 events, 972 units) | 0 |
+
+Seven of nine pass. The two that miss do so on cqrs-es's side: our mixed
+p99 (18.4 ms) and snapshot replay (1.09 ms) are as good as or better than
+in the run before, theirs improved (22.6 against 24.8 ms; 1.76 against
+2.10 ms). The snapshot replay does not go through a command at all. Open
+account, which misses before, passes now, with our highest throughput so
+far. Read as noise on a loaded machine: the A/B on a quiet one decides.
