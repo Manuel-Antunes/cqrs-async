@@ -33,10 +33,10 @@ impl<R, P> PublishPostHandler<R, P> {
 
 #[cqrs::command_handler]
 impl<R: PostRepository, P: EventPublisher<PostEvent>> CommandHandler for PublishPostHandler<R, P> {
-    async fn handle(&self, command: &PublishPost, events: &mut Appender<PostEvent>) -> Result<(), BlogError> {
+    async fn handle(&self, command: &PublishPost, appender: &mut Appender<PostEvent>) -> Result<(), BlogError> {
         let post = self.posts.find(command.id).await?.ok_or(NotFound(command.id))?;
-        post.publish(events)?;
-        events.commit(post, &self.events).await?;
+        post.publish(appender)?;
+        appender.commit(post, &self.events).await?;
         Ok(())
     }
 }

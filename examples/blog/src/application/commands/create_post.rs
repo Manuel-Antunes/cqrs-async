@@ -38,11 +38,11 @@ impl<P> CreatePostHandler<P> {
 
 #[cqrs::command_handler]
 impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
-    async fn handle(&self, command: &CreatePost, events: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
+    async fn handle(&self, command: &CreatePost, appender: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
         let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let post = Loaded::new(Post::initial(&id));
-        post.create(command.title.as_str(), events)?;
-        events.commit(post, &self.events).await?;
+        post.create(command.title.as_str(), appender)?;
+        appender.commit(post, &self.events).await?;
         Ok(id)
     }
 }
