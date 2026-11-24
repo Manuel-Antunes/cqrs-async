@@ -18,7 +18,7 @@ use cqrs::{
     HandlerError, InMemoryEventStore, Intercepted, Metadata, ProcessingContext, StreamId,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
 /// Records what runs, in order.

@@ -34,7 +34,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum ClockEvent {
     #[event(name = "clock.ticked")]
     Ticked { n: u64 },
@@ -148,7 +148,7 @@ async fn events_round_trip_with_their_envelope() {
 }
 
 /// The same event in a newer shape: `Ticked` gained `by` in version 2.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum ClockEventV2 {
     #[event(name = "clock.ticked", version = 2)]
     Ticked { n: u64, by: String },
@@ -528,7 +528,7 @@ async fn instances_share_segments_through_postgres() {
 }
 
 /// A second event enum, for the second aggregate of the same database.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum BellEvent {
     #[event(name = "bell.rung")]
     Rung { times: u32 },
@@ -1063,7 +1063,7 @@ async fn snapshots_are_kept_per_aggregate_and_revision() {
 }
 
 /// Bookings of a room: each in its own stream, tagged with the room.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum RoomEvent {
     #[event(name = "room.booked")]
     Booked {
@@ -1135,7 +1135,7 @@ async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
 }
 
 /// Seats: tagged with the room and the floor.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum SeatEvent {
     #[event(name = "seat.taken")]
     Taken {
@@ -1272,8 +1272,8 @@ struct Totals {
 }
 
 /// Subscribed to by the test, to see what the projection announced.
-#[derive(Clone, cqrs::Query)]
-#[query(output = u64, error = ())]
+#[cqrs::query(output = u64, error = ())]
+#[derive(Clone)]
 struct Applied;
 
 #[cqrs::projection(namespace = "totals")]
@@ -1445,10 +1445,16 @@ async fn a_processing_group_commits_all_its_read_models_or_none() {
     running.stop().await;
 }
 
-/// Tags written by hand: the parity of the tick.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
+/// Tags written by hand: the parity of the tick (so `DomainEvent` is too).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum Parity {
     Ticked { n: u64 },
+}
+
+impl cqrs::DomainEvent for Parity {
+    fn event_type(&self) -> &'static str {
+        "Ticked"
+    }
 }
 
 impl cqrs::TagResolver for Parity {

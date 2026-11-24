@@ -23,7 +23,7 @@ pub enum BankCommand {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 pub enum AccountEvent {
     #[event(name = "account.opened")]
     Opened,

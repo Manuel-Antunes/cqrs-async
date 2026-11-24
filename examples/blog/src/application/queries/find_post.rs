@@ -6,8 +6,8 @@ use super::{PostSummary, PostSummaryRepository};
 use crate::{application::BlogError, domain::PostId};
 
 /// One post, published or not; `None` if it does not exist (yet).
-#[derive(Clone, Debug, cqrs::Query)]
-#[query(output = Option<PostSummary>, error = BlogError)]
+#[cqrs::query(output = Option<PostSummary>, error = BlogError)]
+#[derive(Clone, Debug)]
 pub struct FindPost {
     /// The post to look up.
     pub id: PostId,

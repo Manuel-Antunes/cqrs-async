@@ -18,7 +18,7 @@ use tracing::{
     span::{Attributes, Id, Record},
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
 struct Clock {
@@ -41,8 +41,7 @@ impl Aggregate for Clock {
     fn evolve(&mut self, _: &Ticked) {}
 }
 
-#[derive(cqrs::Command)]
-#[command(output = (), error = StoreError)]
+#[cqrs::command(output = (), error = StoreError)]
 struct Tick {
     id: u32,
 }

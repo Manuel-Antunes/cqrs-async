@@ -9,7 +9,7 @@ use cqrs::{
     testing::{AggregateFixture, block_on},
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Added(u64);
 
 struct Sum {

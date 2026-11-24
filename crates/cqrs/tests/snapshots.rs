@@ -9,7 +9,7 @@ use cqrs::{
     Pending, SnapshotStore, StoreError, testing::block_on,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Added(u64);
 
 #[derive(Clone, Debug, PartialEq)]

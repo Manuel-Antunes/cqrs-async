@@ -109,8 +109,8 @@ pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};
 
 #[cfg(feature = "derive")]
 pub use cqrs_derive::{
-    AggregateRoot, Command, Commands, DomainEvent, Gateway, Queries, Query, QueryUpdates, TagResolver, command_handler,
-    projection, query_handler,
+    AggregateRoot, Command, Commands, DomainEvent, Gateway, Queries, Query, QueryUpdates, aggregate, command,
+    command_handler, projection, query, query_handler,
 };
 
 /// Everything a domain or application module usually needs.

@@ -43,7 +43,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 ///
 /// ```
 /// # use cqrs::{Aggregate, EventAppender, testing::AggregateFixture};
-/// # #[derive(Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)] enum Event { Opened, Closed }
+/// # #[derive(Debug, PartialEq, cqrs::DomainEvent)] enum Event { Opened, Closed }
 /// # #[derive(Debug, PartialEq)] struct Door { open: bool }
 /// # impl Aggregate for Door {
 /// #     const TYPE: &'static str = "door"; type Id = u8; type Event = Event;

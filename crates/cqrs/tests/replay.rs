@@ -13,7 +13,7 @@ use cqrs::{
     InMemoryTokenStore, Metadata, ProcessingContext, ResetError, StreamId,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
 type Store = InMemoryEventStore<Ticked>;

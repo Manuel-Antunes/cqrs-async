@@ -11,7 +11,7 @@ use cqrs::{
     InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, StoreError, testing::block_on,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 enum CounterEvent {
     Opened,
     Added(u64),
@@ -84,12 +84,10 @@ impl From<StoreError> for Error {
     }
 }
 
-#[derive(cqrs::Command)]
-#[command(output = u32, error = Error)]
+#[cqrs::command(output = u32, error = Error)]
 struct Open(u32);
 
-#[derive(cqrs::Command)]
-#[command(output = u64, error = Error)]
+#[cqrs::command(output = u64, error = Error)]
 struct Add {
     id: u32,
     n: u64,

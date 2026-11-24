@@ -14,7 +14,7 @@ use cqrs::{
     InMemoryEventStore, InlinePublisher, Metadata, SourceEvents, StoreError, StreamId, TagResolver, testing::block_on,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 enum SchoolEvent {
     #[event(name = "course.opened")]
     CourseOpened {
@@ -32,8 +32,8 @@ enum SchoolEvent {
 }
 
 /// Every event tagged with its id: its opening and its subscriptions.
-#[derive(Debug, cqrs::AggregateRoot)]
-#[aggregate(event = SchoolEvent, tag = "course")]
+#[cqrs::aggregate(event = SchoolEvent, tag = "course")]
+#[derive(Debug)]
 struct Course {
     id: u32,
     capacity: usize,
@@ -71,8 +71,8 @@ impl Course {
 }
 
 /// Every subscription of the student, whichever course's stream holds it.
-#[derive(Debug, cqrs::AggregateRoot)]
-#[aggregate(event = SchoolEvent, tag = "student")]
+#[cqrs::aggregate(event = SchoolEvent, tag = "student")]
+#[derive(Debug)]
 struct Student {
     #[aggregate(id)]
     id: u32,
@@ -115,8 +115,7 @@ impl From<StoreError> for Error {
     }
 }
 
-#[derive(cqrs::Command)]
-#[command(error = Error)]
+#[cqrs::command(error = Error)]
 struct Subscribe {
     student: u32,
     courses: Vec<u32>,
@@ -363,10 +362,17 @@ fn a_new_aggregate_root_is_created_in_its_own_stream() {
 }
 
 /// Tags written by hand (an `impl TagResolver`, no `#[tag]` attributes on
-/// the event): criteria and conditions work on them the same way.
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+/// the event, which then implements `DomainEvent` by hand too): criteria and
+/// conditions work on them the same way.
+#[derive(Clone, Debug, PartialEq)]
 enum Shipping {
     Shipped { parcel: u32, carrier: String },
+}
+
+impl cqrs::DomainEvent for Shipping {
+    fn event_type(&self) -> &'static str {
+        "Shipped"
+    }
 }
 
 impl TagResolver for Shipping {

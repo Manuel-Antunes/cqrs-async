@@ -8,8 +8,8 @@ use crate::{
 };
 
 /// Creates a draft post and returns its id.
-#[derive(Debug, serde::Serialize, serde::Deserialize, cqrs::Command)]
-#[command(output = PostId, error = BlogError)]
+#[cqrs::command(output = PostId, error = BlogError)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CreatePost {
     /// The title; trimmed, and refused if blank.
     pub title: String,

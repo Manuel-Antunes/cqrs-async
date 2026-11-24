@@ -15,17 +15,17 @@ use cqrs::{
 };
 use futures_util::StreamExt;
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
-#[derive(Clone, Debug, PartialEq, cqrs::Query)]
-#[query(output = Option<u64>, error = ())]
+#[cqrs::query(output = Option<u64>, error = ())]
+#[derive(Clone, Debug, PartialEq)]
 struct TotalOf {
     clock: String,
 }
 
-#[derive(Clone, Debug, PartialEq, cqrs::Query)]
-#[query(output = u64, error = ())]
+#[cqrs::query(output = u64, error = ())]
+#[derive(Clone, Debug, PartialEq)]
 struct GrandTotal;
 
 /// Where the updates of each query are emitted.

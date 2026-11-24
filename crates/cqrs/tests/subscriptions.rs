@@ -18,7 +18,7 @@ use cqrs::{
 };
 use futures_util::{Stream, StreamExt};
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 enum ClockEvent {
     Ticked,
     Renamed(String),
@@ -67,8 +67,8 @@ impl EventHandler<ClockEvent> for Ticks {
     }
 }
 
-#[derive(Clone, Debug, cqrs::Query)]
-#[query(output = u64, error = StoreError)]
+#[cqrs::query(output = u64, error = StoreError)]
+#[derive(Clone, Debug)]
 struct TicksOf(u32);
 
 struct TicksOfHandler(Arc<Ticks>);

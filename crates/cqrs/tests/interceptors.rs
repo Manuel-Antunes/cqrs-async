@@ -11,12 +11,10 @@ enum Error {
     Unauthorized,
 }
 
-#[derive(cqrs::Command)]
-#[command(output = String, error = Error)]
+#[cqrs::command(output = String, error = Error)]
 struct Rename(String);
 
-#[derive(cqrs::Query)]
-#[query(output = u32, error = Error)]
+#[cqrs::query(output = u32, error = Error)]
 struct Count;
 
 /// Answers with the `user` it was sent by.

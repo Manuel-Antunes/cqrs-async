@@ -126,10 +126,9 @@ impl<A: Aggregate> Loaded<A> {
 ///
 /// ```
 /// # use cqrs::{Appender, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, testing::block_on};
-/// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+/// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 /// # enum DoorEvent { Installed { id: u32 } }
-/// # #[derive(cqrs::AggregateRoot)]
-/// # #[aggregate(event = DoorEvent)]
+/// # #[cqrs::aggregate(event = DoorEvent)]
 /// # struct Door { id: u32 }
 /// # impl Door { fn apply(&mut self, _: &DoorEvent) {} }
 /// impl Door {

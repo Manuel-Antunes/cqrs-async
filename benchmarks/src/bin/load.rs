@@ -540,7 +540,7 @@ async fn over_http(report: &mut Report, scale: &Scale) {
 async fn postgres(report: &mut Report, scale: &Scale) {
     use cqrs::{AppendEvents, ExpectedVersion, Metadata, ReadLog, StreamId};
 
-    #[derive(Clone, serde::Serialize, serde::Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
+    #[derive(Clone, serde::Serialize, serde::Deserialize, cqrs::DomainEvent)]
     struct Ticked(u64);
 
     struct Clock;

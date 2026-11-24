@@ -26,8 +26,8 @@ pub use id::PostId;
 /// The derive writes the [`Aggregate`](cqrs::Aggregate) impl: stream `post`,
 /// id from the `id` field, initial state with the other fields at their
 /// default, and `evolve` calling `apply`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::AggregateRoot)]
-#[aggregate(name = "post", event = PostEvent)]
+#[cqrs::aggregate(name = "post", event = PostEvent)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Post {
     /// Which post this is.
     id: PostId,

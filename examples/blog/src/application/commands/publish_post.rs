@@ -8,8 +8,8 @@ use crate::{
 };
 
 /// Publishes a draft; from then on the post is frozen.
-#[derive(Debug, serde::Serialize, serde::Deserialize, cqrs::Command)]
-#[command(error = BlogError)]
+#[cqrs::command(error = BlogError)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PublishPost {
     /// The post to publish.
     pub id: PostId,

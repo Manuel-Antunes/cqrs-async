@@ -9,7 +9,7 @@
 use std::{borrow::Cow, fmt};
 
 /// A label on an event (`course=42`), what [`EventCriteria`] select by.
-/// Derived with `#[derive(TagResolver)]` and `#[tag]` on event fields.
+/// Derived with the event (`#[derive(DomainEvent)]`) from `#[tag]` on its fields.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Tag {
     /// What the value is (`"course"`).
@@ -38,16 +38,23 @@ impl fmt::Display for Tag {
 /// it by, and what a conditional append locks. Implemented on the event
 /// itself, two ways, as in Axon:
 ///
-/// - **derived** (recommended): `#[derive(TagResolver)]` and `#[tag]` on the
+/// - **derived** (recommended): `#[derive(DomainEvent)]` and `#[tag]` on the
 ///   fields to tag by (`@EventTag`); with none, the event has no tags.
-/// - **by hand**, keeping the event free of the framework's attributes:
+/// - **by hand**, keeping the event free of the framework's attributes
+///   (then `DomainEvent` is written by hand too):
 ///
 /// ```
-/// use cqrs::{Tag, TagResolver};
+/// use cqrs::{DomainEvent, Tag, TagResolver};
 ///
-/// #[derive(Clone, cqrs::DomainEvent)]
+/// #[derive(Clone)]
 /// enum OrderEvent {
 ///     Placed { order: u32, region: String },
+/// }
+///
+/// impl DomainEvent for OrderEvent {
+///     fn event_type(&self) -> &'static str {
+///         "order.placed"
+///     }
 /// }
 ///
 /// impl TagResolver for OrderEvent {

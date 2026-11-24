@@ -21,7 +21,7 @@ use crate::DomainEvent;
 ///
 /// ```
 /// # use cqrs::{Aggregate, EventAppender};
-/// # #[derive(cqrs::DomainEvent, cqrs::TagResolver)] enum PostEvent { Published }
+/// # #[derive(cqrs::DomainEvent)] enum PostEvent { Published }
 /// # struct Post { id: u64, published: bool }
 /// # #[derive(Debug)] enum PostError { AlreadyPublished }
 /// impl Post {
@@ -45,7 +45,7 @@ use crate::DomainEvent;
 ///
 /// ```
 /// # use cqrs::EventAppender;
-/// # #[derive(cqrs::DomainEvent, cqrs::TagResolver)] enum PostEvent { Created { id: u64, title: String } }
+/// # #[derive(cqrs::DomainEvent)] enum PostEvent { Created { id: u64, title: String } }
 /// # struct Post;
 /// # #[derive(Debug)] enum PostError { EmptyTitle }
 /// impl Post {

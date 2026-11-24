@@ -24,8 +24,8 @@ use crate::{
     system::System,
 };
 
-#[derive(Debug, Serialize, Deserialize, cqrs::AggregateRoot)]
-#[aggregate(name = "account", event = AccountEvent)]
+#[cqrs::aggregate(name = "account", event = AccountEvent)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OurAccount {
     id: String,
     state: Account,
@@ -46,8 +46,8 @@ impl From<StoreError> for BankError {
     }
 }
 
-#[derive(Clone, Debug, cqrs::Command)]
-#[command(error = BankError)]
+#[cqrs::command(error = BankError)]
+#[derive(Clone, Debug)]
 pub struct Execute {
     pub account: String,
     pub command: BankCommand,

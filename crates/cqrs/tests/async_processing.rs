@@ -22,7 +22,7 @@ use cqrs::{
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u32);
 
 struct Clock {

@@ -83,7 +83,7 @@ fn the_aggregate_is_plain_state() {
 
 // A generic aggregate whose decisions do not depend on the framework: they
 // take `impl Extend` from std. The repository's `Vec` fits it as is.
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 enum CounterEvent {
     Incremented,
 }

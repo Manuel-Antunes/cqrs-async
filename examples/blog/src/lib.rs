@@ -52,8 +52,7 @@
 //! use blog::application::BlogError;
 //! use cqrs::CommandGateway;
 //!
-//! #[derive(cqrs::Command)]
-//! #[command(error = BlogError)]
+//! #[cqrs::command(error = BlogError)]
 //! struct DeletePost;
 //!
 //! let (blog, _, _) = blog::in_memory();

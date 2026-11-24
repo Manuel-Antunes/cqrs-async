@@ -6,8 +6,8 @@ use super::{PostSummary, PostSummaryRepository};
 use crate::application::BlogError;
 
 /// Every published post, ordered by id.
-#[derive(Clone, Debug, cqrs::Query)]
-#[query(output = Vec<PostSummary>, error = BlogError)]
+#[cqrs::query(output = Vec<PostSummary>, error = BlogError)]
+#[derive(Clone, Debug)]
 pub struct ListPublished;
 
 /// Handles [`ListPublished`] by reading the read model.

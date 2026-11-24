@@ -31,8 +31,7 @@ pub mod ping {
     use cqrs::Handler;
 
     /// Returns its input plus one.
-    #[derive(cqrs::Command)]
-    #[command(output = u64, error = ())]
+    #[cqrs::command(output = u64, error = ())]
     pub struct Ping(pub u64);
 
     /// Handles [`Ping`].
@@ -54,7 +53,7 @@ pub mod ping {
     }
 
     /// What [`PingCommandHandler`] would record.
-    #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+    #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
     pub struct Pinged;
 
     /// Handles [`Ping`] as a command handler: through an appender, holding

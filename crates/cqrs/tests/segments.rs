@@ -18,7 +18,7 @@ use cqrs::{
     StreamId, TrackingOptions, retry_dead_letters, segment_of,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
 struct Clock {

@@ -24,7 +24,7 @@ use cqrs::{
     TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 struct Ticked(u64);
 
 /// What ran, in order, across units of work.

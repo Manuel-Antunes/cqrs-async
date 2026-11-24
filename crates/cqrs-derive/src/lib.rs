@@ -179,23 +179,15 @@ fn into_stream(result: Result<TokenStream2>) -> TokenStream {
 /// Give events explicit names when they are stored: the default follows the
 /// Rust name, so renaming a variant would otherwise break old events.
 ///
-/// An event also needs its tags ([`TagResolver`](derive@TagResolver)):
-/// derive them, or implement the trait by hand.
-#[proc_macro_derive(DomainEvent, attributes(event))]
+/// It implements the event's tags too (`TagResolver`, which every
+/// `DomainEvent` has), from the fields marked `#[tag]` (Axon's `@EventTag`):
+/// each becomes a tag keyed by the field name, valued by its `Display`;
+/// `#[tag = "key"]` names the key, and is required on tuple fields. Without
+/// any, the event has no tags. To resolve them by hand, implement both
+/// traits instead of deriving.
+#[proc_macro_derive(DomainEvent, attributes(event, tag))]
 pub fn derive_domain_event(input: TokenStream) -> TokenStream {
     into_stream(domain_event(parse_macro_input!(input)))
-}
-
-/// Implements `TagResolver` from the fields marked `#[tag]` (Axon's
-/// `@EventTag`): each becomes a tag keyed by the field name, valued by its
-/// `Display`; `#[tag = "key"]` names the key, and is required on tuple
-/// fields. Without any, the event has no tags.
-///
-/// Leave it out to keep the event free of these attributes, and write
-/// `impl TagResolver for MyEvent { fn tags(&self) -> Vec<Tag> { ... } }`.
-#[proc_macro_derive(TagResolver, attributes(tag))]
-pub fn derive_tag_resolver(input: TokenStream) -> TokenStream {
-    into_stream(tag_resolver(parse_macro_input!(input)))
 }
 
 /// The arguments of one or more `#[event(...)]` attributes.
@@ -287,6 +279,7 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
         }
     });
 
+    let tags = tag_resolver(&input)?;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
         #[automatically_derived]
@@ -297,18 +290,17 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
 
             #version
         }
+
+        #tags
     })
 }
 
-/// Expansion of `#[derive(TagResolver)]`: a `fn tags` over the `#[tag]`
+/// The `TagResolver` of a derived event: a `fn tags` over the `#[tag]`
 /// fields, or the trait's default (no tags) without any.
-fn tag_resolver(input: DeriveInput) -> Result<TokenStream2> {
+fn tag_resolver(input: &DeriveInput) -> Result<TokenStream2> {
     let krate = krate();
     let name = &input.ident;
-    if let Data::Union(_) = input.data {
-        return Err(Error::new_spanned(name, "events cannot be unions"));
-    }
-    let tags = event_tags(&krate, &input)?;
+    let tags = event_tags(&krate, input)?;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
         #[automatically_derived]
@@ -399,6 +391,78 @@ fn tagged_fields(krate: &TokenStream2, fields: &syn::Fields) -> Result<Option<(T
         syn::Fields::Unit => return Ok(None),
     };
     Ok(Some((pattern, tags)))
+}
+
+// ---------------------------------------------------------------------------
+// #[aggregate(...)] / #[command(...)] / #[query(...)]: the derives, as one
+// attribute
+// ---------------------------------------------------------------------------
+
+/// Declares an aggregate root in one attribute:
+/// `#[cqrs::aggregate(event = PostEvent)]` is `#[derive(AggregateRoot)]`
+/// with `#[aggregate(event = PostEvent)]` (same arguments, and
+/// `#[aggregate(id)]` on a field still marks the id).
+#[proc_macro_attribute]
+pub fn aggregate(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    into_stream(attribute_form(
+        arguments.into(),
+        item.into(),
+        "aggregate",
+        aggregate_root::aggregate_root,
+    ))
+}
+
+/// Declares a command in one attribute: `#[cqrs::command(output = T, error =
+/// E)]` is `#[derive(Command)]` with `#[command(...)]`.
+#[proc_macro_attribute]
+pub fn command(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    into_stream(attribute_form(arguments.into(), item.into(), "command", |input| {
+        message(input, "command", "Command")
+    }))
+}
+
+/// Declares a query in one attribute: `#[cqrs::query(output = T, error =
+/// E)]` is `#[derive(Query)]` with `#[query(...)]`.
+#[proc_macro_attribute]
+pub fn query(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    into_stream(attribute_form(arguments.into(), item.into(), "query", |input| {
+        message(input, "query", "Query")
+    }))
+}
+
+/// The attribute form of a derive whose helper is `helper`: the derive's
+/// expansion with the attribute's arguments as its helper, and the item
+/// without the helper attributes (no derive is left to read them).
+fn attribute_form(
+    arguments: TokenStream2,
+    item: TokenStream2,
+    helper: &str,
+    derive: impl FnOnce(DeriveInput) -> Result<TokenStream2>,
+) -> Result<TokenStream2> {
+    let mut input: DeriveInput = syn::parse2(item)?;
+    let helper_ident = Ident::new(helper, Span::call_site());
+    if !arguments.is_empty() {
+        input.attrs.push(syn::parse_quote!(#[#helper_ident(#arguments)]));
+    }
+    let generated = derive(input.clone())?;
+    let is_helper = |attr: &syn::Attribute| attr.path().is_ident(helper);
+    input.attrs.retain(|attr| !is_helper(attr));
+    let strip_fields = |fields: &mut syn::Fields| {
+        for field in fields.iter_mut() {
+            field.attrs.retain(|attr| !is_helper(attr));
+        }
+    };
+    match &mut input.data {
+        Data::Struct(data) => strip_fields(&mut data.fields),
+        Data::Enum(data) => {
+            for variant in &mut data.variants {
+                variant.attrs.retain(|attr| !is_helper(attr));
+                strip_fields(&mut variant.fields);
+            }
+        }
+        Data::Union(_) => {}
+    }
+    Ok(quote!(#input #generated))
 }
 
 // ---------------------------------------------------------------------------

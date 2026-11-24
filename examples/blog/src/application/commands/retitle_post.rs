@@ -8,8 +8,8 @@ use crate::{
 };
 
 /// Changes the title of a draft.
-#[derive(Debug, serde::Serialize, serde::Deserialize, cqrs::Command)]
-#[command(error = BlogError)]
+#[cqrs::command(error = BlogError)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct RetitlePost {
     /// The post to rename.
     pub id: PostId,

@@ -11,19 +11,17 @@
 //! use std::future::Future;
 //! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, EventPublisher, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
 //!
-//! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+//! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 //! enum CounterEvent { Added(u64) }
 //!
-//! #[derive(cqrs::AggregateRoot)]
-//! #[aggregate(event = CounterEvent)]
+//! #[cqrs::aggregate(event = CounterEvent)]
 //! struct Counter { id: u32, total: u64 }
 //!
 //! impl Counter {
 //!     fn apply(&mut self, CounterEvent::Added(n): &CounterEvent) { self.total += n; }
 //! }
 //!
-//! #[derive(cqrs::Command)]
-//! #[command(output = u64, error = StoreError)]
+//! #[cqrs::command(output = u64, error = StoreError)]
 //! struct Add { id: u32, n: u64 }
 //!
 //! /// The application's port: how handlers find counters.
@@ -76,10 +74,10 @@
 //!
 //! ```compile_fail,E0277
 //! # use cqrs::{Appender, CommandHandler, New, StoreError};
-//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)] enum Ticked { Once }
-//! # #[derive(cqrs::AggregateRoot)] #[aggregate(event = Ticked)] struct Clock { id: u32 }
+//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
+//! # #[cqrs::aggregate(event = Ticked)] struct Clock { id: u32 }
 //! # impl Clock { fn apply(&mut self, _: &Ticked) {} }
-//! # #[derive(cqrs::Command)] #[command(error = StoreError)] struct Tick;
+//! # #[cqrs::command(error = StoreError)] struct Tick;
 //! struct NotAPublisher;
 //! struct TickHandler;
 //! #[cqrs::command_handler]
@@ -94,7 +92,7 @@
 //!
 //! ```compile_fail
 //! # use cqrs::{Appender, CommandHandler};
-//! # #[derive(cqrs::Command)] #[command(error = ())] struct Ping;
+//! # #[cqrs::command(error = ())] struct Ping;
 //! struct PingHandler;
 //! #[cqrs::command_handler]
 //! impl CommandHandler for PingHandler {

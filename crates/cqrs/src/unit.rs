@@ -198,7 +198,7 @@ where
 /// none:
 ///
 /// ```compile_fail,E0599
-/// # #[derive(Clone, cqrs::DomainEvent, cqrs::TagResolver)] struct Ticked;
+/// # #[derive(Clone, cqrs::DomainEvent)] struct Ticked;
 /// # struct Counter;
 /// # #[cqrs::projection(namespace = "counter")]
 /// # impl cqrs::EventHandler for Counter {

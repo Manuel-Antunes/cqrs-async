@@ -14,7 +14,7 @@ use cqrs::{
     StreamId,
 };
 
-#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 enum Shipped {
     #[event(name = "parcel.shipped")]
     Parcel(u32),
