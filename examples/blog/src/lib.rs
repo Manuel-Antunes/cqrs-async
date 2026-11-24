@@ -3,7 +3,7 @@
 //! Dependencies only point inwards:
 //!
 //! - [`domain`]: the `Post` aggregate.
-//! - [`application`]: commands, queries and policies, written against ports.
+//! - [`application`]: commands, queries and projections, written against ports.
 //! - [`infrastructure`]: adapters for those ports.
 //! - [`presentation`]: the GraphQL API (axum), written against ports too.
 //! - [`config`]: the composition root, the only place that names concrete
@@ -11,7 +11,7 @@
 //!   - [`in_memory`]: everything synchronous, projections run inside each
 //!     commit. No runtime needed; what the domain and flow tests use.
 //!   - [`start`]: the asynchronous one the server runs. Commands return once
-//!     committed, projections and policies follow on their own Tokio tasks
+//!     committed, projections follow on their own Tokio tasks
 //!     ([`TrackingProcessor`](cqrs::TrackingProcessor)), and
 //!     subscriptions stream the committed events.
 //!
@@ -134,4 +134,4 @@ pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
 
-pub use config::{PostEvents, PostStore, Running, in_memory, in_memory_with, start};
+pub use config::{PgPostEvents, PostEvents, PostStore, Running, in_memory, in_memory_with, start, start_in_memory};

@@ -1,4 +1,5 @@
-//! The GraphQL API over the asynchronous wiring ([`blog::start`]).
+//! The GraphQL API over the asynchronous wiring ([`blog::start_in_memory`];
+//! `tests/postgres.rs` runs the PostgreSQL one).
 //!
 //! Most tests execute against the schema directly; the last one goes through
 //! a real socket: HTTP for queries and mutations, WebSocket
@@ -8,11 +9,12 @@ use std::{sync::Arc, time::Duration};
 
 use async_graphql::{Request, Response, Variables};
 use blog::{
-    Running,
+    PostEvents, Running,
     application::{
         commands::PostCommands,
         queries::{PostQueries, PostSubscriptions},
     },
+    infrastructure::InMemoryPostSummaryRepository,
     presentation::{
         BlogApi,
         graphql::{self, BlogSchema},
@@ -26,10 +28,10 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::H
 /// The running blog and its schema. The app's types are inferred by
 /// `start`; the ports say what they are.
 fn app() -> (
-    Running<impl PostCommands, impl PostQueries + PostSubscriptions>,
+    Running<impl PostCommands, impl PostQueries + PostSubscriptions, InMemoryPostSummaryRepository, PostEvents>,
     BlogSchema<impl BlogApi>,
 ) {
-    let running = blog::start();
+    let running = blog::start_in_memory();
     let schema = graphql::schema(Arc::clone(&running.app));
     (running, schema)
 }

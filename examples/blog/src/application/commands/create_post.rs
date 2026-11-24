@@ -1,9 +1,9 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use cqrs::{Appender, CommandHandler, EventPublisher, New};
+use cqrs::{Appender, CommandHandler, New};
 
 use crate::{
-    application::BlogError,
+    application::{BlogError, commands::PostRepository},
     domain::{Post, PostEvent, PostId},
 };
 
@@ -15,33 +15,26 @@ pub struct CreatePost {
     pub title: String,
 }
 
-/// Handles [`CreatePost`]: picks the next id, lets the domain create the post
-/// and commits it, expecting it not to exist yet.
-pub struct CreatePostHandler<P> {
-    /// Ids are sequential per process: enough for the example, as a
-    /// collision would surface as a [`BlogError::Conflict`], never as an
-    /// overwrite.
-    next_id: AtomicU64,
-    /// Where the commit goes.
-    events: P,
+/// Handles [`CreatePost`]: takes the next id from the repository, lets the
+/// domain create the post and saves it, expecting it not to exist yet.
+pub struct CreatePostHandler<R> {
+    /// Where posts are kept.
+    posts: Arc<R>,
 }
 
-impl<P> CreatePostHandler<P> {
-    /// A handler whose ids start at 1, committing through `events`.
-    pub fn new(events: P) -> Self {
-        Self {
-            next_id: AtomicU64::new(1),
-            events,
-        }
+impl<R> CreatePostHandler<R> {
+    /// A handler saving to `posts`.
+    pub fn new(posts: Arc<R>) -> Self {
+        Self { posts }
     }
 }
 
 #[cqrs::command_handler]
-impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
+impl<R: PostRepository> CommandHandler for CreatePostHandler<R> {
     async fn handle(&self, command: &CreatePost, appender: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
-        let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = self.posts.next_id().await?;
         Post::create(id, command.title.as_str(), appender)?;
-        appender.commit(New::<Post>(id), &self.events).await?;
+        self.posts.save(New::<Post>(id).into(), appender).await?;
         Ok(id)
     }
 }

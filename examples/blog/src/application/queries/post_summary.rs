@@ -15,10 +15,9 @@ pub struct PostSummary {
     pub published: bool,
 }
 
-/// The read model's repository (a port, as Axon's tutorial has
-/// `CourseStatsRepository`): the queries read [`PostSummary`] rows from it,
-/// the projection writes them. It is fed by committed events, so it is eventually
-/// consistent with the write side.
+/// The read model, as the queries read it (a port, as Axon's tutorial has
+/// `CourseStatsRepository`). It is fed by committed events, so it is
+/// eventually consistent with the write side.
 pub trait PostSummaryRepository: Send + Sync {
     /// The summary of one post, or `None` if the read model has not seen it
     /// (it may not exist, or its creation may not be projected yet).
@@ -26,19 +25,24 @@ pub trait PostSummaryRepository: Send + Sync {
 
     /// Published posts, ordered by id.
     fn published(&self) -> impl Future<Output = Result<Vec<PostSummary>, StoreError>> + Send;
+}
 
+/// The read model, as the projection writes it: in the unit of work `Tx`
+/// the processor hands it with each event, so a read model in the same
+/// database as the processor's tokens commits each change with its token
+/// (an event is applied once). In memory, `Tx` is `()`.
+pub trait PostSummaryStore<Tx>: Send + Sync {
     /// Stores a new post's `summary`.
-    fn save(&self, summary: PostSummary) -> impl Future<Output = Result<(), StoreError>> + Send;
+    fn save(&self, tx: &mut Tx, summary: PostSummary) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// Applies `change` to the summary of post `id`, in place (Axon's
-    /// managed entity: an SQL adapter selects it for update, then writes
-    /// it back). `false`: there is none.
+    /// Changes the summary of `id` with `change`; `false` if there is none.
     fn update(
         &self,
+        tx: &mut Tx,
         id: PostId,
         change: impl FnOnce(&mut PostSummary) + Send,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     /// Removes every summary, before a replay rebuilds them.
-    fn clear(&self) -> impl Future<Output = Result<(), StoreError>> + Send;
+    fn clear(&self, tx: &mut Tx) -> impl Future<Output = Result<(), StoreError>> + Send;
 }

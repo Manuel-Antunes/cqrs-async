@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
 
 use crate::{
-    application::queries::{PostSummary, PostSummaryRepository, PostUpdates},
+    application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore, PostUpdates},
     domain::{PostEvent, PostId},
 };
 
@@ -16,8 +16,9 @@ use crate::{
 /// and its token in one unit of work, so there is no bookkeeping of what was
 /// applied (as in Axon, with the token store next to the read model).
 ///
-/// Generic over the read model's port: the adapter (in memory, SQL) is the
-/// composition root's choice.
+/// Generic over the read model's ports and over the unit of work it writes
+/// in: the adapter (in memory, SeaORM in the processor's PostgreSQL
+/// transaction) is the composition root's choice.
 pub struct PostSummaryProjection<S> {
     /// Where the rows are kept.
     summaries: Arc<S>,
@@ -33,12 +34,17 @@ impl<S> PostSummaryProjection<S> {
 }
 
 #[cqrs::projection(namespace = "post-summaries")]
-impl<S: PostSummaryRepository> EventHandler for PostSummaryProjection<S> {
+impl<S, Tx> EventHandler for PostSummaryProjection<S>
+where
+    S: PostSummaryRepository + PostSummaryStore<Tx>,
+    Tx: Send,
+{
     async fn handle(
         &self,
         event: &EventEnvelope<PostEvent>,
-        _: &mut ProcessingContext<'_>,
+        context: &mut ProcessingContext<'_, Tx>,
     ) -> Result<(), HandlerError> {
+        let tx = context.transaction();
         let found = match &event.payload {
             PostEvent::Created { id, title } => {
                 let summary = PostSummary {
@@ -46,15 +52,19 @@ impl<S: PostSummaryRepository> EventHandler for PostSummaryProjection<S> {
                     title: title.clone(),
                     published: false,
                 };
-                self.summaries.save(summary).await?;
+                self.summaries.save(tx, summary).await?;
                 true
             }
             PostEvent::Retitled { title } => {
                 self.summaries
-                    .update(post_of(event)?, |s| s.title.clone_from(title))
+                    .update(tx, post_of(event)?, |s| s.title.clone_from(title))
                     .await?
             }
-            PostEvent::Published => self.summaries.update(post_of(event)?, |s| s.published = true).await?,
+            PostEvent::Published => {
+                self.summaries
+                    .update(tx, post_of(event)?, |s| s.published = true)
+                    .await?
+            }
         };
         if !found {
             // Events of a stream arrive in order, its creation first.
@@ -81,8 +91,8 @@ impl<S: PostSummaryRepository> EventHandler for PostSummaryProjection<S> {
     }
 
     /// Before a replay rebuilds it.
-    async fn reset(&self, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
-        self.summaries.clear().await?;
+    async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
+        self.summaries.clear(context.transaction()).await?;
         Ok(())
     }
 }

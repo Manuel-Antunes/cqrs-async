@@ -3,12 +3,21 @@ name = "blog"
 description = "PoC example: a blog post aggregate wired end to end, served as a GraphQL API"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# SeaORM 2 needs 1.94; the library crates keep the workspace's MSRV.
+rust-version = "1.94"
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
 cqrs.workspace = true
+# The PostgreSQL wiring: the library's stores, and SeaORM as the blog's own
+# infrastructure (its repositories, its read model, its migrations).
+cqrs-postgres.workspace = true
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio"] }
+# Binds SeaORM's statements to sqlx queries on the borrowed transaction.
+sea-query-sqlx = { version = "0.9", default-features = false, features = ["sqlx-postgres"] }
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 futures-core.workspace = true
 futures-util.workspace = true

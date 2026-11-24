@@ -104,7 +104,7 @@ fn concurrent_writers_cannot_overwrite_each_other() {
         let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
         // Two writers of their own, over the blog's store.
         let events = InlinePublisher::new(store.clone());
-        let posts = EventSourcedPostRepository::new(store);
+        let posts = EventSourcedPostRepository::new(store, InlinePublisher::new(PostStore::default()));
 
         // Two writers load the same version and decide...
         let first = posts.find(id).await.unwrap().unwrap();
@@ -176,8 +176,10 @@ fn handlers_can_be_called_directly_without_any_bus() {
     use cqrs::{InMemoryEventStore, Metadata, dispatch_command};
 
     block_on(async {
-        // A handler holds the publisher it commits through: call it as is.
-        let handler = CreatePostHandler::new(InlinePublisher::new(InMemoryEventStore::new()));
+        // A handler holds the repository it saves through: call it as is.
+        let store = InMemoryEventStore::new();
+        let posts = EventSourcedPostRepository::new(store.clone(), InlinePublisher::new(store));
+        let handler = CreatePostHandler::new(Arc::new(posts));
         let id = dispatch_command(&handler, CreatePost { title: "direct".into() }, Metadata::new())
             .await
             .unwrap();
@@ -204,25 +206,25 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
     use cqrs::{Dispatch, Handler, InMemoryEventStore, Metadata, dispatch_command};
 
     /// What `#[derive(Gateway)]` writes, one `Dispatch` impl per message.
-    struct ByHand<P, R> {
-        create: CreatePostHandler<P>,
-        publish: PublishPostHandler<R, P>,
+    struct ByHand<R> {
+        create: CreatePostHandler<R>,
+        publish: PublishPostHandler<R>,
         find: FindPostHandler<InMemoryPostSummaryRepository>,
     }
 
-    impl<P: cqrs::EventPublisher<blog::domain::PostEvent>, R: PostRepository> Dispatch<CreatePost> for ByHand<P, R> {
+    impl<R: PostRepository> Dispatch<CreatePost> for ByHand<R> {
         async fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> Result<PostId, BlogError> {
             dispatch_command(&self.create, message, metadata).await
         }
     }
 
-    impl<P: cqrs::EventPublisher<blog::domain::PostEvent>, R: PostRepository> Dispatch<PublishPost> for ByHand<P, R> {
+    impl<R: PostRepository> Dispatch<PublishPost> for ByHand<R> {
         async fn dispatch_with(&self, message: PublishPost, metadata: Metadata) -> Result<(), BlogError> {
             dispatch_command(&self.publish, message, metadata).await
         }
     }
 
-    impl<P: Send + Sync, R: Send + Sync> Dispatch<FindPost> for ByHand<P, R> {
+    impl<R: Send + Sync> Dispatch<FindPost> for ByHand<R> {
         async fn dispatch_with(
             &self,
             message: FindPost,
@@ -235,16 +237,14 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
     block_on(async {
         let store = InMemoryEventStore::new();
         let summaries = Arc::new(InMemoryPostSummaryRepository::default());
-        let publisher = Arc::new(
-            InlinePublisher::new(store.clone()).with_processor((PostSummaryProjection::new(
-                summaries.clone(),
-                Arc::new(PostUpdates::default()),
-            ),)),
-        );
-        let posts = Arc::new(EventSourcedPostRepository::new(store));
+        let publisher = InlinePublisher::new(store.clone()).with_processor((PostSummaryProjection::new(
+            summaries.clone(),
+            Arc::new(PostUpdates::default()),
+        ),));
+        let posts = Arc::new(EventSourcedPostRepository::new(store, publisher));
         let gateway = ByHand {
-            create: CreatePostHandler::new(Arc::clone(&publisher)),
-            publish: PublishPostHandler::new(posts, publisher),
+            create: CreatePostHandler::new(Arc::clone(&posts)),
+            publish: PublishPostHandler::new(posts),
             find: FindPostHandler::new(summaries),
         };
 

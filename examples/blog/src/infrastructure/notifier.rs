@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use crate::application::policies::{NotificationError, Notifier};
+use crate::application::projections::{NotificationError, Notifier};
 
 /// Records notifications instead of sending them. It can be switched off to
 /// show that a failing policy neither undoes the commit nor blocks the other

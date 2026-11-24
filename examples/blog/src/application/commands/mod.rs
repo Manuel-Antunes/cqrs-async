@@ -40,24 +40,22 @@ pub enum PostCommand {
 /// the enum that no field handles is a compile error.
 #[derive(cqrs::Gateway)]
 #[gateway(commands = PostCommand)]
-pub struct PostCommandGateway<R, P> {
+pub struct PostCommandGateway<R> {
     /// Handles [`CreatePost`].
-    create: CreatePostHandler<P>,
+    create: CreatePostHandler<R>,
     /// Handles [`RetitlePost`].
-    retitle: RetitlePostHandler<R, P>,
+    retitle: RetitlePostHandler<R>,
     /// Handles [`PublishPost`].
-    publish: PublishPostHandler<R, P>,
+    publish: PublishPostHandler<R>,
 }
 
-impl<R, P: Clone> PostCommandGateway<R, P> {
-    /// Builds every command handler over the posts' repository and the
-    /// publisher their commits go through (shared: `P` is cloned into each
-    /// handler, so an `Arc` or a cheap handle).
-    pub fn new(posts: Arc<R>, events: P) -> Self {
+impl<R> PostCommandGateway<R> {
+    /// The gateway, its handlers sharing the posts' repository.
+    pub fn new(posts: Arc<R>) -> Self {
         Self {
-            create: CreatePostHandler::new(events.clone()),
-            retitle: RetitlePostHandler::new(Arc::clone(&posts), events.clone()),
-            publish: PublishPostHandler::new(posts, events),
+            create: CreatePostHandler::new(Arc::clone(&posts)),
+            retitle: RetitlePostHandler::new(Arc::clone(&posts)),
+            publish: PublishPostHandler::new(posts),
         }
     }
 }

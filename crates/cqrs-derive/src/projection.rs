@@ -95,17 +95,37 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
     last.arguments = PathArguments::AngleBracketed(parse_quote!(<#event, #transaction>));
 
     let named = arguments.namespace.map(|namespace| {
+        // The handler's type alone has a namespace, whatever the unit of
+        // work: only the parameters of the type, without the bounds the
+        // handler needs (which may name the transaction).
         let self_ty = &item.self_ty;
+        let used = idents(self_ty.to_token_stream());
         let mut generics = item.generics.clone();
+        generics.where_clause = None;
         generics.params = generics
             .params
             .into_iter()
-            .filter(|param| !matches!(param, GenericParam::Type(ty) if ty.ident == "__CqrsTx"))
+            .filter_map(|param| match param {
+                GenericParam::Type(mut ty) => used.contains(&ty.ident.to_string()).then(|| {
+                    ty.bounds.clear();
+                    ty.colon_token = None;
+                    ty.default = None;
+                    GenericParam::Type(ty)
+                }),
+                GenericParam::Lifetime(mut lifetime) => used.contains(&lifetime.lifetime.ident.to_string()).then(|| {
+                    lifetime.bounds.clear();
+                    lifetime.colon_token = None;
+                    GenericParam::Lifetime(lifetime)
+                }),
+                GenericParam::Const(constant) => {
+                    used.contains(&constant.ident.to_string()).then_some(GenericParam::Const(constant))
+                }
+            })
             .collect();
-        let (impl_generics, _, where_clause) = generics.split_for_impl();
+        let (impl_generics, _, _) = generics.split_for_impl();
         quote! {
             #[automatically_derived]
-            impl #impl_generics #krate::Projection for #self_ty #where_clause {
+            impl #impl_generics #krate::Projection for #self_ty where #self_ty: ::core::marker::Send + ::core::marker::Sync {
                 const NAMESPACE: &'static str = #namespace;
             }
         }
@@ -202,4 +222,19 @@ impl VisitMut for AddTransaction<'_> {
         }
         syn::visit_mut::visit_path_segment_mut(self, segment);
     }
+}
+
+/// Every identifier in `tokens`, nested groups included.
+fn idents(tokens: TokenStream2) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(ident) => {
+                found.insert(ident.to_string());
+            }
+            proc_macro2::TokenTree::Group(group) => found.extend(idents(group.stream())),
+            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {}
+        }
+    }
+    found
 }

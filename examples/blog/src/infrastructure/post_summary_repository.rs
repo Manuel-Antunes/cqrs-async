@@ -3,14 +3,14 @@ use std::{collections::BTreeMap, sync::Mutex};
 use cqrs::StoreError;
 
 use crate::{
-    application::queries::{PostSummary, PostSummaryRepository},
+    application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore},
     domain::PostId,
 };
 
-/// The read model's repository, in memory: one row per post. Only storage:
-/// what the rows hold is the
+/// The read model in memory: one row per post. Only storage: what the rows
+/// hold is the
 /// [`PostSummaryProjection`](crate::application::projections::PostSummaryProjection)'s
-/// business.
+/// business. Its unit of work is `()`: there is nothing to roll back.
 #[derive(Default)]
 pub struct InMemoryPostSummaryRepository {
     /// Rows by id (so listings come out sorted).
@@ -38,17 +38,24 @@ impl PostSummaryRepository for InMemoryPostSummaryRepository {
             .cloned()
             .collect())
     }
+}
 
-    async fn save(&self, summary: PostSummary) -> Result<(), StoreError> {
+impl PostSummaryStore<()> for InMemoryPostSummaryRepository {
+    async fn save(&self, (): &mut (), summary: PostSummary) -> Result<(), StoreError> {
         self.rows().insert(summary.id, summary);
         Ok(())
     }
 
-    async fn update(&self, id: PostId, change: impl FnOnce(&mut PostSummary) + Send) -> Result<bool, StoreError> {
+    async fn update(
+        &self,
+        (): &mut (),
+        id: PostId,
+        change: impl FnOnce(&mut PostSummary) + Send,
+    ) -> Result<bool, StoreError> {
         Ok(self.rows().get_mut(&id).map(change).is_some())
     }
 
-    async fn clear(&self) -> Result<(), StoreError> {
+    async fn clear(&self, (): &mut ()) -> Result<(), StoreError> {
         self.rows().clear();
         Ok(())
     }

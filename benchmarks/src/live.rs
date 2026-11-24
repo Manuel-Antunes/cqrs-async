@@ -112,11 +112,16 @@ impl EventHandler<PostEvent> for Busy {
 }
 
 /// Starts the whole blog application (asynchronous wiring).
-pub fn start_blog() -> blog::Running<impl PostCommands, impl PostQueries + PostSubscriptions> {
-    blog::start()
+pub fn start_blog() -> blog::Running<
+    impl PostCommands,
+    impl PostQueries + PostSubscriptions,
+    blog::infrastructure::InMemoryPostSummaryRepository,
+    blog::PostEvents,
+> {
+    blog::start_in_memory()
 }
 
 /// Waits until the blog's processors handled everything committed so far.
-pub async fn settle<C, Q>(running: &blog::Running<C, Q>) {
+pub async fn settle<C, Q, R>(running: &blog::Running<C, Q, R, blog::PostEvents>) {
     running.settled().await;
 }

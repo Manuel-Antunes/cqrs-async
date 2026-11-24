@@ -103,6 +103,14 @@ impl Post {
         Ok(())
     }
 
+    /// The post as a repository that keeps state stored it (rather than
+    /// rebuilding it from its events). Only for such a repository: every
+    /// change goes through a decision and its events.
+    #[must_use]
+    pub fn restore(id: PostId, title: String, published: bool) -> Self {
+        Self { id, title, published }
+    }
+
     /// The current title.
     #[must_use]
     pub fn title(&self) -> &str {

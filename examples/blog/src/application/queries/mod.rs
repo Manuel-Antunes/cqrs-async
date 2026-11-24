@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 pub use find_post::{FindPost, FindPostHandler};
 pub use list_published::{ListPublished, ListPublishedHandler};
-pub use post_summary::{PostSummary, PostSummaryRepository};
+pub use post_summary::{PostSummary, PostSummaryRepository, PostSummaryStore};
 
 use crate::application::BlogError;
 

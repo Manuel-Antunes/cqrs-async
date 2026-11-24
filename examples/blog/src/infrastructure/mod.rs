@@ -6,7 +6,10 @@
 //! - [`InMemoryPostSummaryRepository`]: the read model's
 //!   [`PostSummaryRepository`](crate::application::queries::PostSummaryRepository),
 //!   in memory.
-//! - [`InMemoryNotifier`]: a [`Notifier`](crate::application::policies::Notifier)
+//! - [`SeaOrmPostRepository`] and [`SeaOrmPostSummaries`]: the same ports on
+//!   PostgreSQL with SeaORM, state and read model in the library's
+//!   transactions.
+//! - [`InMemoryNotifier`]: a [`Notifier`](crate::application::projections::Notifier)
 //!   that records instead of sending.
 //! - [`Audit`] and [`Measured`]: interceptors around the command gateway
 //!   and the projection (audit log, projection metrics).
@@ -19,8 +22,11 @@ mod notifier;
 mod observability;
 /// The read model's repository, in memory.
 mod post_summary_repository;
+/// PostgreSQL with SeaORM.
+pub mod postgres;
 
 pub use event_sourced_post_repository::EventSourcedPostRepository;
 pub use notifier::InMemoryNotifier;
 pub use observability::{Audit, AuditEntry, AuditLog, Measured, ProjectionMetrics};
 pub use post_summary_repository::InMemoryPostSummaryRepository;
+pub use postgres::{SeaOrmPostRepository, SeaOrmPostSummaries};
