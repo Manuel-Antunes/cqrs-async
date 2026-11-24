@@ -1959,3 +1959,91 @@ async fn gaps_from_other_logs_under_load() {
     );
     processor.stop().await;
 }
+
+#[cqrs::projection(name = "one", events = ClockEvent, namespaces("a"))]
+#[derive(Default)]
+struct OneNamespace;
+
+#[cqrs::event_handler(namespace = "a")]
+impl EventHandler for OneNamespace {
+    async fn handle(&self, _: &EventEnvelope<ClockEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+        Ok(())
+    }
+}
+
+#[cqrs::projection(name = "four", events = ClockEvent, namespaces("a", "b", "c", "d"))]
+#[derive(Default)]
+struct FourNamespaces;
+
+/// One no-op handler, the same for the four namespaces.
+macro_rules! noop_namespace {
+    ($($namespace:literal),+) => {$(
+        #[cqrs::event_handler(namespace = $namespace)]
+        impl EventHandler for FourNamespaces {
+            async fn handle(&self, _: &EventEnvelope<ClockEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+                Ok(())
+            }
+        }
+    )+};
+}
+
+noop_namespace!("a", "b", "c", "d");
+
+/// What a projection costs per namespace: one with one namespace and one
+/// with four (no-op handlers) catch up on the same log, each namespace in a
+/// processor of its own. Prints the time, and the database's transactions
+/// and rows read (`pg_stat_database`), to tell what a shared reader (one
+/// read of the log for every namespace) would save. Run on purpose:
+/// `cargo test -p cqrs-postgres --test postgres cost_per_namespace -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "a measurement, not a check"]
+async fn cost_per_namespace() {
+    let pool = database_or_skip!();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    for clock in 0..500 {
+        store
+            .append(&mut (), &stream(clock), ExpectedVersion::NoStream, ticks(1, 10), &Metadata::new())
+            .await
+            .unwrap();
+    }
+    let head = store.last_position().await.unwrap();
+    let events = cqrs_postgres::Postgres::new(pool.clone()).events::<ClockEvent>("clocks");
+    let stats = || async {
+        let (xacts, rows): (i64, i64) = sqlx::query_as(
+            "SELECT xact_commit, tup_returned FROM pg_stat_database WHERE datname = current_database()",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        (xacts, rows)
+    };
+    // `CQRS_BATCH=n`: n events per unit of work (the processors' batch_size).
+    let batch_size = std::env::var("CQRS_BATCH").ok().and_then(|n| n.parse().ok()).unwrap_or(1);
+    let options = TrackingOptions {
+        batch_size,
+        ..TrackingOptions::default()
+    };
+    for (name, namespaces) in [("one namespace", 1), ("four namespaces", 4)] {
+        sqlx::query("SELECT pg_stat_clear_snapshot()").execute(&pool).await.unwrap();
+        let before = stats().await;
+        let started = std::time::Instant::now();
+        let running = if namespaces == 1 {
+            events.projection(OneNamespace).with_options(options).spawn()
+        } else {
+            events.projection(FourNamespaces).with_options(options).spawn()
+        };
+        tokio::time::timeout(Duration::from_secs(120), running.caught_up(head))
+            .await
+            .expect("caught up");
+        let elapsed = started.elapsed();
+        running.stop().await;
+        tokio::time::sleep(Duration::from_millis(700)).await; // stats are flushed now and then
+        let after = stats().await;
+        println!(
+            "{name}, batches of {batch_size}: {head} events in {:.2} s; {} transactions, {} rows read",
+            elapsed.as_secs_f64(),
+            after.0 - before.0,
+            after.1 - before.1,
+        );
+    }
+}
