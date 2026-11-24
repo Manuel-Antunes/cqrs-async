@@ -116,6 +116,23 @@ impl Cursor {
         true
     }
 
+    /// [`advance`](Self::advance), knowing which skipped positions may still
+    /// be filled: only those of `missing` (sorted) become gaps, the others
+    /// were committed elsewhere (another log over the same sequence).
+    pub fn advance_over(&mut self, position: u64, horizon: &Horizon, missing: &[u64]) -> bool {
+        if position <= self.position || horizon.started_below == u64::MAX {
+            return self.advance(position, horizon);
+        }
+        let from = missing.partition_point(|&skipped| skipped <= self.position);
+        let to = missing.partition_point(|&skipped| skipped < position);
+        self.gaps.extend(missing[from..to].iter().map(|&position| Gap {
+            position,
+            horizon: horizon.started_below,
+        }));
+        self.position = position;
+        true
+    }
+
     /// Gives up the gaps nobody can fill any more, except `pending` ones (read
     /// in the same answer, not seen yet).
     pub fn settle(&mut self, horizon: &Horizon, pending: impl Fn(u64) -> bool) {
@@ -253,6 +270,27 @@ mod tests {
             |_| false,
         );
         assert_eq!(cursor, Cursor::at(4));
+    }
+
+    #[test]
+    fn positions_committed_elsewhere_are_not_gaps() {
+        let horizon = Horizon {
+            finished_below: 10,
+            started_below: 20,
+        };
+        let mut cursor = Cursor::at(3);
+        // 4..=8 skipped, but only 6 is not committed anywhere (another log
+        // holds the others).
+        assert!(cursor.advance_over(9, &horizon, &[6, 12]));
+        assert_eq!(
+            cursor.gaps(),
+            [Gap {
+                position: 6,
+                horizon: 20
+            }]
+        );
+        assert!(cursor.advance_over(6, &horizon, &[]), "a gap is filled as usual");
+        assert_eq!(cursor, Cursor::at(9));
     }
 
     #[test]

@@ -233,6 +233,22 @@ pub trait SourceEvents<E>: Send + Sync {
     ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, u64), StoreError>> + Send;
 }
 
+/// One read of the log ([`ReadLog::read`]).
+#[derive(Debug)]
+pub struct LogPage<E> {
+    /// The events, in position order.
+    pub events: Vec<EventEnvelope<E>>,
+    /// What the store knew when it answered.
+    pub horizon: Horizon,
+    /// The positions after the cursor's, up to the last event read, that
+    /// nothing was committed at when the store answered (in order): the only
+    /// ones that may still be filled. `None`: every position skipped may be
+    /// (the default, for a store that cannot tell). A store with several
+    /// logs over one sequence tells, so the other logs' positions are never
+    /// taken for gaps.
+    pub missing: Option<Vec<u64>>,
+}
+
 /// Reads the whole log in order: what tracking processors and
 /// subscriptions follow.
 ///
@@ -258,16 +274,18 @@ pub trait ReadLog<E>: Send + Sync {
     fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send;
 
     /// Up to `limit` events `cursor` has not seen, in position order: those
-    /// filling its gaps, then those after it; and what the store knew when
+    /// filling its gaps, then those after it; with what the store knew when
     /// it answered, to track the gaps it reveals. By default (a gapless
     /// store), [`read_all`](Self::read_all) after the cursor's position.
-    fn read(
-        &self,
-        cursor: &Cursor,
-        limit: usize,
-    ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, Horizon), StoreError>> + Send {
+    fn read(&self, cursor: &Cursor, limit: usize) -> impl Future<Output = Result<LogPage<E>, StoreError>> + Send {
         let read = self.read_all(cursor.position(), limit);
-        async move { Ok((read.await?, Horizon::SETTLED)) }
+        async move {
+            Ok(LogPage {
+                events: read.await?,
+                horizon: Horizon::SETTLED,
+                missing: None,
+            })
+        }
     }
 
     /// A cursor that saw everything committed up to `position`: where a

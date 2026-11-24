@@ -97,8 +97,8 @@ pub use projection::{HasNamespace, NamespaceHandler, namespace_id};
 pub use projection::{Projection, Route};
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
 pub use store::{
-    AppendEvents, EventStore, ExpectedVersion, InMemoryEventStore, LoadStream, ReadLog, Recorded, SourceEvents,
-    StoreError, TaggedEvent,
+    AppendEvents, EventStore, ExpectedVersion, InMemoryEventStore, LoadStream, LogPage, ReadLog, Recorded,
+    SourceEvents, StoreError, TaggedEvent,
 };
 #[cfg(feature = "tokio")]
 pub use streaming::{

@@ -1859,3 +1859,94 @@ async fn state_and_events_commit_and_roll_back_together() {
     let kept = find_kept(&pool, 1).await.unwrap();
     assert_eq!((kept.ticks, kept.version()), (3, Some(3)));
 }
+
+/// Measures risk 1.2 of the plan: with two logs written at the same time,
+/// the positions of one are missing from the other's reads, and its
+/// processor carries them as gaps until their transactions finish. Prints
+/// how many gaps the processor's cursor carries (sampled) and stores in its
+/// token, under load. Run on purpose:
+/// `cargo test -p cqrs-postgres --test postgres gaps_from_other_logs -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "a measurement, not a check"]
+async fn gaps_from_other_logs_under_load() {
+    let pool = database_or_skip!();
+    let clocks = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let bells = PostgresEventStore::<BellEvent>::new(pool.clone(), "bells");
+    let events = Events::new(clocks.clone())
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
+    let seen = Arc::new(Recorder::default());
+    let processor = events.processor("clocks", Arc::clone(&seen)).spawn();
+    let progress = processor.progress();
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut writers = Vec::new();
+    for writer in 0..16_u32 {
+        let (clocks, bells, stop) = (clocks.clone(), bells.clone(), Arc::clone(&stop));
+        writers.push(tokio::spawn(async move {
+            let mut appended = 0_u64;
+            while !stop.load(Ordering::Relaxed) {
+                let id = writer * 1_000_000 + appended as u32;
+                // `CQRS_ONE_LOG=1`: every writer on the clocks' log, the baseline.
+                if writer % 2 == 0 || std::env::var_os("CQRS_ONE_LOG").is_some() {
+                    clocks
+                        .append(
+                            &mut (),
+                            &stream(id),
+                            ExpectedVersion::NoStream,
+                            ticks(1, 1),
+                            &Metadata::new(),
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    bells
+                        .append(
+                            &mut (),
+                            &StreamId::new("bell", id.to_string()),
+                            ExpectedVersion::NoStream,
+                            vec![BellEvent::Rung { times: 1 }],
+                            &Metadata::new(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                appended += 1;
+            }
+            appended
+        }));
+    }
+    let (mut samples, mut total, mut most) = (0_u64, 0_u64, 0_usize);
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        let gaps = progress
+            .borrow()
+            .cursors
+            .iter()
+            .map(|cursor| cursor.gaps().len())
+            .sum::<usize>();
+        samples += 1;
+        total += gaps as u64;
+        most = most.max(gaps);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    stop.store(true, Ordering::Relaxed);
+    let mut appended = 0;
+    for writer in writers {
+        appended += writer.await.unwrap();
+    }
+    let head = clocks.last_position().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), processor.caught_up(head))
+        .await
+        .expect("caught up");
+    let stored: Vec<i32> = sqlx::query_scalar("SELECT cardinality(gaps) FROM cqrs_tokens WHERE processor = 'clocks'")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    println!(
+        "appended {appended} events in 5 s over two logs; the clocks processor's cursor carried \
+         {:.1} gaps on average (sampled every 5 ms), {most} at most; {stored:?} stored once caught up",
+        total as f64 / samples as f64,
+    );
+    processor.stop().await;
+}

@@ -100,6 +100,7 @@ where
             Start::From(cursor) => cursor,
         },
         ready: VecDeque::new(),
+        missing: None,
         behind: true,
         read_at: Instant::now(),
         options,
@@ -125,6 +126,9 @@ struct State<E, S> {
     /// Events fetched but not yielded yet, in position order, with what the
     /// store knew when it returned them.
     ready: VecDeque<(Arc<EventEnvelope<E>>, Horizon)>,
+    /// The positions the last read said nothing was committed at, when the
+    /// store tells (see [`LogPage::missing`](crate::LogPage)).
+    missing: Option<Vec<u64>>,
     /// Whether the store may hold events not yielded yet.
     behind: bool,
     /// When the store was last read.
@@ -149,7 +153,11 @@ impl<E: DomainEvent, S: ReadLog<E>> State<E, S> {
         }
         loop {
             if let Some((event, horizon)) = self.ready.pop_front() {
-                if !self.cursor.advance(event.position, &horizon) {
+                let advanced = match &self.missing {
+                    Some(missing) => self.cursor.advance_over(event.position, &horizon, missing),
+                    None => self.cursor.advance(event.position, &horizon),
+                };
+                if !advanced {
                     continue; // already yielded (read from both sources)
                 }
                 let cursor = self.cursor.clone();
@@ -158,7 +166,12 @@ impl<E: DomainEvent, S: ReadLog<E>> State<E, S> {
 
             if self.behind || (!self.cursor.gaps().is_empty() && self.read_at.elapsed() >= GAP_RECHECK) {
                 match self.store.read(&self.cursor, self.options.batch_size).await {
-                    Ok((page, horizon)) => {
+                    Ok(crate::LogPage {
+                        events: page,
+                        horizon,
+                        missing,
+                    }) => {
+                        self.missing = missing;
                         // A full page means there may be more.
                         self.behind = page.len() == self.options.batch_size;
                         self.read_at = Instant::now();

@@ -6,7 +6,7 @@ use std::{
 
 use cqrs::{
     AppendCondition, AppendEvents, Cursor, DomainEvent, EventCriteria, EventEnvelope, ExpectedVersion, Gap, Horizon,
-    LoadStream, Metadata, ReadLog, Recorded, SourceEvents, StoreError, StreamId, TaggedEvent,
+    LoadStream, LogPage, Metadata, ReadLog, Recorded, SourceEvents, StoreError, StreamId, TaggedEvent,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::{Connection, PgConnection, PgExecutor, PgPool, Postgres, Transaction};
@@ -304,19 +304,22 @@ where
     /// `xmin` finished, and whoever holds a position missing among those
     /// read started before its `xmax` (it took a transaction id before its
     /// positions, see `cqrs_positions`).
-    async fn read(&self, cursor: &Cursor, limit: usize) -> Result<(Vec<EventEnvelope<E>>, Horizon), StoreError> {
+    ///
+    /// The positions skipped up to the last event read that **no log**
+    /// committed in that snapshot come back as
+    /// [`missing`](cqrs::LogPage::missing): only those can still be filled.
+    /// The other logs' positions, missing from this log's rows, are not
+    /// taken for gaps (risk 1.2 of the migration plan: with two logs under
+    /// load, a processor's cursor carried a hundred gaps or more).
+    async fn read(&self, cursor: &Cursor, limit: usize) -> Result<LogPage<E>, StoreError> {
         let gaps: Vec<i64> = cursor.gaps().iter().map(|gap| to_i64(gap.position)).collect();
         let rows = sqlx::query!(
             r#"
             WITH snapshot AS (
                 SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS xmin,
                        pg_snapshot_xmax(pg_current_snapshot())::text::bigint AS xmax
-            )
-            SELECT s.xmin AS "xmin!", s.xmax AS "xmax!",
-                   e.position AS "position?", e.stream_type AS "stream_type?", e.stream_id AS "stream_id?",
-                   e.sequence AS "sequence?", e.event_type AS "event_type?", e.event_version AS "event_version?",
-                   e.payload::text AS "payload?", e.metadata::text AS "metadata?", e.recorded_us AS "recorded_us?"
-            FROM snapshot s LEFT JOIN LATERAL (
+            ),
+            page AS (
                 (SELECT position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata,
                         (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us
                  FROM cqrs_events WHERE log = $4 AND position = ANY($2))
@@ -325,7 +328,18 @@ where
                         (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us
                  FROM cqrs_events WHERE log = $4 AND position > $1 ORDER BY position LIMIT $3)
                 ORDER BY position LIMIT $3
-            ) e ON true"#,
+            ),
+            missing AS (
+                SELECT array(
+                    SELECT p FROM generate_series($1::bigint + 1, (SELECT coalesce(max(position), $1) FROM page)) AS p
+                    WHERE NOT EXISTS (SELECT 1 FROM cqrs_events WHERE position = p)
+                ) AS positions
+            )
+            SELECT s.xmin AS "xmin!", s.xmax AS "xmax!", m.positions AS "missing!",
+                   e.position AS "position?", e.stream_type AS "stream_type?", e.stream_id AS "stream_id?",
+                   e.sequence AS "sequence?", e.event_type AS "event_type?", e.event_version AS "event_version?",
+                   e.payload::text AS "payload?", e.metadata::text AS "metadata?", e.recorded_us AS "recorded_us?"
+            FROM snapshot s CROSS JOIN missing m LEFT JOIN page e ON true"#,
             to_i64(cursor.position()),
             &gaps,
             i64::try_from(limit).unwrap_or(i64::MAX),
@@ -338,6 +352,10 @@ where
             finished_below: row.xmin as u64,
             started_below: row.xmax as u64,
         });
+        let missing = rows
+            .first()
+            .map(|row| row.missing.iter().map(|&position| position as u64).collect())
+            .unwrap_or_default();
         let events = rows
             .into_iter()
             .filter_map(|row| {
@@ -355,7 +373,11 @@ where
             })
             .map(|row| envelope(row, &*self.upcaster))
             .collect::<Result<_, _>>()?;
-        Ok((events, horizon))
+        Ok(LogPage {
+            events,
+            horizon,
+            missing: Some(missing),
+        })
     }
 
     /// `position`, with the positions below it not committed yet (within
