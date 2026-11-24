@@ -152,7 +152,7 @@ impl InMemoryTokenStore {
             .get_mut(processor)
             .and_then(|tokens| tokens.get_mut(segment as usize))
             .map(f)
-            .ok_or_else(|| StoreError::Backend(format!("{processor} has no segment {segment}")))
+            .ok_or_else(|| StoreError::backend(format!("{processor} has no segment {segment}")))
     }
 }
 

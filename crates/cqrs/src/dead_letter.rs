@@ -102,7 +102,7 @@ impl<E: Send + Sync, Tx: Send> DeadLetterQueue<E, Tx> for () {
     }
 
     async fn enqueue_in(&self, _: &mut Tx, processor: &str, _: DeadLetter<E>) -> Result<(), StoreError> {
-        Err(StoreError::Backend(format!("{processor} has no dead-letter queue")))
+        Err(StoreError::backend(format!("{processor} has no dead-letter queue")))
     }
 
     async fn remove_in(&self, _: &mut Tx, _: &str, _: &DeadLetter<E>) -> Result<bool, StoreError> {

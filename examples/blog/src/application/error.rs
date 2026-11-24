@@ -34,7 +34,7 @@ impl From<StoreError> for BlogError {
     fn from(error: StoreError) -> Self {
         match error {
             StoreError::Conflict { .. } | StoreError::ConditionFailed => Self::Conflict,
-            StoreError::Backend(message) => Self::Store(message),
+            StoreError::Backend(cause) => Self::Store(cause.to_string()),
         }
     }
 }

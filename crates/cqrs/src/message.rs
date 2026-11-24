@@ -388,33 +388,51 @@ pub trait QueryGateway<Q: Query>: Dispatch<Q> {
 
 impl<Q: Query, G: Dispatch<Q>> QueryGateway<Q> for G {}
 
-/// Why an event handler failed. Converts from any `std::error::Error`, so
+/// Why an event handler failed: the original error, so a log or a dead
+/// letter can walk its causes. Converts from any `std::error::Error`, so
 /// handlers can use `?` (it deliberately does not implement `Error` itself,
-/// the same trick `anyhow` uses).
-pub struct HandlerError(String);
+/// the same trick `anyhow` uses; [`as_error`](Self::as_error) lends it as
+/// one).
+pub struct HandlerError(Box<dyn std::error::Error + Send + Sync>);
 
 impl HandlerError {
     /// An error from a plain message, for failures that are not an
     /// `std::error::Error` value.
     pub fn msg(message: impl fmt::Display) -> Self {
-        Self(message.to_string())
+        Self(message.to_string().into())
+    }
+
+    /// The original error.
+    pub fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        &*self.0
+    }
+
+    /// The original error, owned.
+    pub fn into_inner(self) -> Box<dyn std::error::Error + Send + Sync> {
+        self.0
     }
 }
 
-impl<E: std::error::Error> From<E> for HandlerError {
+impl<E: std::error::Error + Send + Sync + 'static> From<E> for HandlerError {
     fn from(error: E) -> Self {
-        Self(error.to_string())
+        Self(Box::new(error))
+    }
+}
+
+impl From<HandlerError> for Box<dyn std::error::Error + Send + Sync> {
+    fn from(error: HandlerError) -> Self {
+        error.0
     }
 }
 
 impl fmt::Display for HandlerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
 impl fmt::Debug for HandlerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HandlerError({:?})", self.0)
+        f.debug_tuple("HandlerError").field(&self.0).finish()
     }
 }

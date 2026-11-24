@@ -43,7 +43,7 @@ impl StoredEvent {
         Ok(Self {
             event_type: event.event_type().to_owned(),
             version: event.event_version(),
-            payload: serde_json::to_value(event).map_err(|error| StoreError::Backend(error.to_string()))?,
+            payload: serde_json::to_value(event).map_err(StoreError::backend)?,
         })
     }
 
@@ -56,7 +56,7 @@ impl StoredEvent {
     pub fn decode<E: DeserializeOwned>(mut self, upcaster: &impl Upcaster) -> Result<(E, String, u32), StoreError> {
         upcaster.upcast(&mut self);
         let event = serde_json::from_value(self.payload).map_err(|error| {
-            StoreError::Backend(format!("cannot decode {} v{}: {error}", self.event_type, self.version))
+            StoreError::backend(format!("cannot decode {} v{}: {error}", self.event_type, self.version))
         })?;
         Ok((event, self.event_type, self.version))
     }
@@ -78,7 +78,7 @@ impl StoredEvent {
         upcaster: &impl Upcaster,
     ) -> Result<(E, String, u32), StoreError> {
         let invalid =
-            |error: serde_json::Error| StoreError::Backend(format!("cannot decode {event_type} v{version}: {error}"));
+            |error: serde_json::Error| StoreError::backend(format!("cannot decode {event_type} v{version}: {error}"));
         if !upcaster.applies(&event_type, version) {
             let event = serde_json::from_str(payload).map_err(invalid)?;
             return Ok((event, event_type, version));

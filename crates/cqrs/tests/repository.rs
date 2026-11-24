@@ -92,7 +92,7 @@ fn a_commit_stores_what_the_decision_appended_and_the_next_load_sees_it() {
     let sums = Sums::with_total(10);
     let loaded = sums.find(1).unwrap();
     assert_eq!(loaded.version(), Some(1));
-    assert_eq!(sums.add(loaded, 5), Ok(Some(2)));
+    assert_eq!(sums.add(loaded, 5).unwrap(), Some(2));
     assert_eq!(sums.total(), 15);
     assert_eq!(sums.find(1).unwrap().version(), Some(2));
 }
@@ -132,8 +132,8 @@ fn a_decision_that_appends_nothing_commits_nothing() {
     let sums = Sums::with_total(10);
     let loaded = sums.find(1).unwrap();
     assert_eq!(
-        block_on(sums.publisher.commit(loaded, Pending::new(Vec::new()))),
-        Ok(None)
+        block_on(sums.publisher.commit(loaded, Pending::new(Vec::new()))).unwrap(),
+        None
     );
     assert_eq!(sums.find(1).unwrap().version(), Some(1));
 }

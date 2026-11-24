@@ -52,7 +52,7 @@ impl Counter {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Error {
     TooMuch,
     NotFound(u32),
@@ -62,6 +62,19 @@ enum Error {
 impl From<NotFound<u32>> for Error {
     fn from(NotFound(id): NotFound<u32>) -> Self {
         Self::NotFound(id)
+    }
+}
+
+/// Equal kinds; store errors by their message (they keep their cause, which
+/// is not comparable).
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Store(a), Self::Store(b)) => a.to_string() == b.to_string(),
+            (Self::NotFound(a), Self::NotFound(b)) => a == b,
+            (Self::TooMuch, Self::TooMuch) => true,
+            _ => false,
+        }
     }
 }
 

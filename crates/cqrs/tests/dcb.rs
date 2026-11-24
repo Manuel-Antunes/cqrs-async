@@ -87,12 +87,26 @@ impl Student {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Error {
     NoSuchCourse,
     Full,
     TooManyCourses,
     Store(StoreError),
+}
+
+/// Equal kinds; store errors by their message (they keep their cause, which
+/// is not comparable).
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Store(a), Self::Store(b)) => a.to_string() == b.to_string(),
+            (Self::NoSuchCourse, Self::NoSuchCourse)
+            | (Self::Full, Self::Full)
+            | (Self::TooManyCourses, Self::TooManyCourses) => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<StoreError> for Error {
@@ -305,7 +319,7 @@ fn a_read_only_aggregate_is_checked_too() {
     subscribe_directly(&store, 3, 1);
     course.subscribe(1, None, &mut events).unwrap();
     let refused = block_on(events.commit(course, gateway.publisher()));
-    assert_eq!(refused, Err(StoreError::ConditionFailed));
+    assert!(matches!(refused, Err(StoreError::ConditionFailed)));
 }
 
 #[test]
@@ -386,10 +400,10 @@ fn hand_written_tags_select_and_guard_like_derived_ones() {
         ship(4, "dhl", Some(&condition)).is_ok(),
         "only a dhl parcel since would refuse it"
     );
-    assert_eq!(
-        ship(5, "dhl", Some(&condition)).unwrap_err(),
-        StoreError::ConditionFailed
-    );
+    assert!(matches!(
+        ship(5, "dhl", Some(&condition)),
+        Err(StoreError::ConditionFailed)
+    ));
     // Nothing to append succeeds at once, whatever the condition (every store).
     let (stream, metadata) = (StreamId::new("parcel", "6"), Metadata::new());
     let nothing = block_on(store.append_if(&stream, ExpectedVersion::Exact(9), vec![], &metadata, Some(&condition)));

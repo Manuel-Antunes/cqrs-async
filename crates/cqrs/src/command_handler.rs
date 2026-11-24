@@ -66,8 +66,9 @@
 //!         events: InlinePublisher::new(store),
 //!     },
 //! };
-//! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 })), Ok(2));
-//! assert_eq!(block_on(commands.send(Add { id: 1, n: 3 })), Ok(5));
+//! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 }))?, 2);
+//! assert_eq!(block_on(commands.send(Add { id: 1, n: 3 }))?, 5);
+//! # Ok::<(), StoreError>(())
 //! ```
 //!
 //! A handler commits to a publisher of its own event type; any other value

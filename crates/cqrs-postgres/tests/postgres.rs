@@ -165,7 +165,7 @@ async fn old_events_are_upcast_when_read() {
     let plain = PostgresEventStore::<ClockEventV2>::new(pool.clone(), "clocks");
     let error = plain.load(&stream(1), 0).await.err().unwrap();
     assert!(
-        matches!(&error, StoreError::Backend(message) if message.contains("clock.ticked v1")),
+        matches!(&error, StoreError::Backend(cause) if cause.to_string().contains("clock.ticked v1")),
         "{error}"
     );
 
@@ -1060,7 +1060,7 @@ async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
     for attempt in attempts.collect::<Vec<_>>() {
         match attempt.await.unwrap() {
             Ok(_) => won += 1,
-            Err(error) => assert_eq!(error, StoreError::ConditionFailed),
+            Err(error) => assert!(matches!(error, StoreError::ConditionFailed), "{error}"),
         }
     }
     assert_eq!(won, 1);
@@ -1167,7 +1167,7 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
     let refused = store
         .append_if(&stream, ExpectedVersion::NoStream, events, &none, Some(&room_1_floor_2))
         .await;
-    assert_eq!(refused.err(), Some(StoreError::ConditionFailed));
+    assert!(matches!(refused, Err(StoreError::ConditionFailed)));
     // A condition read after it holds again.
     let (stream, events) = take("d", 1, 2);
     let fresh = cqrs::AppendCondition {
@@ -1426,7 +1426,7 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
             Some(&condition),
         )
         .await;
-    assert_eq!(refused.unwrap_err(), StoreError::ConditionFailed);
+    assert!(matches!(refused, Err(StoreError::ConditionFailed)));
     // Nothing to append succeeds at once, whatever the condition (every store).
     let nothing = store
         .append_if(

@@ -82,7 +82,7 @@ where
         };
         let position = u64::try_from(row.position).map_err(backend)?;
         let event = self.store.event_at(position).await?.ok_or_else(|| {
-            StoreError::Backend(format!(
+            StoreError::backend(format!(
                 "the event at position {position}, parked by {processor}, is not in the log"
             ))
         })?;

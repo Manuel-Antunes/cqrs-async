@@ -548,9 +548,7 @@ fn criteria_keys(log: &str, criteria: &EventCriteria) -> Result<Vec<i64>, StoreE
         .map(|criterion| match (criterion.tags.first(), criterion.types.is_empty()) {
             (Some(tag), _) => Ok(vec![key(log, "tag", &tag.to_string())]),
             (None, false) => Ok(criterion.types.iter().map(|name| key(log, "type", name)).collect()),
-            (None, true) => Err(StoreError::Backend(
-                "a criterion must name a tag or an event type".to_owned(),
-            )),
+            (None, true) => Err(StoreError::backend("a criterion must name a tag or an event type")),
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|keys| keys.concat())

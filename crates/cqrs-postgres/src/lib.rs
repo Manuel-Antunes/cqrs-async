@@ -94,7 +94,8 @@ const SCHEMA: &str = concat!(
     include_str!("../migrations/0001_cqrs.sql"),
 );
 
-/// Any database failure, as the core sees it.
-fn backend(error: impl std::fmt::Display) -> StoreError {
-    StoreError::Backend(error.to_string())
+/// Any database failure, as the core sees it: the original error, kept as
+/// the source.
+fn backend(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> StoreError {
+    StoreError::backend(error)
 }

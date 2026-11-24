@@ -381,7 +381,7 @@ impl DeadLetterQueue<Ticked> for Arc<FlakyQueue> {
         };
         if failing {
             self.failures_served.fetch_add(1, Ordering::SeqCst);
-            return Err(StoreError::Backend("the queue is unreachable".to_owned()));
+            return Err(StoreError::backend("the queue is unreachable"));
         }
         self.inner.contains(processor, sequence).await
     }

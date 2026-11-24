@@ -212,7 +212,7 @@ async fn plain_queries_still_work_through_the_same_gateway() {
     let world = World::new();
     world.record(1, ClockEvent::Ticked).await;
     world.projection.caught_up(1).await;
-    assert_eq!(world.queries.query(TicksOf(1)).await, Ok(1));
+    assert_eq!(world.queries.query(TicksOf(1)).await.unwrap(), 1);
     world.projection.stop().await;
 }
 
@@ -294,7 +294,7 @@ async fn live_queries_follow_a_projection_split_across_instances() {
     while seen.last() != Some(&2) {
         seen.push(next(&mut on_second).await);
     }
-    assert_eq!(queries.query(TicksOf(second)).await, Ok(2));
+    assert_eq!(queries.query(TicksOf(second)).await.unwrap(), 2);
     a.stop().await;
     b.stop().await;
 }

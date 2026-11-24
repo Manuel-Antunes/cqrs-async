@@ -59,7 +59,7 @@ pub enum ExpectedVersion {
 }
 
 /// Why an event store operation failed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum StoreError {
     /// Optimistic concurrency failure: someone else appended first. The
     /// caller should reload the aggregate and retry the decision.
@@ -75,8 +75,24 @@ pub enum StoreError {
     /// appended after the decision read them. Like a conflict, the caller
     /// should read again and decide again.
     ConditionFailed,
-    /// The storage itself failed (connection, I/O, serialization...).
-    Backend(String),
+    /// The storage itself failed (connection, I/O, serialization...): the
+    /// original error, kept as the [`source`](std::error::Error::source).
+    /// A message converts too: `StoreError::Backend("down".into())`.
+    Backend(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl StoreError {
+    /// A [`Backend`](Self::Backend) failure caused by `error`.
+    pub fn backend(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Backend(error.into())
+    }
+
+    /// Whether this is a lost race ([`Conflict`](Self::Conflict) or
+    /// [`ConditionFailed`](Self::ConditionFailed)): reading again and
+    /// deciding again may succeed.
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, Self::Conflict { .. } | Self::ConditionFailed)
+    }
 }
 
 impl fmt::Display for StoreError {
@@ -91,12 +107,19 @@ impl fmt::Display for StoreError {
                 "concurrency conflict on {stream}: expected {expected:?}, found {actual:?}"
             ),
             Self::ConditionFailed => f.write_str("an event matching the decision's criteria was appended meanwhile"),
-            Self::Backend(message) => write!(f, "event store failure: {message}"),
+            Self::Backend(error) => write!(f, "event store failure: {error}"),
         }
     }
 }
 
-impl std::error::Error for StoreError {}
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) => Some(&**error),
+            Self::Conflict { .. } | Self::ConditionFailed => None,
+        }
+    }
+}
 
 /// Append-only storage of event streams.
 ///
