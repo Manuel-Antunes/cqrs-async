@@ -80,7 +80,9 @@ pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOut
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use feed::{EventFeed, QuerySubscriptions};
 pub use forward::{FixedTopic, Forward, Outgoing, Publish, RoutedTopic, TopicOf};
-pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};
+pub use inline::{
+    EventProcessor, HandlerFailure, InlinePublisher, Isolated, LogFailures, OnFailure, ProcessingFailure,
+};
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
 pub use loader::{AggregateLoader, Loaded, New, NotFound};
 pub use message::{

@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use cqrs::{Cqrs, Events, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Intercepted};
+use cqrs::{Cqrs, Events, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Intercepted, Isolated};
 use cqrs_postgres::{PostgresEventStore, PostgresTokenStore, PostgresTransactions, sqlx::PgPool};
 use sea_orm::{DbErr, SqlxPostgresConnector};
 use sea_orm_migration::MigratorTrait;
@@ -79,11 +79,12 @@ pub fn in_memory_with(
 ) {
     let summaries = Arc::new(InMemoryPostSummaryRepository::default());
     let notifier = Arc::new(InMemoryNotifier::default());
-    // Synchronous: no subscriptions to push updates to.
-    let processors = (
+    // Synchronous: no subscriptions to push updates to. Isolated: a failing
+    // notification never holds the read model back.
+    let processors = Isolated((
         PostSummaryProjection::new(Arc::clone(&summaries)),
         NotifyOnPublish::new(Arc::clone(&notifier)),
-    );
+    ));
     let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_processor(processors);
     let blog = Cqrs::from_publisher(publisher)
         .commands(|events| PostCommandGateway::new(Arc::new(posts_over(&store, events))))

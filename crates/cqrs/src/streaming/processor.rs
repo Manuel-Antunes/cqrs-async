@@ -24,6 +24,8 @@ use crate::{
     ReadLog, StoreError, TokenStore, TrackingToken, TransactionManager, segment_of,
 };
 
+use crate::message::sealed::INTERNAL;
+
 /// What moving a segment's token did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TokenUpdate {
@@ -827,7 +829,7 @@ where
         for (event, _) in batch {
             let replay = event.position <= replay_until;
             self.handler
-                .handle_in(event, &mut ProcessingContext::new(&mut tx, replay))
+                .handle_in(event, &mut ProcessingContext::new(&mut tx, replay), INTERNAL)
                 .await?;
         }
         let token = TrackingToken {
@@ -842,7 +844,9 @@ where
         }
         self.transactions.commit(tx).await.map_err(HandlerError::from)?;
         for (event, _) in batch {
-            self.handler.committed_in(event, event.position <= replay_until).await;
+            self.handler
+                .committed_in(event, event.position <= replay_until, INTERNAL)
+                .await;
         }
         Ok(TokenUpdate::Stored)
     }
@@ -932,14 +936,14 @@ where
     ) -> Result<TokenUpdate, HandlerError> {
         let mut tx = self.transactions.begin().await.map_err(HandlerError::from)?;
         self.handler
-            .handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay))
+            .handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay), INTERNAL)
             .await?;
         if !self.tokens.store(&mut tx, token).await.map_err(HandlerError::from)? {
             // Another instance owns the segment: dropping `tx` rolls back.
             return Ok(TokenUpdate::ClaimLost);
         }
         self.transactions.commit(tx).await.map_err(HandlerError::from)?;
-        self.handler.committed_in(event, token.replay).await;
+        self.handler.committed_in(event, token.replay, INTERNAL).await;
         Ok(TokenUpdate::Stored)
     }
 

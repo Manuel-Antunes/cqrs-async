@@ -15,8 +15,10 @@ use crate::{
 /// up to date when the commit returns; a failure goes to the publisher's
 /// [`OnFailure`] policy and never undoes the commit.
 ///
-/// Implemented for `()` (no processing) and for tuples of [`EventHandler`]s up
-/// to 8 elements: a fixed, typed fan-out with no `Vec<Box<dyn _>>`.
+/// Implemented for `()` (no processing), for tuples of [`EventHandler`]s up
+/// to 8 elements (a group: members in order, a failure stopping the group,
+/// as a tuple means everywhere) and for [`Isolated`] tuples (each member on
+/// its own): a fixed, typed fan-out with no `Vec<Box<dyn _>>`.
 pub trait EventProcessor<E: DomainEvent>: Send + Sync {
     /// Hands `events` (one commit, in order) to every handler of the group.
     fn process(&self, events: &[EventEnvelope<E>]) -> impl Future<Output = Result<(), ProcessingFailure>> + Send;
@@ -79,14 +81,35 @@ async fn run_handler<E: DomainEvent, H: EventHandler<E>>(
     }
 }
 
-/// Implements [`EventProcessor`] for a tuple of handlers: each one runs over
-/// the whole batch, independently of the others' failures.
+/// Handlers that each see every event, whatever the others do: one failing
+/// (a notification) neither stops nor delays another (a projection). What a
+/// tuple of inline handlers means once wrapped:
+/// `InlinePublisher::new(store).with_processor(Isolated((projection, notifier)))`.
+/// A bare tuple is a group instead.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Isolated<T>(pub T);
+
+/// Implements [`EventProcessor`] for a tuple of handlers: a group, fed each
+/// event in turn, stopping at its first failure.
 macro_rules! tuple_processor {
     ($($handler:ident $index:tt),+) => {
         impl<E: DomainEvent, $($handler: EventHandler<E>),+> EventProcessor<E> for ($($handler,)+) {
             async fn process(&self, events: &[EventEnvelope<E>]) -> Result<(), ProcessingFailure> {
                 let mut failures = Vec::new();
-                $(run_handler(&self.$index, events, &mut failures).await;)+
+                run_handler(self, events, &mut failures).await;
+                if failures.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ProcessingFailure { failures })
+                }
+            }
+        }
+
+        impl<E: DomainEvent, $($handler: EventHandler<E>),+> EventProcessor<E> for Isolated<($($handler,)+)> {
+            async fn process(&self, events: &[EventEnvelope<E>]) -> Result<(), ProcessingFailure> {
+                let handlers = &self.0;
+                let mut failures = Vec::new();
+                $(run_handler(&handlers.$index, events, &mut failures).await;)+
                 if failures.is_empty() {
                     Ok(())
                 } else {
@@ -148,7 +171,7 @@ impl<F: Fn(&ProcessingFailure) + Send + Sync> OnFailure for F {
 /// [`on_failure`](Self::on_failure) says otherwise.
 ///
 /// ```text
-/// let events = InlinePublisher::new(store).with_processor((projection, policy));
+/// let events = InlinePublisher::new(store).with_processor(Isolated((projection, notifier)));
 /// let unit = Cqrs::from_publisher(events).commands(gateway).build();
 /// ```
 pub struct InlinePublisher<E, S, P = (), F = LogFailures> {

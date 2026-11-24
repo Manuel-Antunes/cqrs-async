@@ -210,11 +210,14 @@ pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
 
     /// [`handle`](Self::handle), unless the event is replayed and
     /// [`REPLAY`](Self::REPLAY) is `false`: what a processor calls. A group
-    /// overrides it to decide per member.
+    /// overrides it to decide per member. Sealed: only this crate can call
+    /// or override it (its last argument cannot be named elsewhere).
+    #[doc(hidden)]
     fn handle_in(
         &self,
         event: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
+        _: sealed::Internal,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send {
         async move {
             if context.replay() && !Self::REPLAY {
@@ -225,8 +228,14 @@ pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
     }
 
     /// [`committed`](Self::committed), with the same replay rule as
-    /// [`handle_in`](Self::handle_in).
-    fn committed_in(&self, event: &EventEnvelope<E>, replay: bool) -> impl Future<Output = ()> + Send {
+    /// `handle_in`. Sealed too.
+    #[doc(hidden)]
+    fn committed_in(
+        &self,
+        event: &EventEnvelope<E>,
+        replay: bool,
+        _: sealed::Internal,
+    ) -> impl Future<Output = ()> + Send {
         async move {
             if !replay || Self::REPLAY {
                 self.committed(event).await;
@@ -260,19 +269,27 @@ impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventHandler<E, Tx> for A
         &self,
         event: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
+        internal: sealed::Internal,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send {
-        (**self).handle_in(event, context)
+        (**self).handle_in(event, context, internal)
     }
 
-    fn committed_in(&self, event: &EventEnvelope<E>, replay: bool) -> impl Future<Output = ()> + Send {
-        (**self).committed_in(event, replay)
+    fn committed_in(
+        &self,
+        event: &EventEnvelope<E>,
+        replay: bool,
+        internal: sealed::Internal,
+    ) -> impl Future<Output = ()> + Send {
+        (**self).committed_in(event, replay, internal)
     }
 }
 
 /// Implements [`EventHandler`] for a tuple: a processing group (Axon), its
-/// members fed in order by one processor, in one unit of work, with one
-/// token: they commit all or none. In a replay, members that do not
-/// [`REPLAY`](EventHandler::REPLAY) are skipped one by one.
+/// members fed in order, the first failure stopping the rest. Run by one
+/// processor, they share its unit of work and its token: they commit all or
+/// none. In a replay, members that do not [`REPLAY`](EventHandler::REPLAY)
+/// are skipped one by one. A tuple means this everywhere, inline too;
+/// [`Isolated`](crate::Isolated) is the other meaning, for inline handlers.
 macro_rules! tuple_event_handler {
     ($($handler:ident $index:tt),+) => {
         impl<E: DomainEvent, Tx: Send, $($handler: EventHandler<E, Tx>),+> EventHandler<E, Tx> for ($($handler,)+) {
@@ -293,18 +310,19 @@ macro_rules! tuple_event_handler {
                 Ok(())
             }
 
-            async fn handle_in(&self, event: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
-                $(self.$index.handle_in(event, context).await?;)+
+            async fn handle_in(&self, event: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>, internal: sealed::Internal) -> Result<(), HandlerError> {
+                $(self.$index.handle_in(event, context, internal).await?;)+
                 Ok(())
             }
 
-            async fn committed_in(&self, event: &EventEnvelope<E>, replay: bool) {
-                $(self.$index.committed_in(event, replay).await;)+
+            async fn committed_in(&self, event: &EventEnvelope<E>, replay: bool, internal: sealed::Internal) {
+                $(self.$index.committed_in(event, replay, internal).await;)+
             }
         }
     };
 }
 
+tuple_event_handler!(A 0);
 tuple_event_handler!(A 0, B 1);
 tuple_event_handler!(A 0, B 1, C 2);
 tuple_event_handler!(A 0, B 1, C 2, D 3);
@@ -435,4 +453,15 @@ impl fmt::Debug for HandlerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("HandlerError").field(&self.0).finish()
     }
+}
+
+/// The seal of [`EventHandler`]'s internal methods.
+pub(crate) mod sealed {
+    /// A value only this crate can make, and a type only it can name: an
+    /// argument of a method that nobody else can call nor override.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Internal(());
+
+    /// The seal.
+    pub(crate) const INTERNAL: Internal = Internal(());
 }

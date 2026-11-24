@@ -146,9 +146,8 @@ impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventChain<Tx> for Handle
     }
 }
 
-/// The end of the chain in a processor: the handler's
-/// [`handle_in`](EventHandler::handle_in), which a group splits by
-/// [`REPLAY`](EventHandler::REPLAY).
+/// The end of the chain in a processor: the handler's `handle_in`, which a
+/// group splits by [`REPLAY`](EventHandler::REPLAY).
 struct HandleIn<'h, 'e, H, E> {
     handler: &'h H,
     event: &'e EventEnvelope<E>,
@@ -156,7 +155,8 @@ struct HandleIn<'h, 'e, H, E> {
 
 impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventChain<Tx> for HandleIn<'_, '_, H, E> {
     fn proceed(self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
-        self.handler.handle_in(self.event, context)
+        self.handler
+            .handle_in(self.event, context, crate::message::sealed::INTERNAL)
     }
 }
 
@@ -292,6 +292,7 @@ where
         &self,
         event: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
+        _: crate::message::sealed::Internal,
     ) -> Result<(), HandlerError> {
         if context.replay() && !H::REPLAY {
             return Ok(());
@@ -308,8 +309,13 @@ where
             .await
     }
 
-    fn committed_in(&self, event: &EventEnvelope<E>, replay: bool) -> impl Future<Output = ()> + Send {
-        self.inner.committed_in(event, replay)
+    fn committed_in(
+        &self,
+        event: &EventEnvelope<E>,
+        replay: bool,
+        internal: crate::message::sealed::Internal,
+    ) -> impl Future<Output = ()> + Send {
+        self.inner.committed_in(event, replay, internal)
     }
 }
 

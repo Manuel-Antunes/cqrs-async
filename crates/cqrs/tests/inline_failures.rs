@@ -181,3 +181,63 @@ fn a_healthy_handler_reports_nothing() {
 
     assert_eq!(*seen.lock().unwrap(), 0);
 }
+
+/// Counts the events it sees; fails them all if told to.
+struct Counting {
+    seen: std::sync::atomic::AtomicU32,
+    fails: bool,
+}
+
+impl Counting {
+    fn new(fails: bool) -> Self {
+        Self {
+            seen: std::sync::atomic::AtomicU32::new(0),
+            fails,
+        }
+    }
+}
+
+impl cqrs::EventHandler<Ticked> for Counting {
+    async fn handle(&self, _: &cqrs::EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+        self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fails {
+            return Err(HandlerError::msg("down"));
+        }
+        Ok(())
+    }
+}
+
+/// A tuple is a group, inline as in a processor: a failing member stops the
+/// ones after it. `Isolated` gives each member every event.
+#[test]
+fn a_tuple_is_a_group_and_isolated_members_each_see_every_event() {
+    use cqrs::{EventProcessor, Isolated};
+    let store = InMemoryEventStore::new();
+    let events = block_on(cqrs::AppendEvents::append(
+        &store,
+        &mut (),
+        &cqrs::StreamId::new("clock", "1"),
+        cqrs::ExpectedVersion::NoStream,
+        vec![Ticked(1), Ticked(2)],
+        &cqrs::Metadata::new(),
+    ))
+    .unwrap();
+
+    let group = (Counting::new(true), Counting::new(false));
+    let failure = block_on(group.process(&events)).unwrap_err();
+    assert_eq!(failure.failures.len(), 1, "one group, one failure");
+    assert_eq!(
+        group.1.seen.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "stopped by the first"
+    );
+
+    let isolated = Isolated((Counting::new(true), Counting::new(false)));
+    let failure = block_on(isolated.process(&events)).unwrap_err();
+    assert_eq!(failure.failures.len(), 1);
+    assert_eq!(
+        isolated.0.1.seen.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "saw both"
+    );
+}
