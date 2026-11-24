@@ -11,7 +11,7 @@
 //!
 //! ```
 //! use std::future::Future;
-//! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
+//! use cqrs::{CommandContext, AggregateLoader, CommandGateway, CommandHandler, EventAppender, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 //! enum CounterEvent { Added(u64) }
@@ -50,11 +50,11 @@
 //!
 //! #[cqrs::command_handler]
 //! impl<R: Counters, P> CommandHandler<Add> for CounterCommands<R, P> {
-//!     async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, StoreError> {
+//!     async fn handle(&self, command: &Add, ctx: &mut CommandContext<CounterEvent>) -> Result<u64, StoreError> {
 //!         // A counter starts at zero: adding to a missing one creates it.
 //!         let counter = self.counters.find(command.id).await?.unwrap_or_else(|| New(command.id).into());
-//!         events.append(CounterEvent::Added(command.n));
-//!         let counter = events.record(counter); // the counter after its events
+//!         ctx.append(CounterEvent::Added(command.n));
+//!         let counter = ctx.record(counter); // the counter after its events
 //!         Ok(counter.total)
 //!     }
 //! }
@@ -71,7 +71,7 @@
 //!
 //! # The unit of work
 //!
-//! For each command the gateway hands the handler a fresh [`Appender`]
+//! For each command the gateway hands the handler a fresh [`CommandContext`]
 //! (carrying the command's metadata) and, if the handler asks for one, the
 //! transaction of the unit of work:
 //!
@@ -95,19 +95,19 @@
 //! The command is taken by reference, as the handler may run again:
 //!
 //! ```compile_fail
-//! # use cqrs::{Appender, CommandHandler};
+//! # use cqrs::{CommandContext, CommandHandler};
 //! # #[cqrs::command(error = ())] struct Ping;
 //! struct PingHandler;
 //! #[cqrs::command_handler]
 //! impl CommandHandler<Ping> for PingHandler {
-//!     async fn handle(&self, command: Ping, events: &mut Appender<()>) -> Result<(), ()> { Ok(()) }
+//!     async fn handle(&self, command: Ping, events: &mut CommandContext<()>) -> Result<(), ()> { Ok(()) }
 //! }
 //! ```
 //!
 //! and an entity is recorded with events of its own type only:
 //!
 //! ```compile_fail,E0271
-//! # use cqrs::{Appender, CommandHandler, New, StoreError};
+//! # use cqrs::{CommandContext, CommandHandler, New, StoreError};
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Rang { Once }
 //! # #[cqrs::aggregate(event = Rang)] struct Bell { id: u32 }
@@ -116,7 +116,7 @@
 //! struct TickHandler;
 //! #[cqrs::command_handler]
 //! impl CommandHandler<Tick> for TickHandler {
-//!     async fn handle(&self, _: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
+//!     async fn handle(&self, _: &Tick, events: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
 //!         events.record(New::<Bell>(1)); // a bell rings, it does not tick
 //!         Ok(())
 //!     }
@@ -128,7 +128,7 @@
 //! gateway is declared,
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{Appender, CommandHandler, StoreError};
+//! # use cqrs::{CommandContext, CommandHandler, StoreError};
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
 //! # #[cqrs::command(error = StoreError)] struct Tick;
 //! # #[cqrs::command(error = StoreError)] struct Ring;
@@ -140,7 +140,7 @@
 //!
 //! #[cqrs::command_handler]
 //! impl<P> CommandHandler<Tick> for Clock<P> {
-//!     async fn handle(&self, _: &Tick, _: &mut Appender<Ticked>) -> Result<(), StoreError> { Ok(()) }
+//!     async fn handle(&self, _: &Tick, _: &mut CommandContext<Ticked>) -> Result<(), StoreError> { Ok(()) }
 //! }
 //! // No `CommandHandler<Ring>`.
 //! ```
@@ -171,7 +171,7 @@ use crate::{
 /// It is an [`EventAppender`](crate::EventAppender), so domain methods take
 /// it as `&mut impl EventAppender<E>`.
 #[derive(Debug)]
-pub struct Appender<E> {
+pub struct CommandContext<E> {
     /// Appended and not recorded yet.
     events: Vec<E>,
     /// Sent with the command; stored with every event.
@@ -222,13 +222,13 @@ pub struct Write<E> {
     pub metadata: Metadata,
 }
 
-impl<E> Appender<E> {
-    /// An empty appender without metadata (what a test passes).
+impl<E> CommandContext<E> {
+    /// An empty context without metadata (what a test passes).
     pub fn new() -> Self {
         Self::with_metadata(Metadata::new())
     }
 
-    /// An empty appender whose events carry `metadata`: what a gateway hands
+    /// An empty context whose events carry `metadata`: what a gateway hands
     /// each run of a handler.
     pub fn with_metadata(metadata: Metadata) -> Self {
         Self {
@@ -326,13 +326,13 @@ impl<E> Appender<E> {
     }
 }
 
-impl<E> Default for Appender<E> {
+impl<E> Default for CommandContext<E> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E> Extend<E> for Appender<E> {
+impl<E> Extend<E> for CommandContext<E> {
     fn extend<I: IntoIterator<Item = E>>(&mut self, events: I) {
         self.events.extend(events);
     }
@@ -498,13 +498,13 @@ pub trait CommandHandler<C: Command + Sync>: Send + Sync {
     /// recorded when it returns `Ok` are a bug (a forgotten `record`):
     /// debug builds panic.
     ///
-    /// It may run again, with a fresh appender and transaction, if the
+    /// It may run again, with a fresh context and transaction, if the
     /// append lost a race (see [`conflict_retries`](Self::conflict_retries)):
     /// besides writing in `tx`, it must have no side effects.
     fn handle(
         &self,
         command: &C,
-        events: &mut Appender<Self::Event>,
+        events: &mut CommandContext<Self::Event>,
         tx: &mut <Self::Unit as UnitMode>::Tx,
     ) -> impl Future<Output = Result<OutputOf<C>, ErrorOf<C>>> + Send;
 
@@ -528,7 +528,7 @@ fn lost_race(error: &StoreError) -> bool {
 }
 
 /// Runs `handler` on `command` in a unit of work of `unit`: opens it, runs
-/// the handler with a fresh appender (carrying the command's `metadata`)
+/// the handler with a fresh context (carrying the command's `metadata`)
 /// and the unit's transaction, appends what it recorded, commits, then
 /// announces. An error rolls the unit back; a lost race also runs the
 /// handler again. What a command gateway does for each command, and how a
@@ -553,7 +553,7 @@ where
 {
     let mut retries = handler.conflict_retries();
     loop {
-        let mut events = Appender::with_metadata(metadata.clone());
+        let mut events = CommandContext::with_metadata(metadata.clone());
         let mut tx = unit.begin().await?;
         let output = handler.handle(&command, &mut events, &mut tx).await?;
         debug_assert!(

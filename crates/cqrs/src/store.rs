@@ -2,6 +2,7 @@
 //! optimistic concurrency check ([`ExpectedVersion`]) and an in-memory
 //! implementation.
 
+use crate::sync::Locked;
 use std::{
     collections::HashMap,
     fmt,
@@ -412,7 +413,7 @@ impl<E> InMemoryEventStore<E> {
     /// Locks the contents. Appends never panic while holding the lock, so a
     /// poisoned lock is a bug: panic too.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner<E>> {
-        self.inner.lock().expect("event store poisoned")
+        self.inner.locked()
     }
 }
 

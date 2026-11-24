@@ -28,7 +28,7 @@ use blog::{
     infrastructure::{SeaOrmPostRepository, SeaOrmPostSummaries, postgres::Migrator},
 };
 use cqrs::{
-    Appender, CommandGateway, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, New,
+    CommandContext, CommandGateway, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, New,
     ProcessingContext, QueryGateway, StoreError, TrackingOptions,
 };
 use cqrs_postgres::sqlx::{
@@ -141,7 +141,7 @@ async fn save(
     unit: &blog::PgPostEvents,
     posts: &SeaOrmPostRepository,
     post: cqrs::Loaded<Post>,
-    appender: &mut Appender<PostEvent>,
+    appender: &mut CommandContext<PostEvent>,
 ) -> Result<(), StoreError> {
     use cqrs::UnitOfWork;
     type Unit = cqrs::InTransaction<cqrs_postgres::PgTransaction>;
@@ -178,7 +178,7 @@ async fn a_post_state_and_its_events_commit_together_and_a_lost_race_undoes_both
     let posts = SeaOrmPostRepository;
 
     let id = next_id(&pool).await;
-    let mut appender = Appender::new();
+    let mut appender = CommandContext::new();
     Post::create(id, "draft", &mut appender).unwrap();
     save(&events, &posts, New::<Post>(id).into(), &mut appender)
         .await
@@ -188,7 +188,7 @@ async fn a_post_state_and_its_events_commit_together_and_a_lost_race_undoes_both
     let first = find(&pool, id).await.unwrap();
     let second = find(&pool, id).await.unwrap();
     assert_eq!(first.version(), Some(1));
-    let (mut renamed, mut published) = (Appender::new(), Appender::new());
+    let (mut renamed, mut published) = (CommandContext::new(), CommandContext::new());
     first.retitle("renamed", &mut renamed).unwrap();
     second.publish(&mut published).unwrap();
 
@@ -243,7 +243,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
     let events = post_events(&pool);
     let posts = SeaOrmPostRepository;
     let id = next_id(&pool).await;
-    let mut appender = Appender::new();
+    let mut appender = CommandContext::new();
     Post::create(id, "draft", &mut appender).unwrap();
     save(&events, &posts, New::<Post>(id).into(), &mut appender)
         .await
@@ -276,7 +276,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
     within(10, running.caught_up(created)).await;
 
     let post = find(&pool, id).await.unwrap();
-    let mut appender = Appender::new();
+    let mut appender = CommandContext::new();
     post.retitle("final", &mut appender).unwrap();
     save(&events, &posts, post, &mut appender).await.unwrap();
     let retitled = sqlx::query_scalar::<_, i64>("SELECT max(position) FROM cqrs_events")

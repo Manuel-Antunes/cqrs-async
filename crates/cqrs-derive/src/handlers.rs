@@ -43,7 +43,7 @@ fn declares(item: &ItemImpl, name: &str) -> bool {
 
 /// `#[command_handler]` on `impl CommandHandler<C> for H`: the command is the
 /// type behind `handle`'s `&Command` argument (and the trait's parameter, if
-/// left out), the event the parameter of its `&mut Appender<Event>`
+/// left out), the event the parameter of its `&mut CommandContext<Event>`
 /// argument, and the unit of work its third argument: `tx: &mut Tx` is
 /// `InTransaction<Tx>`; without one, `Autocommit` (and the macro adds the
 /// `&mut ()` the trait passes). It adds the two associated types, and the
@@ -62,8 +62,8 @@ pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
             ));
         }
     };
-    let appender = argument(method, 1, "an `events: &mut Appender<Event>` argument")?;
-    let event = appender_event(&appender)?;
+    let context = argument(method, 1, "a `ctx: &mut CommandContext<Event>` argument")?;
+    let event = context_event(&context)?;
     let transaction = match argument(method, 2, "") {
         Ok(Type::Reference(TypeReference {
             elem,
@@ -183,9 +183,9 @@ fn handles_marker(item: &ItemImpl, message: &Type) -> TokenStream2 {
     }
 }
 
-/// `E` in `&mut Appender<E>`.
-fn appender_event(ty: &Type) -> Result<Type> {
-    let error = || Error::new(ty.span(), "expected `&mut Appender<Event>`");
+/// `E` in `&mut CommandContext<E>`.
+fn context_event(ty: &Type) -> Result<Type> {
+    let error = || Error::new(ty.span(), "expected `&mut CommandContext<Event>`");
     let Type::Reference(TypeReference {
         elem,
         mutability: Some(_),
@@ -201,7 +201,7 @@ fn appender_event(ty: &Type) -> Result<Type> {
         .path
         .segments
         .last()
-        .filter(|segment| segment.ident == "Appender")
+        .filter(|segment| segment.ident == "CommandContext")
         .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(error());

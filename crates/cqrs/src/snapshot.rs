@@ -1,6 +1,7 @@
 //! Snapshots: the [`SnapshotStore`] port. An optimization, never the source
 //! of truth: the event stream always is.
 
+use crate::sync::Locked;
 use std::{
     collections::HashMap,
     future::{Future, ready},
@@ -58,12 +59,12 @@ impl<A> Clone for InMemorySnapshots<A> {
 
 impl<A: Aggregate + Clone> SnapshotStore<A> for InMemorySnapshots<A> {
     fn load(&self, id: &A::Id) -> impl Future<Output = Result<Option<(A, u64)>, StoreError>> + Send {
-        let snapshots = self.snapshots.lock().expect("snapshots poisoned");
+        let snapshots = self.snapshots.locked();
         ready(Ok(snapshots.get(&StreamId::of::<A>(id)).cloned()))
     }
 
     fn save(&self, aggregate: &A, version: u64) -> impl Future<Output = Result<(), StoreError>> + Send {
-        let mut snapshots = self.snapshots.lock().expect("snapshots poisoned");
+        let mut snapshots = self.snapshots.locked();
         let entry = snapshots.entry(StreamId::of::<A>(aggregate.id()));
         // Concurrent writers may save out of order: keep the newest.
         entry

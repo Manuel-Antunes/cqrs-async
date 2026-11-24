@@ -8,8 +8,9 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, HandlerError,
-    InMemoryEventStore, InlinePublisher, ProcessingContext, ProcessingFailure, ReadLog, StoreError, testing::block_on,
+    Aggregate, CommandContext, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
+    HandlerError, InMemoryEventStore, InlinePublisher, ProcessingContext, ProcessingFailure, ReadLog, StoreError,
+    testing::block_on,
 };
 use tracing::{
     Event, Level, Metadata, Subscriber,
@@ -53,7 +54,7 @@ struct Commands<P> {
 
 #[cqrs::command_handler]
 impl<P> CommandHandler<Tick> for Commands<P> {
-    async fn handle(&self, command: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
+    async fn handle(&self, command: &Tick, events: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
         events.append(Ticked(1));
         events.record(cqrs::New::<Clock>(command.id));
         Ok(())

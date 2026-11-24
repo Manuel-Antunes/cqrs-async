@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    AggregateLoader, AppendEvents, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope,
+    AggregateLoader, AppendEvents, CommandContext, CommandGateway, CommandHandler, EventAppender, EventEnvelope,
     EventHandler, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext, ProcessorHandle,
     ReadLog, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
@@ -80,7 +80,7 @@ pub struct Bank<R, P> {
 /// statement once the handler returns (`Autocommit`).
 #[cqrs::command_handler]
 impl<R: Accounts, P> CommandHandler<Execute> for Bank<R, P> {
-    async fn handle(&self, command: &Execute, events: &mut Appender<AccountEvent>) -> Result<(), BankError> {
+    async fn handle(&self, command: &Execute, events: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
         // An account starts empty: `Open` is decided on that state.
         let account =
             (self.accounts.find(&command.account).await?).unwrap_or_else(|| New(command.account.clone()).into());

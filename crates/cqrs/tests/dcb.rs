@@ -10,8 +10,9 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, AppendEvents, Appender, CommandGateway, CommandHandler, EventAppender, ExpectedVersion,
-    InMemoryEventStore, InlinePublisher, Metadata, SourceEvents, StoreError, StreamId, TagResolver, testing::block_on,
+    Aggregate, AggregateLoader, AppendEvents, CommandContext, CommandGateway, CommandHandler, EventAppender,
+    ExpectedVersion, InMemoryEventStore, InlinePublisher, Metadata, SourceEvents, StoreError, StreamId, TagResolver,
+    testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -140,7 +141,12 @@ struct Gateway {
 /// it takes the unit's transaction (in memory, `()`).
 #[cqrs::command_handler]
 impl CommandHandler<Subscribe> for Gateway {
-    async fn handle(&self, command: &Subscribe, events: &mut Appender<SchoolEvent>, _: &mut ()) -> Result<(), Error> {
+    async fn handle(
+        &self,
+        command: &Subscribe,
+        events: &mut CommandContext<SchoolEvent>,
+        _: &mut (),
+    ) -> Result<(), Error> {
         let first_run = self.runs.fetch_add(1, Ordering::Relaxed) == 0;
         for &course in &command.courses {
             let course = self
@@ -177,7 +183,7 @@ impl Wired {
 
 /// What a gateway does with a run's records, by hand: appends them as one
 /// unit (in memory, its transaction is `()`).
-fn commit(events: &mut Appender<SchoolEvent>, publisher: &Publisher) -> Result<(), StoreError> {
+fn commit(events: &mut CommandContext<SchoolEvent>, publisher: &Publisher) -> Result<(), StoreError> {
     let writes = events.take_writes();
     block_on(cqrs::append_writes::<_, cqrs::InTransaction<()>, _>(
         publisher,
@@ -320,7 +326,7 @@ fn a_read_only_aggregate_is_checked_too() {
     // course did not change, the student did, and the student was loaded.
     let (store, gateway) = gateway(None);
     let course = block_on(gateway.inner().courses.load(&2)).unwrap().unwrap();
-    let mut events = Appender::with_metadata(Metadata::new());
+    let mut events = CommandContext::with_metadata(Metadata::new());
     let student = block_on(gateway.inner().students.load_in(&1, &mut events)).unwrap();
     assert!(student.is_none(), "no subscription yet: absence is checked too");
     subscribe_directly(&store, 3, 1);
@@ -345,7 +351,7 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
     // do not refuse the second write.
     let (_, other) = gateway(None);
     let courses = &other.inner().courses;
-    let mut events = Appender::with_metadata(Metadata::new());
+    let mut events = CommandContext::with_metadata(Metadata::new());
     let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
     events.append(SchoolEvent::Subscribed { course: 2, student: 5 });
     let course = events.record(course);
@@ -360,7 +366,7 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
 fn a_new_aggregate_root_is_created_in_its_own_stream() {
     let (store, gateway) = gateway(None);
     let course = cqrs::New::<Course>(9);
-    let mut events = Appender::with_metadata(Metadata::new());
+    let mut events = CommandContext::with_metadata(Metadata::new());
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
     events.record(course);
     commit(&mut events, gateway.publisher()).unwrap();

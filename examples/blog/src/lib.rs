@@ -74,7 +74,7 @@
 //!
 //! ```compile_fail,E0277
 //! use blog::{application::{BlogError, commands::{CreatePost, PublishPost}}, domain::{PostEvent, PostId}};
-//! use cqrs::{Appender, CommandHandler};
+//! use cqrs::{CommandContext, CommandHandler};
 //!
 //! #[cqrs::command_gateway(handles(CreatePost, PublishPost))]
 //! struct OnlyCreates<P> {
@@ -84,7 +84,7 @@
 //!
 //! #[cqrs::command_handler]
 //! impl<P> CommandHandler<CreatePost> for OnlyCreates<P> {
-//!     async fn handle(&self, _: &CreatePost, _: &mut Appender<PostEvent>) -> Result<PostId, BlogError> { Ok(PostId(1)) }
+//!     async fn handle(&self, _: &CreatePost, _: &mut CommandContext<PostEvent>) -> Result<PostId, BlogError> { Ok(PostId(1)) }
 //! }
 //! ```
 //!

@@ -35,6 +35,8 @@
 //! (`#[command_gateway(commands = PostCommands, ..)]`), not with the unit's
 //! type.
 
+#[cfg(feature = "tokio")]
+use crate::sync::Locked;
 use std::sync::Arc;
 
 use crate::Intercepted;
@@ -150,12 +152,12 @@ impl<C, Q, E> Cqrs<C, Q, E> {
     /// event. Later calls do nothing.
     #[cfg(feature = "tokio")]
     pub async fn stop(&self) {
-        let emitters = std::mem::take(&mut *self.processing.emitters.lock().expect("emitters poisoned"));
+        let emitters = std::mem::take(&mut *self.processing.emitters.locked());
         for (stop, task) in emitters {
             let _ = stop.send(true);
             let _ = task.await;
         }
-        let handles = std::mem::take(&mut *self.processing.handles.lock().expect("processors poisoned"));
+        let handles = std::mem::take(&mut *self.processing.handles.locked());
         for handle in handles {
             handle.stop().await;
         }
@@ -467,11 +469,7 @@ where
         }
         processing.projections.extend(running.read_models());
         processing.all.extend(running.progress());
-        processing
-            .handles
-            .get_mut()
-            .expect("processors poisoned")
-            .extend(running.into_handles());
+        processing.handles.locked_mut().extend(running.into_handles());
         CqrsBuilder {
             publisher,
             commands,
@@ -525,7 +523,7 @@ impl Processing {
             crate::emit_updates(head, feed, progress, emitter, shutdown).await;
         });
         self.emitters_started.push(started_rx);
-        self.emitters.get_mut().expect("emitters poisoned").push((stop, task));
+        self.emitters.locked_mut().push((stop, task));
     }
 }
 

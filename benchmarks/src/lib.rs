@@ -63,7 +63,7 @@ pub mod ping {
     /// unit of work, recording nothing.
     #[cqrs::command_handler]
     impl<P> cqrs::CommandHandler<Ping> for PingCommands<P> {
-        async fn handle(&self, ping: &Ping, _: &mut cqrs::Appender<Pinged>) -> Result<u64, cqrs::StoreError> {
+        async fn handle(&self, ping: &Ping, _: &mut cqrs::CommandContext<Pinged>) -> Result<u64, cqrs::StoreError> {
             Ok(ping.0 + 1)
         }
     }

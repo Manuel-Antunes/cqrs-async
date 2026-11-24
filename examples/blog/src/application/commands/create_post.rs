@@ -1,4 +1,4 @@
-use cqrs::{Appender, CommandHandler, New};
+use cqrs::{CommandContext, CommandHandler, New};
 
 use crate::{
     application::{
@@ -23,12 +23,12 @@ impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, 
     async fn handle(
         &self,
         command: &CreatePost,
-        events: &mut Appender<PostEvent>,
+        ctx: &mut CommandContext<PostEvent>,
         tx: &mut R::Tx,
     ) -> Result<PostId, BlogError> {
         let id = self.posts.next_id(tx).await?;
-        Post::create(id, command.title.as_str(), events)?;
-        let post = events.record(New::<Post>(id));
+        Post::create(id, command.title.as_str(), ctx)?;
+        let post = ctx.record(New::<Post>(id));
         self.posts.save(&post, tx).await?;
         Ok(id)
     }

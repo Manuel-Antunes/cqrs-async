@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventPublisher,
+    Aggregate, AggregateLoader, CommandContext, CommandGateway, CommandHandler, EventAppender, EventPublisher,
     InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, StoreError, testing::block_on,
 };
 
@@ -192,7 +192,12 @@ impl CommandHandler<Open> for Gateway {
     type Event = CounterEvent;
     type Unit = cqrs::Autocommit;
 
-    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u32, Error> {
+    async fn handle(
+        &self,
+        Open(id): &Open,
+        events: &mut CommandContext<CounterEvent>,
+        (): &mut (),
+    ) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
         events.record(cqrs::New::<Counter>(*id));
         Ok(*id)
@@ -207,7 +212,7 @@ impl CommandHandler<Add> for Gateway {
         self.retries
     }
 
-    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
+    async fn handle(&self, command: &Add, events: &mut CommandContext<CounterEvent>) -> Result<u64, Error> {
         let counter = self.counters.load(&command.id).await?.ok_or(NotFound(command.id))?;
         if self.runs.fetch_add(1, Ordering::Relaxed) == 0 && self.racing {
             let other = self.counters.load(&command.id).await?.unwrap();
@@ -316,7 +321,12 @@ impl CommandHandler<Add> for Twice {
     type Event = CounterEvent;
     type Unit = cqrs::InTransaction<()>;
 
-    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
+    async fn handle(
+        &self,
+        command: &Add,
+        events: &mut CommandContext<CounterEvent>,
+        (): &mut (),
+    ) -> Result<u64, Error> {
         let stale = self.0.load(&command.id).await?.unwrap();
         let fresh = self.0.load(&command.id).await?.unwrap();
         events.append(CounterEvent::Added(1));
@@ -353,7 +363,12 @@ fn several_entities_without_a_transaction_are_refused() {
     impl CommandHandler<Add> for TwiceWithoutTransaction {
         type Event = CounterEvent;
         type Unit = cqrs::Autocommit;
-        async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
+        async fn handle(
+            &self,
+            command: &Add,
+            events: &mut CommandContext<CounterEvent>,
+            (): &mut (),
+        ) -> Result<u64, Error> {
             Twice(Arc::clone(&self.0)).handle(command, events, &mut ()).await
         }
     }

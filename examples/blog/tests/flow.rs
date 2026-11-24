@@ -174,14 +174,14 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
-    use cqrs::{Appender, CommandHandler, InMemoryEventStore, Metadata, dispatch_command};
+    use cqrs::{CommandContext, CommandHandler, InMemoryEventStore, Metadata, dispatch_command};
 
     block_on(async {
         // A handler is a method of the gateway: called with an appender, it
         // decides and records, and nothing is written.
         let store = InMemoryEventStore::new();
         let gateway = PostCommandGateway::new(EventSourcedPostRepository::new(store.clone()), ());
-        let mut events = Appender::new();
+        let mut events = CommandContext::new();
         let id = gateway
             .handle(&CreatePost { title: "direct".into() }, &mut events, &mut ())
             .await

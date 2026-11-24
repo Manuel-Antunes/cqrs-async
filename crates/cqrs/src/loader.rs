@@ -11,8 +11,8 @@
 use std::{fmt, marker::PhantomData, ops::Deref};
 
 use crate::{
-    Aggregate, AppendCondition, Appender, EventCriteria, EventEnvelope, ExpectedVersion, LoadStream, SnapshotStore,
-    SourceEvents, StoreError, StreamId,
+    Aggregate, AppendCondition, CommandContext, EventCriteria, EventEnvelope, ExpectedVersion, LoadStream,
+    SnapshotStore, SourceEvents, StoreError, StreamId,
 };
 
 /// An aggregate together with the version it was loaded at.
@@ -119,7 +119,7 @@ impl<A: Aggregate> Loaded<A> {
 /// for `New`, which expects the stream not to exist:
 ///
 /// ```
-/// # use cqrs::{Appender, Autocommit, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, append_writes, testing::block_on};
+/// # use cqrs::{CommandContext, Autocommit, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, append_writes, testing::block_on};
 /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 /// # enum DoorEvent { Installed { id: u32 } }
 /// # #[cqrs::aggregate(event = DoorEvent)]
@@ -135,7 +135,7 @@ impl<A: Aggregate> Loaded<A> {
 /// # block_on(async {
 /// let publisher = InlinePublisher::new(InMemoryEventStore::new());
 /// // What a command's unit of work does, by hand: record, then append.
-/// let mut events = Appender::new();
+/// let mut events = CommandContext::new();
 /// Door::install(1, &mut events);
 /// events.record(New::<Door>(1));
 /// append_writes::<_, Autocommit, _>(&publisher, &mut (), events.take_writes()).await?;
@@ -282,7 +282,11 @@ where
     /// # Errors
     ///
     /// The store's.
-    pub async fn load_in(&self, id: &A::Id, events: &mut Appender<A::Event>) -> Result<Option<Loaded<A>>, StoreError> {
+    pub async fn load_in(
+        &self,
+        id: &A::Id,
+        events: &mut CommandContext<A::Event>,
+    ) -> Result<Option<Loaded<A>>, StoreError> {
         let Some(criteria) = A::criteria(id) else {
             return self.load_stream(id).await;
         };
@@ -293,7 +297,7 @@ where
 
     /// Reads every event matching `criteria`, from any stream of the store,
     /// and makes the following commits of `events` conditional on them (see
-    /// [`Appender::source`]).
+    /// [`CommandContext::source`]).
     ///
     /// # Errors
     ///
@@ -301,7 +305,7 @@ where
     pub async fn source(
         &self,
         criteria: EventCriteria,
-        events: &mut Appender<A::Event>,
+        events: &mut CommandContext<A::Event>,
     ) -> Result<Vec<EventEnvelope<A::Event>>, StoreError> {
         events.source(&self.store, criteria).await
     }

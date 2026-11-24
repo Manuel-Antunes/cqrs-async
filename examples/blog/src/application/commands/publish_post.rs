@@ -1,4 +1,4 @@
-use cqrs::{Appender, CommandHandler, NotFound};
+use cqrs::{CommandContext, CommandHandler, NotFound};
 
 use crate::{
     application::{
@@ -23,12 +23,12 @@ impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R,
     async fn handle(
         &self,
         command: &PublishPost,
-        events: &mut Appender<PostEvent>,
+        ctx: &mut CommandContext<PostEvent>,
         tx: &mut R::Tx,
     ) -> Result<(), BlogError> {
         let post = self.posts.find(command.id, tx).await?.ok_or(NotFound(command.id))?;
-        post.publish(events)?;
-        let post = events.record(post);
+        post.publish(ctx)?;
+        let post = ctx.record(post);
         self.posts.save(&post, tx).await?;
         Ok(())
     }

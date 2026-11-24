@@ -3,8 +3,8 @@
 use std::sync::Mutex;
 
 use cqrs::{
-    Appender, Command, CommandGateway, CommandHandler, InMemoryEventStore, InlinePublisher, Intercepted, Interceptor,
-    Message, Metadata, QueryGateway, QueryHandler, StoreError, testing::block_on,
+    Command, CommandContext, CommandGateway, CommandHandler, InMemoryEventStore, InlinePublisher, Intercepted,
+    Interceptor, Message, Metadata, QueryGateway, QueryHandler, StoreError, testing::block_on,
 };
 
 #[derive(Debug, PartialEq)]
@@ -47,7 +47,7 @@ impl Commands {
 /// Answers with the `user` it was sent by.
 #[cqrs::command_handler]
 impl CommandHandler<Rename> for Commands {
-    async fn handle(&self, Rename(name): &Rename, events: &mut Appender<Renamed>) -> Result<String, Error> {
+    async fn handle(&self, Rename(name): &Rename, events: &mut CommandContext<Renamed>) -> Result<String, Error> {
         Ok(format!(
             "{name} by {}",
             events.metadata().get("user").map_or("nobody", String::as_str)

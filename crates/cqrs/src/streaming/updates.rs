@@ -21,6 +21,7 @@
 //! `#[derive(QueryUpdates)]` and an [`EmitUpdates`] run by [`emit_updates`]
 //! do the same.
 
+use crate::sync::Locked;
 use std::{
     marker::PhantomData,
     pin::pin,
@@ -70,7 +71,7 @@ impl<Q, U: Clone> QueryUpdateChannel<Q, U> {
     /// returns how many got it. Subscriptions that were dropped are
     /// forgotten, and so are those too far behind (their stream ends).
     pub fn emit(&self, filter: impl Fn(&Q) -> bool, update: U) -> usize {
-        let mut subscribers = self.subscribers.lock().expect("emitter poisoned");
+        let mut subscribers = self.subscribers.locked();
         let mut sent = 0;
         subscribers.retain(|(query, sender)| {
             if sender.is_closed() {
@@ -97,7 +98,7 @@ impl<Q, U: Clone> QueryUpdateChannel<Q, U> {
         U: Send + 'static,
     {
         let (sender, receiver) = mpsc::channel(BUFFER);
-        self.subscribers.lock().expect("emitter poisoned").push((query, sender));
+        self.subscribers.locked().push((query, sender));
         stream::unfold(receiver, |mut receiver| async move {
             receiver.recv().await.map(|update| (update, receiver))
         })
@@ -106,7 +107,7 @@ impl<Q, U: Clone> QueryUpdateChannel<Q, U> {
     /// How many subscriptions are live (dropped ones are counted until the
     /// next emit forgets them).
     pub fn subscriptions(&self) -> usize {
-        self.subscribers.lock().expect("emitter poisoned").len()
+        self.subscribers.locked().len()
     }
 }
 

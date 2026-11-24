@@ -144,14 +144,14 @@ pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
 }
 
 /// On `impl CommandHandler<C> for H`: adds `type Event` and `type Unit`,
-/// read from `handle(&self, command: &C, events: &mut Appender<Event>[, tx:
+/// read from `handle(&self, command: &C, events: &mut CommandContext<Event>[, tx:
 /// &mut Tx])`, and `C` if the trait leaves it out. Types written by hand are
 /// kept. It also marks `H` as handling `C`, for the gateway that lists it.
 ///
 /// ```ignore
 /// #[command_handler]
 /// impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P> {
-///     async fn handle(&self, command: &PublishPost, events: &mut Appender<PostEvent>, tx: &mut R::Tx)
+///     async fn handle(&self, command: &PublishPost, events: &mut CommandContext<PostEvent>, tx: &mut R::Tx)
 ///         -> Result<(), BlogError> { ... }
 /// }
 /// ```

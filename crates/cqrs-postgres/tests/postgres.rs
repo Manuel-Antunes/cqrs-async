@@ -1750,7 +1750,7 @@ impl cqrs::CommandHandler for TickKeptHandler {
     async fn handle(
         &self,
         command: &TickKept,
-        events: &mut cqrs::Appender<ClockEvent>,
+        events: &mut cqrs::CommandContext<ClockEvent>,
         tx: &mut PgTransaction,
     ) -> Result<(), StoreError> {
         let clock = match command.stale {

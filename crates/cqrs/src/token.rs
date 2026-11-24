@@ -5,6 +5,7 @@
 //! [`Cursor`]: how far the segment got, and the positions it skipped because
 //! they were still being written.
 
+use crate::sync::Locked;
 use std::{
     collections::HashMap,
     future::Future,
@@ -132,7 +133,7 @@ impl InMemoryTokenStore {
 
     /// The stored cursor of each segment of `processor`.
     fn stored(&self, processor: &str) -> Vec<Cursor> {
-        let processors = self.processors.lock().expect("token store poisoned");
+        let processors = self.processors.locked();
         processors
             .get(processor)
             .map(|tokens| tokens.iter().map(|token| token.cursor.clone()).collect())
@@ -141,7 +142,7 @@ impl InMemoryTokenStore {
 
     /// Runs `f` on `processor`'s segment, if it exists.
     fn with<T>(&self, processor: &str, segment: u32, f: impl FnOnce(&mut Token) -> T) -> Result<T, StoreError> {
-        let mut processors = self.processors.lock().expect("token store poisoned");
+        let mut processors = self.processors.locked();
         processors
             .get_mut(processor)
             .and_then(|tokens| tokens.get_mut(segment as usize))
@@ -156,7 +157,7 @@ impl TokenStore for InMemoryTokenStore {
     type Tx = ();
 
     async fn initialize(&self, processor: &str, segments: u32) -> Result<u32, StoreError> {
-        let mut processors = self.processors.lock().expect("token store poisoned");
+        let mut processors = self.processors.locked();
         let tokens = processors
             .entry(processor.to_owned())
             .or_insert_with(|| vec![Token::default(); segments.max(1) as usize]);
@@ -206,7 +207,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn reset(&self, processor: &str, now: u64, replay_until: u64) -> Result<bool, StoreError> {
-        let mut processors = self.processors.lock().expect("token store poisoned");
+        let mut processors = self.processors.locked();
         let Some(tokens) = processors.get_mut(processor) else {
             return Ok(true);
         };
@@ -225,7 +226,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn replay_until(&self, processor: &str) -> Result<u64, StoreError> {
-        let processors = self.processors.lock().expect("token store poisoned");
+        let processors = self.processors.locked();
         let tokens = processors.get(processor).map(Vec::as_slice).unwrap_or_default();
         Ok(tokens.iter().map(|token| token.replay_until).max().unwrap_or(0))
     }

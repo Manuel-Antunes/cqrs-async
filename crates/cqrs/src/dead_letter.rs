@@ -3,6 +3,7 @@
 //! sequence (its aggregate), so they are never handled out of order, while
 //! the other sequences keep flowing.
 
+use crate::sync::Locked;
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -138,7 +139,7 @@ impl<E> Clone for InMemoryDeadLetters<E> {
 impl<E> InMemoryDeadLetters<E> {
     /// Every parked event of `processor`, by sequence then age.
     pub fn letters(&self, processor: &str) -> Vec<DeadLetter<E>> {
-        let letters = self.letters.lock().expect("dead letters poisoned");
+        let letters = self.letters.locked();
         letters
             .iter()
             .filter(|((owner, _), _)| owner == processor)
@@ -149,7 +150,7 @@ impl<E> InMemoryDeadLetters<E> {
     /// Parks `letter` at the end of its sequence, unless that event is
     /// parked already.
     pub fn enqueue(&self, processor: &str, letter: DeadLetter<E>) {
-        let mut letters = self.letters.lock().expect("dead letters poisoned");
+        let mut letters = self.letters.locked();
         let queue = letters
             .entry((processor.to_owned(), letter.sequence.clone()))
             .or_default();
@@ -167,12 +168,12 @@ impl<E> InMemoryDeadLetters<E> {
 /// are immediate, and lost with the tokens when the process ends.
 impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
-        let letters = self.letters.lock().expect("dead letters poisoned");
+        let letters = self.letters.locked();
         Ok(letters.contains_key(&(processor.to_owned(), sequence.to_owned())))
     }
 
     async fn sequences(&self, processor: &str) -> Result<Vec<String>, StoreError> {
-        let letters = self.letters.lock().expect("dead letters poisoned");
+        let letters = self.letters.locked();
         Ok(letters
             .keys()
             .filter(|(owner, _)| owner == processor)
@@ -181,7 +182,7 @@ impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     }
 
     async fn first(&self, processor: &str, sequence: &str) -> Result<Option<DeadLetter<E>>, StoreError> {
-        let letters = self.letters.lock().expect("dead letters poisoned");
+        let letters = self.letters.locked();
         Ok(letters
             .get(&(processor.to_owned(), sequence.to_owned()))
             .and_then(|queue| queue.first().cloned()))
@@ -193,7 +194,7 @@ impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
     }
 
     async fn remove_in(&self, (): &mut (), processor: &str, letter: &DeadLetter<E>) -> Result<bool, StoreError> {
-        let mut letters = self.letters.lock().expect("dead letters poisoned");
+        let mut letters = self.letters.locked();
         let key = (processor.to_owned(), letter.sequence.clone());
         let Some(queue) = letters.get_mut(&key) else {
             return Ok(false);

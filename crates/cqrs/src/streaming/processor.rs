@@ -1,3 +1,4 @@
+use crate::sync::Locked;
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
@@ -431,8 +432,7 @@ where
                         // Routed through the shared reader (with several
                         // segments: with one, it would only add a hop) unless it
                         // already read something this segment did not see.
-                        let routed = count > 1
-                            && (reader.is_none() || cursor.includes(&read_up_to.lock().expect("reader poisoned")));
+                        let routed = count > 1 && (reader.is_none() || cursor.includes(&read_up_to.locked()));
                         let inbox = routed.then(|| {
                             let (sender, inbox) = mpsc::channel(self.options.segment_buffer.max(1));
                             let route = Route {
@@ -441,7 +441,7 @@ where
                                 sent: 0,
                                 done: Arc::clone(&done),
                             };
-                            routes.lock().expect("routes poisoned").insert(segment, route);
+                            routes.locked().insert(segment, route);
                             inbox
                         });
                         let worker = Arc::clone(&self).work(
@@ -458,7 +458,7 @@ where
                     }
                     Ok(None) if mine => {
                         // Expired and taken over: stop handling it.
-                        routes.lock().expect("routes poisoned").remove(&segment);
+                        routes.locked().remove(&segment);
                         if let Some((_, stop_worker)) = owned.remove(&segment) {
                             let _ = stop_worker.send(true);
                         }
@@ -471,15 +471,9 @@ where
 
             // Start the shared reader once there is something to route, from
             // what every routed segment saw.
-            let start = Cursor::common(
-                routes
-                    .lock()
-                    .expect("routes poisoned")
-                    .values()
-                    .map(|route| &route.from),
-            );
+            let start = Cursor::common(routes.locked().values().map(|route| &route.from));
             if let (None, Some(start)) = (&reader, start) {
-                start.clone_into(&mut read_up_to.lock().expect("reader poisoned"));
+                start.clone_into(&mut read_up_to.locked());
                 let (stop_reader, reader_stop) = watch::channel(false);
                 let read = Arc::clone(&self).read(
                     owner.clone(),
@@ -737,11 +731,7 @@ where
                     None => break 'subscribe,
                 };
                 let segment = segment_of(&event.stream, count);
-                let sender = routes
-                    .lock()
-                    .expect("routes poisoned")
-                    .get(&segment)
-                    .map(|route| route.sender.clone());
+                let sender = routes.locked().get(&segment).map(|route| route.sender.clone());
                 if let Some(sender) = sender {
                     // Fast path: room in the queue, no timer. A full queue is
                     // backpressure; only a stall means stuck.
@@ -755,7 +745,7 @@ where
                         }
                         Err(mpsc::error::TrySendError::Closed(_)) => Err(()),
                     };
-                    let mut routes = routes.lock().expect("routes poisoned");
+                    let mut routes = routes.locked();
                     match (sent, routes.get_mut(&segment)) {
                         (Ok(()), Some(route)) => route.sent += 1,
                         // Stuck, or gone meanwhile: let it read alone.
@@ -767,7 +757,7 @@ where
                     }
                 }
                 cursor = seen;
-                cursor.clone_into(&mut read_up_to.lock().expect("reader poisoned"));
+                cursor.clone_into(&mut read_up_to.locked());
                 unflushed += 1;
                 if unflushed >= 256 {
                     unflushed = 0;
@@ -776,15 +766,14 @@ where
             }
         }
         // Without a reader, every routed worker carries on alone.
-        routes.lock().expect("routes poisoned").clear();
+        routes.locked().clear();
     }
 
     /// Moves the segments with nothing pending to `cursor`: every event of
     /// theirs it saw was handled.
     async fn flush(&self, owner: &str, routes: &Routes<E>, cursor: &Cursor, progress: &Progress) {
         let idle: Vec<u32> = routes
-            .lock()
-            .expect("routes poisoned")
+            .locked()
             .iter()
             .filter(|(_, route)| route.done.load(Ordering::Acquire) >= route.sent)
             .map(|(segment, _)| *segment)
@@ -794,7 +783,7 @@ where
                 continue;
             };
             if !self.store_position(segment, owner, &seen).await {
-                routes.lock().expect("routes poisoned").remove(&segment);
+                routes.locked().remove(&segment);
             }
         }
     }
@@ -1123,7 +1112,7 @@ struct Progress {
 impl Progress {
     /// Republishes the whole status: on segment ownership changes only.
     fn rebuild(&self, change: impl FnOnce(&mut BTreeMap<u32, (Cursor, Option<String>)>)) {
-        let mut segments = self.segments.lock().expect("progress poisoned");
+        let mut segments = self.segments.locked();
         change(&mut segments);
         self.status.send_modify(|status| {
             status.position = lowest(&segments);
@@ -1163,7 +1152,7 @@ impl Progress {
     /// Adds what `seen` saw to the segment's cursor and returns it (`None`
     /// if the segment is not owned). Watchers are woken only if it moved.
     fn advance(&self, segment: u32, seen: &Cursor) -> Option<Cursor> {
-        let mut segments = self.segments.lock().expect("progress poisoned");
+        let mut segments = self.segments.locked();
         let index = segments.keys().position(|owned| *owned == segment)?;
         let state = segments.get_mut(&segment)?;
         if state.0.includes(seen) {
@@ -1185,7 +1174,7 @@ impl Progress {
     }
 
     fn fail(&self, segment: u32, failing: Option<String>) {
-        let mut segments = self.segments.lock().expect("progress poisoned");
+        let mut segments = self.segments.locked();
         let Some(state) = segments.get_mut(&segment) else {
             return;
         };

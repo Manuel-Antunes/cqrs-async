@@ -13,7 +13,7 @@
 //!   application side.
 //! - [`EventStore`] / [`AggregateLoader`] / [`InlinePublisher`]: persistence with optimistic
 //!   concurrency; events reach the [`EventProcessor`] only after commit.
-//!   Handlers record what they decided in their [`Appender`]
+//!   Handlers record what they decided in their [`CommandContext`]
 //!   (`events.record(entity)`), and their gateway's [`UnitOfWork`] appends
 //!   it and commits, in the handler's transaction if it takes one;
 //!   repositories are the application's own ports, whose adapters load with
@@ -62,6 +62,7 @@ mod snapshot;
 mod store;
 #[cfg(feature = "tokio")]
 mod streaming;
+mod sync;
 pub mod testing;
 mod token;
 mod transaction;
@@ -76,7 +77,7 @@ pub use codec::Json;
 pub use codec::Protobuf;
 pub use codec::{Codec, CodecError};
 pub use command_handler::{
-    Appender, Autocommit, CommandHandler, EventPublisher, InTransaction, Pending, UnitMode, UnitOfWork, Write,
+    Autocommit, CommandContext, CommandHandler, EventPublisher, InTransaction, Pending, UnitMode, UnitOfWork, Write,
     append_writes, dispatch_command,
 };
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
@@ -128,7 +129,7 @@ pub use cqrs_derive::{
 /// Everything a domain or application module usually needs.
 pub mod prelude {
     pub use crate::{
-        Aggregate, Appender, Command, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
+        Aggregate, Command, CommandContext, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
         EventFeed, EventHandler, EventPublisher, HandlerError, Message, Query, QueryGateway, QueryHandler,
         QuerySubscriptions, TagResolver,
     };
