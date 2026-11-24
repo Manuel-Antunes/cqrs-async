@@ -17,7 +17,7 @@ use std::{
 use cqrs::{
     Aggregate, AggregateLoader, AppendEvents, EventEnvelope, EventHandler, EventPublisher, ExpectedVersion,
     HandlerError, InMemoryEventStore, InMemoryTokenStore, InlinePublisher, LiveEvents, LoadStream, Metadata, Pending,
-    ProcessingContext, StreamId, SubscriptionOptions, TrackingProcessor, subscribe,
+    ProcessingContext, StreamId, SubscriptionOptions, TokenStore, TrackingProcessor, subscribe,
 };
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
@@ -295,4 +295,41 @@ async fn a_failing_processor_reports_it_and_does_not_block_others() {
 
     stuck_processor.stop().await; // stops even while retrying
     healthy_processor.stop().await;
+}
+
+/// `run` is a future the application runs where it wants (here a
+/// `JoinSet`), observed through `progress`, ended by its shutdown signal:
+/// the segments are released for the next instance.
+#[tokio::test(start_paused = true)]
+async fn a_processor_runs_as_a_future_until_its_shutdown() {
+    let world = World::new(16);
+    let tokens = InMemoryTokenStore::default();
+    let recorder = Arc::new(Recorder::default());
+    let processor = TrackingProcessor::new(
+        "recorder",
+        world.store.clone(),
+        &world.live,
+        Arc::clone(&recorder),
+        tokens.clone(),
+        (),
+    );
+    let mut progress = processor.progress();
+    let (shutdown, signal) = tokio::sync::oneshot::channel::<()>();
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(processor.run(async move {
+        let _ = signal.await;
+    }));
+
+    world.tick(2).await;
+    progress.wait_for(|status| status.covers(2)).await.unwrap();
+    shutdown.send(()).unwrap();
+    tasks.join_next().await.unwrap().unwrap();
+
+    assert_eq!(recorder.handled(), [1, 2]);
+    assert_eq!(tokens.positions("recorder"), [2]);
+    // Released: another instance claims the segment at once.
+    assert!(
+        tokens.claim("recorder", 0, "next", 0, 1).await.unwrap().is_some(),
+        "the segment was released"
+    );
 }

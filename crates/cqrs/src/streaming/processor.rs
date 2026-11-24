@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     pin::pin,
     sync::{
         Arc, Mutex, OnceLock,
@@ -139,6 +140,8 @@ pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     options: TrackingOptions,
     /// Events up to here are a replay (read from the tokens at start).
     replay_until: AtomicU64,
+    /// Where the running instance publishes its progress.
+    status: watch::Sender<ProcessorStatus>,
 }
 
 /// What a running processor instance reports.
@@ -193,6 +196,7 @@ where
             dead_letters: Arc::new(()),
             options: TrackingOptions::default(),
             replay_until: AtomicU64::new(0),
+            status: watch::channel(ProcessorStatus::default()).0,
         }
     }
 }
@@ -234,6 +238,7 @@ where
                 ..self.options
             },
             replay_until: self.replay_until,
+            status: self.status,
         }
     }
 
@@ -275,24 +280,61 @@ where
         crate::retry_dead_letters(&*self.dead_letters, &self.name, &*self.transactions, &*self.handler).await
     }
 
-    /// Starts the processor (its coordinator, then one worker per claimed
-    /// segment) on Tokio tasks.
+    /// Follows the progress of this processor once it runs, e.g. to wait
+    /// until it handled a position (`wait_for(|status| status.covers(p))`).
+    pub fn progress(&self) -> watch::Receiver<ProcessorStatus> {
+        self.status.subscribe()
+    }
+
+    /// Runs the processor until `shutdown` completes: claims segments,
+    /// handles their events, then, once `shutdown` completed, finishes the
+    /// events in hand and releases its segments for other instances.
+    ///
+    /// The future is the caller's to run: awaited, in a `JoinSet` with the
+    /// rest of the application, or spawned ([`spawn`](Self::spawn) does
+    /// that, with a handle to stop it). The segments' workers run on Tokio
+    /// tasks of the current runtime.
+    ///
+    /// ```text
+    /// let progress = processor.progress();
+    /// tasks.spawn(processor.run(shutdown.cancelled_owned()));
+    /// ```
+    pub async fn run(self, shutdown: impl Future<Output = ()> + Send) {
+        let (stop, stop_rx) = watch::channel(false);
+        let owner = owner_id(&self.name);
+        let progress = Arc::new(Progress {
+            segments: Mutex::new(BTreeMap::new()),
+            status: self.status.clone(),
+        });
+        let running = Arc::new(self).coordinate(owner, progress, stop_rx);
+        let mut running = pin!(running);
+        tokio::select! {
+            () = &mut running => {}
+            () = shutdown => {
+                let _ = stop.send(true);
+                running.await;
+            }
+        }
+    }
+
+    /// Starts the processor on a Tokio task ([`run`](Self::run), stopped by
+    /// the handle).
     ///
     /// # Panics
     ///
     /// Outside a Tokio runtime.
     pub fn spawn(self) -> ProcessorHandle {
-        let (status, status_rx) = watch::channel(ProcessorStatus::default());
-        let (stop, stop_rx) = watch::channel(false);
+        let (stop, mut stop_rx) = watch::channel(false);
         let name = self.name.clone();
-        let progress = Arc::new(Progress {
-            segments: Mutex::new(BTreeMap::new()),
-            status,
-        });
-        let task = tokio::spawn(Arc::new(self).coordinate(owner_id(&name), progress, stop_rx));
+        let status = self.progress();
+        // A stop, or the handle dropped.
+        let shutdown = async move {
+            let _ = stop_rx.changed().await;
+        };
+        let task = tokio::spawn(self.run(shutdown));
         ProcessorHandle {
             name,
-            status: status_rx,
+            status,
             stop,
             task,
         }
