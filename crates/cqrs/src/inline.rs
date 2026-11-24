@@ -276,6 +276,74 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
     }
 }
 
+/// Commands run in memory: the store appends on its own (an
+/// [`Autocommit`](crate::Autocommit) handler), then the processing group sees
+/// the commit.
+impl<E, S, P, F> crate::UnitOfWork<E, crate::Autocommit> for InlinePublisher<E, S, P, F>
+where
+    E: DomainEvent,
+    S: AppendEvents<E>,
+    P: EventProcessor<E>,
+    F: OnFailure,
+{
+    fn begin(&self) -> impl Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn append(
+        &self,
+        tx: &mut (),
+        write: crate::Write<E>,
+    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
+        append_write(&self.store, tx, write)
+    }
+
+    fn commit(&self, (): ()) -> impl Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    async fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        if let Err(failure) = self.processor.process(&events).await {
+            self.on_failure.failed(&failure);
+        }
+    }
+}
+
+/// Commands whose handler takes the (empty) transaction of memory: several
+/// entities per command, appended one after the other (memory cannot roll
+/// back), then the processing group sees them.
+impl<E, S, P, F> crate::UnitOfWork<E, crate::InTransaction<()>> for InlinePublisher<E, S, P, F>
+where
+    E: DomainEvent,
+    S: AppendEvents<E>,
+    P: EventProcessor<E>,
+    F: OnFailure,
+{
+    const ROLLS_BACK: bool = false;
+
+    fn begin(&self) -> impl Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn append(
+        &self,
+        tx: &mut (),
+        write: crate::Write<E>,
+    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
+        append_write(&self.store, tx, write)
+    }
+
+    fn commit(&self, (): ()) -> impl Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    async fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        if let Err(failure) = self.processor.process(&events).await {
+            self.on_failure.failed(&failure);
+        }
+    }
+}
+
 impl<E, S, P, F> EventPublisher<E> for InlinePublisher<E, S, P, F>
 where
     E: DomainEvent,
@@ -329,32 +397,28 @@ where
     Ok(committed.last().map(|event| event.position))
 }
 
-/// Appends `pending` to `entity`'s stream in `store`, within `tx`, expecting
-/// the version it was loaded at and the conditions of what was read: what
-/// every [`PublishIn`](crate::PublishIn) does.
-#[cfg_attr(not(feature = "tokio"), allow(dead_code))] // only `Events` appends in a transaction
-pub(crate) async fn append_in<E, A, S, Tx>(
+/// Appends `write` to its stream in `store`, within `tx`: what every unit
+/// of work does.
+pub(crate) fn append_write<E, S, Tx>(
     store: &S,
     tx: &mut Tx,
-    entity: &Loaded<A>,
-    pending: Pending<E>,
-) -> Result<Vec<EventEnvelope<E>>, StoreError>
+    write: crate::Write<E>,
+) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send
 where
     E: DomainEvent,
-    A: Aggregate<Event = E>,
     S: AppendEvents<E, Tx>,
     Tx: Send,
 {
-    let (stream, expected) = entity.target();
-    let condition = crate::AppendCondition::both(entity.condition().cloned(), pending.condition);
-    store
-        .append_if(
-            tx,
-            &stream,
-            expected,
-            pending.events,
-            &pending.metadata,
-            condition.as_ref(),
-        )
-        .await
+    let crate::Write {
+        stream,
+        expected,
+        condition,
+        events,
+        metadata,
+    } = write;
+    async move {
+        store
+            .append_if(tx, &stream, expected, events, &metadata, condition.as_ref())
+            .await
+    }
 }

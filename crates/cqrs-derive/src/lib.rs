@@ -585,8 +585,34 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
     let mut impls = Vec::new();
 
+    // The unit of work the commands run in: the field marked
+    // `#[gateway(unit)]`.
+    let mut unit = None;
     for (index, field) in data.fields.iter().enumerate() {
-        if skipped(field)? {
+        if role(field)? == Role::Unit {
+            if unit.is_some() {
+                return Err(Error::new_spanned(field, "a gateway has one `#[gateway(unit)]`"));
+            }
+            let access = field.ident.as_ref().map_or_else(
+                || {
+                    let index = syn::Index::from(index);
+                    quote!(#index)
+                },
+                |ident| quote!(#ident),
+            );
+            unit = Some((access, field.ty.clone()));
+        }
+    }
+    if kind.commands && unit.is_none() {
+        return Err(Error::new_spanned(
+            name,
+            "a command gateway needs the unit of work its commands run in: a field marked `#[gateway(unit)]` \
+             (e.g. the unit's `Events`, or an `InlinePublisher`)",
+        ));
+    }
+
+    for (index, field) in data.fields.iter().enumerate() {
+        if role(field)? != Role::Handler {
             continue;
         }
         let access = field.ident.as_ref().map_or_else(
@@ -620,12 +646,22 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
         }
 
         if kind.commands {
+            let (unit_access, unit_ty) = unit.as_ref().expect("checked above");
             let message = quote!(<#handler as #krate::CommandHandler>::Command);
             let mut generics = input.generics.clone();
             let where_clause = generics.make_where_clause();
             where_clause
                 .predicates
                 .push(syn::parse_quote!(#handler: #krate::CommandHandler));
+            where_clause.predicates.push(syn::parse_quote!(
+                #unit_ty: #krate::UnitOfWork<
+                    <#handler as #krate::CommandHandler>::Event,
+                    <#handler as #krate::CommandHandler>::Unit,
+                >
+            ));
+            where_clause
+                .predicates
+                .push(syn::parse_quote!(#krate::ErrorOf<#message>: ::core::convert::From<#krate::StoreError>));
             where_clause.predicates.push(syn::parse_quote!(
                 #name #ty_generics: ::core::marker::Send + ::core::marker::Sync
             ));
@@ -640,7 +676,7 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
                         #krate::OutputOf<#message>,
                         #krate::ErrorOf<#message>,
                     >> + ::core::marker::Send {
-                        #krate::dispatch_command(&self.#access, message, metadata)
+                        #krate::dispatch_command(&self.#access, message, metadata, &self.#unit_access)
                     }
                 }
             });
@@ -711,21 +747,34 @@ fn gateway(input: DeriveInput) -> Result<TokenStream2> {
     Ok(quote!(#(#impls)*))
 }
 
-/// Whether the field is marked `#[gateway(skip)]` (not a handler, e.g.
-/// configuration kept next to the handlers).
-fn skipped(field: &syn::Field) -> Result<bool> {
-    let mut skip = false;
+/// What a gateway's field is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// A handler (the default).
+    Handler,
+    /// `#[gateway(skip)]`: not a handler, e.g. a shared service.
+    Skipped,
+    /// `#[gateway(unit)]`: the unit of work commands run in.
+    Unit,
+}
+
+/// The role `#[gateway(...)]` gives the field.
+fn role(field: &syn::Field) -> Result<Role> {
+    let mut role = Role::Handler;
     for attr in field.attrs.iter().filter(|attr| attr.path().is_ident("gateway")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip") {
-                skip = true;
+                role = Role::Skipped;
+                Ok(())
+            } else if meta.path.is_ident("unit") {
+                role = Role::Unit;
                 Ok(())
             } else {
-                Err(meta.error("expected `skip`"))
+                Err(meta.error("expected `skip` or `unit`"))
             }
         })?;
     }
-    Ok(skip)
+    Ok(role)
 }
 
 /// Whether `ty` mentions any of the generic parameters (types, lifetimes or

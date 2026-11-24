@@ -117,6 +117,36 @@ impl Engine {
     }
 }
 
+/// The engine runs the commands' units of work too, through its publisher:
+/// in memory, one entity per command without a transaction, several with
+/// the (empty) transaction of memory.
+impl<U: cqrs::UnitMode> cqrs::UnitOfWork<CounterEvent, U> for Engine
+where
+    InlinePublisher<CounterEvent, Store>: cqrs::UnitOfWork<CounterEvent, U>,
+{
+    const ROLLS_BACK: bool = <InlinePublisher<CounterEvent, Store> as cqrs::UnitOfWork<CounterEvent, U>>::ROLLS_BACK;
+
+    fn begin(&self) -> impl std::future::Future<Output = Result<U::Tx, StoreError>> + Send {
+        self.publisher.begin()
+    }
+
+    fn append(
+        &self,
+        tx: &mut U::Tx,
+        write: cqrs::Write<CounterEvent>,
+    ) -> impl std::future::Future<Output = Result<Vec<cqrs::EventEnvelope<CounterEvent>>, StoreError>> + Send {
+        self.publisher.append(tx, write)
+    }
+
+    fn commit(&self, tx: U::Tx) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
+        cqrs::UnitOfWork::<CounterEvent, U>::commit(&self.publisher, tx)
+    }
+
+    fn announce(&self, events: Vec<cqrs::EventEnvelope<CounterEvent>>) -> impl std::future::Future<Output = ()> + Send {
+        cqrs::UnitOfWork::<CounterEvent, U>::announce(&self.publisher, events)
+    }
+}
+
 impl EventPublisher<CounterEvent> for Engine {
     fn commit<A: Aggregate<Event = CounterEvent>>(
         &self,
@@ -129,15 +159,19 @@ impl EventPublisher<CounterEvent> for Engine {
 
 type Counters = Arc<Engine>;
 
-struct OpenHandler(Counters);
+/// Opens counters: needs nothing, as a creation decides on nothing.
+struct OpenHandler;
 
+/// Written by hand, without `#[command_handler]`: the unit of work is named,
+/// and `handle` takes its transaction (none here, `()`).
 impl CommandHandler for OpenHandler {
     type Command = Open;
     type Event = CounterEvent;
+    type Unit = cqrs::Autocommit;
 
-    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>) -> Result<u32, Error> {
+    async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
-        events.commit(cqrs::New::<Counter>(*id), &self.0).await?;
+        events.record(cqrs::New::<Counter>(*id));
         Ok(*id)
     }
 }
@@ -167,23 +201,23 @@ impl AddHandler {
 impl CommandHandler for AddHandler {
     type Command = Add;
     type Event = CounterEvent;
+    type Unit = cqrs::Autocommit;
 
     fn conflict_retries(&self) -> u32 {
         self.retries
     }
 
-    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
+    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
         let counter = self.counters.load(&command.id).await?.ok_or(NotFound(command.id))?;
         if self.runs.fetch_add(1, Ordering::Relaxed) == 0 && self.racing {
             let other = self.counters.load(&command.id).await?.unwrap();
             self.counters.append(other, vec![CounterEvent::Added(10)]).await?;
         }
         counter.add(command.n, events)?;
-        let total = counter.total + command.n;
-        if !self.forget_save {
-            events.commit(counter, &self.counters).await?;
+        if self.forget_save {
+            return Ok(counter.total + command.n);
         }
-        Ok(total)
+        Ok(events.record(counter).total)
     }
 }
 
@@ -193,6 +227,8 @@ impl CommandHandler for AddHandler {
 struct Gateway {
     open: OpenHandler,
     add: AddHandler,
+    #[gateway(unit)]
+    counters: Counters,
 }
 
 fn counters() -> Counters {
@@ -206,8 +242,9 @@ fn counters() -> Counters {
 /// The gateway, committing through the counters' engine.
 fn gateway(counters: &Counters, add: AddHandler) -> Gateway {
     Gateway {
-        open: OpenHandler(Arc::clone(counters)),
+        open: OpenHandler,
         add,
+        counters: Arc::clone(counters),
     }
 }
 
@@ -291,24 +328,30 @@ fn dispatching_is_send() {
     assert_eq!(block_on(assert_send(gateway.send(Open(3)))), Ok(3));
 }
 
-#[test]
-fn a_save_after_another_save_is_not_retried() {
-    // Two saves in one run: if the second loses the race, re-running would
-    // save the first one twice, so the conflict reaches the caller.
-    struct Twice(Counters);
-    impl CommandHandler for Twice {
-        type Command = Add;
-        type Event = CounterEvent;
-        async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, Error> {
-            let stale = self.0.load(&command.id).await?.unwrap();
-            let fresh = self.0.load(&command.id).await?.unwrap();
-            events.append(CounterEvent::Added(1));
-            events.commit(fresh, &self.0).await?;
-            events.append(CounterEvent::Added(1));
-            events.commit(stale, &self.0).await?;
-            Ok(0)
-        }
+/// Records the counter twice in one command: once fresh, once stale.
+struct Twice(Counters);
+
+impl CommandHandler for Twice {
+    type Command = Add;
+    type Event = CounterEvent;
+    type Unit = cqrs::InTransaction<()>;
+
+    async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
+        let stale = self.0.load(&command.id).await?.unwrap();
+        let fresh = self.0.load(&command.id).await?.unwrap();
+        events.append(CounterEvent::Added(1));
+        events.record(fresh);
+        events.append(CounterEvent::Added(1));
+        events.record(stale);
+        Ok(0)
     }
+}
+
+#[test]
+fn a_unit_that_cannot_roll_back_is_not_run_again_after_a_partial_write() {
+    // In memory nothing rolls back: the first write stays when the second
+    // loses the race, so re-running would append it twice. The conflict
+    // reaches the caller instead.
     let counters = counters();
     block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
     let twice = Twice(Arc::clone(&counters));
@@ -316,16 +359,43 @@ fn a_save_after_another_save_is_not_retried() {
         block_on(cqrs::dispatch_command(
             &twice,
             Add { id: 1, n: 1 },
-            cqrs::Metadata::new()
+            cqrs::Metadata::new(),
+            &counters
         )),
         Err(Error::Store(StoreError::Conflict { .. }))
     ));
-    assert_eq!(total(&counters, 1), 1, "the first save, once");
+    assert_eq!(total(&counters, 1), 1, "the first write, once");
+}
+
+#[test]
+fn several_entities_without_a_transaction_are_refused() {
+    struct TwiceWithoutTransaction(Counters);
+    impl CommandHandler for TwiceWithoutTransaction {
+        type Command = Add;
+        type Event = CounterEvent;
+        type Unit = cqrs::Autocommit;
+        async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>, (): &mut ()) -> Result<u64, Error> {
+            Twice(Arc::clone(&self.0)).handle(command, events, &mut ()).await
+        }
+    }
+    let counters = counters();
+    block_on(gateway(&counters, AddHandler::new(&counters)).send(Open(1))).unwrap();
+    let handler = TwiceWithoutTransaction(Arc::clone(&counters));
+    assert!(matches!(
+        block_on(cqrs::dispatch_command(
+            &handler,
+            Add { id: 1, n: 1 },
+            cqrs::Metadata::new(),
+            &counters
+        )),
+        Err(Error::Store(StoreError::Backend(_)))
+    ));
+    assert_eq!(total(&counters, 1), 0, "nothing appended");
 }
 
 #[test]
 #[cfg(debug_assertions)]
-#[should_panic(expected = "never committed")]
+#[should_panic(expected = "never recorded")]
 fn forgetting_to_save_panics_in_debug_builds() {
     let counters = counters();
     let forgetful = AddHandler {
@@ -353,6 +423,7 @@ fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
         &racing,
         Add { id: 1, n: 5 },
         correlation.clone(),
+        &counters,
     ))
     .unwrap();
 

@@ -22,9 +22,9 @@
 //! The unit is sugar over what can be assembled by hand: it starts from an
 //! [`Events`](crate::Events) (the store, where tokens live and the
 //! transactions processors run in), which is also the publisher (append,
-//! then broadcast); `commands` hands it to the closure that builds the
-//! command gateway, whose handlers hold it and commit with
-//! `events.commit(entity, &self.events)`.
+//! then broadcast) and the unit of work commands run in; `commands` hands it
+//! to the closure that builds the command gateway, which keeps it as its
+//! `#[gateway(unit)]`.
 //! [`Cqrs::from_publisher`] starts from a publisher built by hand instead
 //! (e.g. an [`InlinePublisher`](crate::InlinePublisher) feeding handlers
 //! inline, with no runtime).

@@ -9,8 +9,8 @@ use std::{future::Future, sync::Arc};
 
 use cqrs::{
     AggregateLoader, AppendEvents, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope,
-    EventHandler, EventPublisher, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext,
-    ProcessorHandle, ReadLog, SnapshotStore, StoreError, StreamId, TrackingOptions,
+    EventHandler, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext, ProcessorHandle,
+    ReadLog, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
 use cqrs_postgres::{
     PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, PostgresTransactions,
@@ -68,13 +68,14 @@ impl<N: SnapshotStore<OurAccount>> Accounts for EventSourcedAccounts<N> {
     }
 }
 
-pub struct ExecuteHandler<R, P> {
+pub struct ExecuteHandler<R> {
     accounts: R,
-    events: P,
 }
 
+/// Without a transaction: the account's events are appended in one
+/// statement once the handler returns (`Autocommit`).
 #[cqrs::command_handler]
-impl<R: Accounts, P: EventPublisher<AccountEvent>> CommandHandler for ExecuteHandler<R, P> {
+impl<R: Accounts> CommandHandler for ExecuteHandler<R> {
     async fn handle(&self, command: &Execute, events: &mut Appender<AccountEvent>) -> Result<(), BankError> {
         // An account starts empty: `Open` is decided on that state.
         let account =
@@ -82,7 +83,7 @@ impl<R: Accounts, P: EventPublisher<AccountEvent>> CommandHandler for ExecuteHan
         for event in account.state.decide(&command.command)? {
             events.append(event);
         }
-        events.commit(account, &self.events).await?;
+        events.record(account);
         Ok(())
     }
 
@@ -95,7 +96,9 @@ impl<R: Accounts, P: EventPublisher<AccountEvent>> CommandHandler for ExecuteHan
 #[derive(cqrs::Gateway)]
 #[gateway(commands)]
 pub struct Bank<R, P> {
-    execute: ExecuteHandler<R, P>,
+    execute: ExecuteHandler<R>,
+    #[gateway(unit)]
+    events: P,
 }
 
 /// `account_views`, one row per account, written in the processor's
@@ -218,9 +221,11 @@ where
         let accounts = Arc::new(snapshots(AggregateLoader::new(events.store().clone())));
         let execute = ExecuteHandler {
             accounts: EventSourcedAccounts(accounts),
-            events: events.clone(),
         };
-        let bank = Arc::new(Bank { execute });
+        let bank = Arc::new(Bank {
+            execute,
+            events: events.clone(),
+        });
         let views = started(events.processor("views", AccountViews).with_options(options()).spawn()).await;
         let policy = TransferPolicy {
             bank: Arc::clone(&bank),

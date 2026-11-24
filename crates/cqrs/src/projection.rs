@@ -199,6 +199,7 @@ pub const fn namespace_id(name: &str) -> u64 {
 }
 
 /// One namespace of a projection, as the event handler its processor runs.
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))] // processors need Tokio
 pub(crate) struct NamespaceOf<P> {
     /// The projection, shared by its namespaces' processors.
     pub(crate) projection: Arc<P>,

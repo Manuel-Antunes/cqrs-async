@@ -31,6 +31,12 @@ pub trait TransactionManager: Send + Sync {
     /// The transaction participants borrow.
     type Tx: Send;
 
+    /// Whether dropping a transaction undoes what was written in it (a
+    /// database's does; memory's `()` does not). A command's unit of work
+    /// runs its handler again after a lost race only if nothing it wrote
+    /// can survive.
+    const ROLLS_BACK: bool = true;
+
     /// Opens a transaction.
     fn begin(&self) -> impl Future<Output = Result<Self::Tx, StoreError>> + Send;
 
@@ -42,6 +48,8 @@ pub trait TransactionManager: Send + Sync {
 /// In memory: nothing to open, nothing to roll back.
 impl TransactionManager for () {
     type Tx = ();
+
+    const ROLLS_BACK: bool = false;
 
     fn begin(&self) -> impl Future<Output = Result<(), StoreError>> + Send {
         ready(Ok(()))

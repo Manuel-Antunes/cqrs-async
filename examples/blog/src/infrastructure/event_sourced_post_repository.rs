@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cqrs::{AggregateLoader, Appender, EventPublisher, LoadStream, Loaded, SnapshotStore, SourceEvents, StoreError};
+use cqrs::{AggregateLoader, LoadStream, Loaded, SnapshotStore, SourceEvents, StoreError};
 
 use crate::{
     application::commands::PostRepository,
@@ -9,58 +9,55 @@ use crate::{
 
 /// The posts' repository by their events: each post rebuilt from its events
 /// in the event store (`S`), from a snapshot when the repository keeps them
-/// (`N`), and saved by committing the new events through the publisher `P`
-/// (the unit's events service, or an inline publisher).
-pub struct EventSourcedPostRepository<S, P, N = ()> {
+/// (`N`). Its events are its state, appended by the command's unit of work:
+/// saving writes nothing more, so it needs no transaction (`Tx = ()`).
+pub struct EventSourcedPostRepository<S, N = ()> {
     /// Rebuilds the posts.
     loader: AggregateLoader<Post, S, N>,
-    /// Where the new events are committed.
-    events: P,
     /// Ids are sequential per process: enough in memory, where a restart
     /// loses the posts too. A collision would surface as a conflict, never
     /// as an overwrite.
     next_id: AtomicU64,
 }
 
-impl<S, P> EventSourcedPostRepository<S, P> {
-    /// A repository reading posts from `store` and committing through
-    /// `events`, replaying each post's whole stream.
-    pub fn new(store: S, events: P) -> Self {
+impl<S> EventSourcedPostRepository<S> {
+    /// A repository reading posts from `store`, replaying each post's whole
+    /// stream.
+    pub fn new(store: S) -> Self {
         Self {
             loader: AggregateLoader::new(store),
-            events,
             next_id: AtomicU64::new(1),
         }
     }
 }
 
-impl<S, P, N> EventSourcedPostRepository<S, P, N> {
+impl<S, N> EventSourcedPostRepository<S, N> {
     /// Keeps a snapshot of a post in `snapshots` whenever finding it replayed
     /// `every` events or more, so the next find replays only what came after.
-    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> EventSourcedPostRepository<S, P, N2> {
+    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> EventSourcedPostRepository<S, N2> {
         EventSourcedPostRepository {
             loader: self.loader.with_snapshots(snapshots, every),
-            events: self.events,
             next_id: self.next_id,
         }
     }
 }
 
-impl<S, P, N> PostRepository for EventSourcedPostRepository<S, P, N>
+impl<S, N> PostRepository for EventSourcedPostRepository<S, N>
 where
     S: LoadStream<PostEvent> + SourceEvents<PostEvent>,
-    P: EventPublisher<PostEvent>,
     N: SnapshotStore<Post>,
 {
-    async fn next_id(&self) -> Result<PostId, StoreError> {
+    type Tx = ();
+
+    async fn next_id(&self, (): &mut ()) -> Result<PostId, StoreError> {
         Ok(PostId(self.next_id.fetch_add(1, Ordering::Relaxed)))
     }
 
-    async fn find(&self, id: PostId) -> Result<Option<Loaded<Post>>, StoreError> {
+    async fn find(&self, id: PostId, (): &mut ()) -> Result<Option<Loaded<Post>>, StoreError> {
         self.loader.load(&id).await
     }
 
-    async fn save(&self, post: Loaded<Post>, appender: &mut Appender<PostEvent>) -> Result<(), StoreError> {
-        appender.commit(post, &self.events).await
+    async fn save(&self, _: &Loaded<Post>, (): &mut ()) -> Result<(), StoreError> {
+        Ok(())
     }
 }

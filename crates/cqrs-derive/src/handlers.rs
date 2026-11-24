@@ -42,9 +42,12 @@ fn declares(item: &ItemImpl, name: &str) -> bool {
 
 /// `#[command_handler]` on `impl CommandHandler for H`: the command is the
 /// type behind `handle`'s `&Command` argument, the event the parameter of
-/// its `&mut Appender<Event>` argument. It adds the two associated types and
-/// leaves the signature as written.
+/// its `&mut Appender<Event>` argument, and the unit of work its third
+/// argument: `tx: &mut Tx` is `InTransaction<Tx>`; without one, `Autocommit`
+/// (and the macro adds the `&mut ()` the trait passes). It adds the three
+/// associated types.
 pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
+    let krate = crate::krate();
     let method = handle(&item)?;
     let command = match argument(method, 0, "a `&Command` argument")? {
         Type::Reference(TypeReference {
@@ -59,6 +62,39 @@ pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
     };
     let appender = argument(method, 1, "an `events: &mut Appender<Event>` argument")?;
     let event = appender_event(&appender)?;
+    let transaction = match argument(method, 2, "") {
+        Ok(Type::Reference(TypeReference {
+            elem,
+            mutability: Some(_),
+            ..
+        })) => Some(*elem),
+        Ok(other) => {
+            return Err(Error::new(
+                other.span(),
+                "expected `tx: &mut Tx`: the unit of work's transaction, lent to the handler",
+            ));
+        }
+        Err(_) => None,
+    };
+    let unit: Type = match &transaction {
+        Some(transaction) => parse_quote!(#krate::InTransaction<#transaction>),
+        None => parse_quote!(#krate::Autocommit),
+    };
+    if transaction.is_none() {
+        // The trait passes the unit's transaction, `()` here.
+        let method = item
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                ImplItem::Fn(method) if method.sig.ident == "handle" => Some(method),
+                _ => None,
+            })
+            .expect("found above");
+        method.sig.inputs.push(parse_quote!(_: &mut ()));
+    }
+    if !declares(&item, "Unit") {
+        item.items.insert(0, parse_quote!(type Unit = #unit;));
+    }
     if !declares(&item, "Event") {
         item.items.insert(0, parse_quote!(type Event = #event;));
     }

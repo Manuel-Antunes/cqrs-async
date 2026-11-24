@@ -33,10 +33,16 @@ impl<R> RetitlePostHandler<R> {
 
 #[cqrs::command_handler]
 impl<R: PostRepository> CommandHandler for RetitlePostHandler<R> {
-    async fn handle(&self, command: &RetitlePost, appender: &mut Appender<PostEvent>) -> Result<(), BlogError> {
-        let post = self.posts.find(command.id).await?.ok_or(NotFound(command.id))?;
-        post.retitle(command.title.as_str(), appender)?;
-        self.posts.save(post, appender).await?;
+    async fn handle(
+        &self,
+        command: &RetitlePost,
+        events: &mut Appender<PostEvent>,
+        tx: &mut R::Tx,
+    ) -> Result<(), BlogError> {
+        let post = self.posts.find(command.id, tx).await?.ok_or(NotFound(command.id))?;
+        post.retitle(command.title.as_str(), events)?;
+        let post = events.record(post);
+        self.posts.save(&post, tx).await?;
         Ok(())
     }
 }

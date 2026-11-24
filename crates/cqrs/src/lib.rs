@@ -12,8 +12,9 @@
 //!   message): application side.
 //! - [`EventStore`] / [`AggregateLoader`] / [`InlinePublisher`]: persistence with optimistic
 //!   concurrency; events reach the [`EventProcessor`] only after commit.
-//!   Handlers commit through their [`Appender`] and the [`EventPublisher`]
-//!   they were built with (`events.commit(entity, &self.events)`);
+//!   Handlers record what they decided in their [`Appender`]
+//!   (`events.record(entity)`), and their gateway's [`UnitOfWork`] appends
+//!   it and commits, in the handler's transaction if it takes one;
 //!   repositories are the application's own ports, whose adapters load with
 //!   an [`AggregateLoader`].
 //! - `#[derive(Gateway)]` (a struct of handlers, routed by their message
@@ -72,7 +73,8 @@ pub use codec::Json;
 pub use codec::Protobuf;
 pub use codec::{Codec, CodecError};
 pub use command_handler::{
-    Announce, Appender, CommandHandler, Committed, EventPublisher, Pending, PublishIn, dispatch_command,
+    Appender, Autocommit, CommandHandler, EventPublisher, InTransaction, Pending, UnitMode, UnitOfWork, Write,
+    append_writes, dispatch_command,
 };
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};

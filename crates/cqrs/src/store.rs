@@ -142,8 +142,8 @@ pub trait LoadStream<E>: Send + Sync {
 /// database store also appends in a transaction its caller owns (a
 /// PostgreSQL store implements it for `sqlx::Transaction`), so an
 /// application's own writes and the events commit together; then nothing is
-/// visible, nor announced, before the caller commits
-/// ([`Appender::commit_in`](crate::Appender::commit_in)).
+/// visible, nor announced, before the transaction commits (a command's
+/// [`UnitOfWork`](crate::UnitOfWork) in a transaction).
 ///
 /// Either every event is stored with consecutive sequences, or none is and
 /// [`StoreError::Conflict`] / [`StoreError::ConditionFailed`] /

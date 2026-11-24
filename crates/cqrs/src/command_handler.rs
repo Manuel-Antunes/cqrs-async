@@ -1,15 +1,14 @@
-//! Command handlers that decide by appending events, and commit them
-//! through the publisher they were built with (Axon 5's `EventAppender`,
-//! NestJS's `aggregate.commit()`).
+//! Command handlers and their unit of work (Axon 5's command handling with
+//! its `ProcessingContext`): the handler decides, records what it decided,
+//! and the gateway commits.
 //!
-//! One struct per use case, holding the services it needs: usually the
-//! application's own repository and the [`EventPublisher`] its commits go
-//! through. `#[command_handler]` reads `type Command` and `type Event` from
-//! the signature of `handle`:
+//! One struct per use case, holding the services it needs (usually the
+//! application's own repository). `#[command_handler]` reads the command,
+//! the event type and the unit of work from the signature of `handle`:
 //!
 //! ```
 //! use std::future::Future;
-//! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, EventPublisher, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
+//! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 //! enum CounterEvent { Added(u64) }
@@ -38,55 +37,60 @@
 //!     }
 //! }
 //!
-//! /// The repository and the publisher: both are the handler's, given once.
-//! struct AddHandler<R, P> { counters: R, events: P }
+//! struct AddHandler<R> { counters: R }
 //!
 //! #[cqrs::command_handler]
-//! impl<R: Counters, P: EventPublisher<CounterEvent>> CommandHandler for AddHandler<R, P> {
+//! impl<R: Counters> CommandHandler for AddHandler<R> {
 //!     async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, StoreError> {
 //!         // A counter starts at zero: adding to a missing one creates it.
 //!         let counter = self.counters.find(command.id).await?.unwrap_or_else(|| New(command.id).into());
 //!         events.append(CounterEvent::Added(command.n));
-//!         let total = counter.total + command.n;
-//!         events.commit(counter, &self.events).await?;
-//!         Ok(total)
+//!         let counter = events.record(counter); // the counter after its events
+//!         Ok(counter.total)
 //!     }
 //! }
 //!
+//! /// The gateway, and the unit of work its commands run in.
 //! #[derive(cqrs::Gateway)]
 //! #[gateway(commands)]
-//! struct Commands<R, P> { add: AddHandler<R, P> }
+//! struct Commands<R, P> {
+//!     add: AddHandler<R>,
+//!     #[gateway(unit)]
+//!     events: P,
+//! }
 //!
 //! let store = InMemoryEventStore::new();
 //! let commands = Commands {
-//!     add: AddHandler {
-//!         counters: StoredCounters(AggregateLoader::new(store.clone())),
-//!         events: InlinePublisher::new(store),
-//!     },
+//!     add: AddHandler { counters: StoredCounters(AggregateLoader::new(store.clone())) },
+//!     events: InlinePublisher::new(store),
 //! };
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 }))?, 2);
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 3 }))?, 5);
 //! # Ok::<(), StoreError>(())
 //! ```
 //!
-//! A handler commits to a publisher of its own event type; any other value
-//! is refused where the handler is written:
+//! # The unit of work
 //!
-//! ```compile_fail,E0277
-//! # use cqrs::{Appender, CommandHandler, New, StoreError};
-//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
-//! # #[cqrs::aggregate(event = Ticked)] struct Clock { id: u32 }
-//! # impl Clock { fn apply(&mut self, _: &Ticked) {} }
-//! # #[cqrs::command(error = StoreError)] struct Tick;
-//! struct NotAPublisher;
-//! struct TickHandler;
-//! #[cqrs::command_handler]
-//! impl CommandHandler for TickHandler {
-//!     async fn handle(&self, _: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
-//!         events.commit(New::<Clock>(1), &NotAPublisher).await
-//!     }
-//! }
-//! ```
+//! For each command the gateway hands the handler a fresh [`Appender`]
+//! (carrying the command's metadata) and, if the handler asks for one, the
+//! transaction of the unit of work:
+//!
+//! - **Without a transaction** (`handle(&self, command, events)`, the mode
+//!   [`Autocommit`]): what the handler recorded is appended in one statement
+//!   of the store, once the handler returned `Ok`. One entity per command.
+//! - **With one** (`handle(&self, command, events, tx: &mut Tx)`, the mode
+//!   [`InTransaction<Tx>`]): the unit opens the transaction of its
+//!   [`TransactionManager`](crate::TransactionManager), the handler and its
+//!   repositories write in it (an entity's state, rows of their own), the
+//!   recorded events are appended in it last, and the unit commits.
+//!   Everything commits together, or nothing does.
+//!
+//! The handler never commits, and never announces: once committed, the unit
+//! hands the events to the processors. If the append lost a race (a stream
+//! moved on, or a [DCB condition](crate::AppendCondition) failed), the unit
+//! is rolled back and the handler runs again on fresh state. So, besides
+//! what it writes in the transaction, a handler must have no side effects:
+//! one runs in a projection, after the commit.
 //!
 //! The command is taken by reference, as the handler may run again:
 //!
@@ -100,47 +104,56 @@
 //! }
 //! ```
 //!
-//! For each command the gateway runs the handler with a fresh [`Appender`]
-//! (carrying the command's metadata): the handler finds what it needs, lets
-//! the domain append, and commits explicitly. If a commit loses a race (a
-//! stream moved on, or a [DCB condition](crate::AppendCondition) failed),
-//! [`dispatch_command`] runs the handler again with a new appender, so it
-//! decides on fresh state.
+//! and an entity is recorded with events of its own type only:
+//!
+//! ```compile_fail,E0271
+//! # use cqrs::{Appender, CommandHandler, New, StoreError};
+//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
+//! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Rang { Once }
+//! # #[cqrs::aggregate(event = Rang)] struct Bell { id: u32 }
+//! # impl Bell { fn apply(&mut self, _: &Rang) {} }
+//! # #[cqrs::command(error = StoreError)] struct Tick;
+//! struct TickHandler;
+//! #[cqrs::command_handler]
+//! impl CommandHandler for TickHandler {
+//!     async fn handle(&self, _: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
+//!         events.record(New::<Bell>(1)); // a bell rings, it does not tick
+//!         Ok(())
+//!     }
+//! }
+//! ```
 
-use std::future::Future;
+use std::{future::Future, marker::PhantomData};
 
 use crate::{
     Aggregate, AppendCondition, Command, DomainEvent, ErrorOf, EventCriteria, EventEnvelope, ExpectedVersion, Loaded,
-    Metadata, OutputOf, SourceEvents, StoreError,
+    Metadata, OutputOf, SourceEvents, StoreError, StreamId,
 };
 
 /// The context of one run of a command handler, handed in by the gateway
 /// (Axon 5's `EventAppender` with its processing context): the events the
-/// domain decided on, until [`commit`](Self::commit) takes them; the
-/// metadata the command was sent with, which every committed event carries
-/// (Axon's correlation data); and the [`AppendCondition`] of what it read
-/// with [`source`](Self::source) (Axon 5's DCB). The publisher is the
-/// handler's, passed to `commit`.
+/// domain decides on, until [`record`](Self::record) assigns them to an
+/// entity; the metadata the command was sent with, which every event
+/// carries (Axon's correlation data); and the [`AppendCondition`] of what
+/// the run read with [`source`](Self::source) (Axon 5's DCB). The unit of
+/// work appends what was recorded once the handler returned.
 ///
 /// It is an [`EventAppender`](crate::EventAppender), so domain methods take
 /// it as `&mut impl EventAppender<E>`.
 #[derive(Debug)]
 pub struct Appender<E> {
-    /// Appended and not committed yet.
+    /// Appended and not recorded yet.
     events: Vec<E>,
-    /// Sent with the command; stored with every event committed.
+    /// Sent with the command; stored with every event.
     metadata: Metadata,
-    /// What the run read by criteria, checked by every commit.
+    /// What the run read by criteria, checked by every write.
     condition: Option<AppendCondition>,
-    /// Some commit of this run succeeded: re-running would commit it twice.
-    saved: bool,
-    /// Some commit of this run lost a race (a stream moved on, or the
-    /// condition failed).
-    lost_race: bool,
+    /// What the run decided, entity by entity, in order.
+    writes: Vec<Write<E>>,
 }
 
-/// What one commit stores: the events taken from the [`Appender`], its
-/// metadata and its condition.
+/// What one commit stores, for [`EventPublisher::commit`]: events, their
+/// metadata and a condition.
 #[derive(Debug)]
 pub struct Pending<E> {
     /// The events, in the order they were appended.
@@ -163,6 +176,22 @@ impl<E> Pending<E> {
     }
 }
 
+/// The events recorded for one entity by a command handler: what its unit
+/// of work appends.
+#[derive(Debug)]
+pub struct Write<E> {
+    /// The entity's stream.
+    pub stream: StreamId,
+    /// What the stream must be at.
+    pub expected: ExpectedVersion,
+    /// What must still hold (what the run, or the entity, was read from).
+    pub condition: Option<AppendCondition>,
+    /// The events, in order.
+    pub events: Vec<E>,
+    /// Stored with every event.
+    pub metadata: Metadata,
+}
+
 impl<E> Appender<E> {
     /// An empty appender without metadata (what a test passes).
     pub fn new() -> Self {
@@ -176,8 +205,7 @@ impl<E> Appender<E> {
             events: Vec::new(),
             metadata,
             condition: None,
-            saved: false,
-            lost_race: false,
+            writes: Vec::new(),
         }
     }
 
@@ -186,21 +214,26 @@ impl<E> Appender<E> {
         &self.metadata
     }
 
-    /// The events appended and not committed yet.
+    /// The events appended and not recorded yet.
     pub fn pending(&self) -> &[E] {
         &self.events
     }
 
-    /// What the commits of this run are conditioned on, if it read anything
+    /// What was recorded so far, entity by entity.
+    pub fn writes(&self) -> &[Write<E>] {
+        &self.writes
+    }
+
+    /// What the writes of this run are conditioned on, if it read anything
     /// by criteria.
     pub fn condition(&self) -> Option<&AppendCondition> {
         self.condition.as_ref()
     }
 
     /// Reads every event matching `criteria` from `store` (any stream) and
-    /// makes the following commits of this run conditional on nothing
-    /// matching being appended meanwhile. Several reads combine: the commits
-    /// check all of them.
+    /// makes this run's writes conditional on nothing matching being
+    /// appended meanwhile. Several reads combine: the writes check all of
+    /// them.
     ///
     /// # Errors
     ///
@@ -218,137 +251,48 @@ impl<E> Appender<E> {
         Ok(events)
     }
 
-    /// Makes the following commits of this run also check `condition`, e.g.
-    /// the one of an aggregate read but not committed.
+    /// Makes this run's writes also check `condition`, e.g. the one of an
+    /// aggregate read but not written.
     pub fn depend_on(&mut self, condition: AppendCondition) {
         self.condition = AppendCondition::both(self.condition.take(), Some(condition));
     }
 
-    /// Commits the pending events to `entity`'s stream through `publisher`
-    /// (NestJS's `aggregate.commit()`), with the command's metadata and the
-    /// conditions of what this run read. `entity` is a [`Loaded`] aggregate,
-    /// whose stream must still be at the version it was loaded at, or a
-    /// [`New`](crate::New) one, whose stream must not exist.
+    /// Records the events appended since the last call as `entity`'s
+    /// (Axon 5's `EventAppender` with its entity): they are appended to its
+    /// stream by the unit of work, expecting the version it was loaded at
+    /// (or, for a [`New`](crate::New) one, that it does not exist), with the
+    /// command's metadata and the conditions of what the run read.
     ///
-    /// # Errors
-    ///
-    /// [`StoreError::Conflict`] if the entity changed since it was loaded (or
-    /// exists already, for a new one), [`StoreError::ConditionFailed`] if
-    /// what the run read changed: the gateway then runs the handler again,
-    /// if nothing was committed before in this run.
-    pub async fn commit<A, P>(&mut self, entity: impl Into<Loaded<A>>, publisher: &P) -> Result<(), StoreError>
+    /// Pure: nothing is written yet. Returns the entity as it is after the
+    /// events ([`Aggregate::evolve`]), at the version they take it to: what
+    /// a repository that keeps state saves, in the unit's transaction.
+    pub fn record<A>(&mut self, entity: impl Into<Loaded<A>>) -> Loaded<A>
     where
         E: DomainEvent,
         A: Aggregate<Event = E>,
-        P: EventPublisher<E>,
     {
-        let pending = self.take();
-        let outcome = publisher.commit(entity.into(), pending).await;
-        self.record(outcome)
-    }
-
-    /// Commits the pending events like [`commit`](Self::commit), but in
-    /// `tx`, a transaction the caller owns: the application's own writes in
-    /// it (an aggregate's state, a row of its own) and the events commit
-    /// together, or roll back together. The library borrows `tx` and can
-    /// neither commit it nor keep it.
-    ///
-    /// ```text
-    /// let mut tx = pool.begin().await?;                                    // the transaction is yours
-    /// let committed = appender.commit_in(&mut tx, post, &self.events).await?;
-    /// save_state(&mut tx, committed.entity()).await?;                      // your repository, your ORM
-    /// tx.commit().await?;                                                  // the commit is yours
-    /// committed.announce();                                                // processors, subscriptions
-    /// ```
-    ///
-    /// Nothing is announced before the caller's commit, which the publisher
-    /// cannot see: the returned [`Committed`] carries the events, and
-    /// [`announce`](Committed::announce) hands them to processors and
-    /// subscriptions. Forgetting it only costs latency (they also poll the
-    /// log); dropping it is right when the transaction rolled back.
-    ///
-    /// # Errors
-    ///
-    /// As [`commit`](Self::commit). A lost race fails the statement, which
-    /// aborts a PostgreSQL transaction: drop it, and the gateway runs the
-    /// handler again, which opens a new one.
-    pub async fn commit_in<'p, A, P, Tx>(
-        &mut self,
-        tx: &mut Tx,
-        entity: impl Into<Loaded<A>>,
-        publisher: &'p P,
-    ) -> Result<Committed<'p, A, P>, StoreError>
-    where
-        E: DomainEvent,
-        A: Aggregate<Event = E>,
-        P: PublishIn<E, Tx>,
-        Tx: Send,
-    {
-        let entity = entity.into();
-        let pending = self.take();
-        let events = match publisher.append_in(tx, &entity, pending).await {
-            Ok(events) => events,
-            Err(error) => return Err(self.lost(error)),
-        };
-        self.saved(events.last().map(|event| event.position));
-        Ok(Committed {
-            entity: entity.after(&events),
+        let mut entity = entity.into();
+        let events = std::mem::take(&mut self.events);
+        if events.is_empty() {
+            return entity;
+        }
+        let (stream, expected) = entity.target();
+        let condition = AppendCondition::both(entity.condition().cloned(), self.condition.clone());
+        entity.apply(&events);
+        self.writes.push(Write {
+            stream,
+            expected,
+            condition,
             events,
-            publisher,
-        })
-    }
-
-    /// The pending events, with a copy of the metadata and the condition.
-    fn take(&mut self) -> Pending<E> {
-        Pending {
-            events: std::mem::take(&mut self.events),
             metadata: self.metadata.clone(),
-            condition: self.condition.clone(),
-        }
+        });
+        entity
     }
 
-    /// Records a commit's outcome, so the gateway knows whether a re-run is
-    /// safe, and moves the condition past the events just committed.
-    fn record(&mut self, outcome: Result<Option<u64>, StoreError>) -> Result<(), StoreError> {
-        match outcome {
-            Ok(last) => {
-                self.saved(last);
-                Ok(())
-            }
-            Err(error) => Err(self.lost(error)),
-        }
-    }
-
-    /// A commit succeeded, its last event at `last`.
-    fn saved(&mut self, last: Option<u64>) {
-        self.saved = true;
-        // Our own events match what we read: later commits check only what
-        // others append after them.
-        if let (Some(condition), Some(last)) = (&mut self.condition, last) {
-            condition.after = last;
-        }
-    }
-
-    /// A commit failed with `error`, returned; a lost race makes a re-run
-    /// safe if nothing was committed before.
-    fn lost(&mut self, error: StoreError) -> StoreError {
-        if matches!(
-            error,
-            StoreError::ConditionFailed
-                | StoreError::Conflict {
-                    expected: ExpectedVersion::Exact(_),
-                    ..
-                }
-        ) {
-            self.lost_race = true;
-        }
-        error
-    }
-
-    /// A commit lost a race and nothing was committed before: running the
-    /// handler again on fresh state is safe.
-    fn retryable(&self) -> bool {
-        self.lost_race && !self.saved
+    /// The writes of this run, leaving it empty: what a unit of work
+    /// appends ([`append_writes`]), when one is run by hand.
+    pub fn take_writes(&mut self) -> Vec<Write<E>> {
+        std::mem::take(&mut self.writes)
     }
 }
 
@@ -364,16 +308,15 @@ impl<E> Extend<E> for Appender<E> {
     }
 }
 
-/// Persists and publishes what a command decided (NestJS's
-/// `EventPublisher`): appends the pending events to the entity's stream,
-/// expecting the version it was loaded at, with the command's metadata and
-/// conditions, then hands them to whatever processes events. A handler holds
-/// one and commits through its [`Appender`]: `events.commit(post, &self.events)`.
+/// Appends and publishes events outside a command's unit of work (an
+/// import, a test seeding a store): appends `pending` to the entity's
+/// stream, expecting the version it was loaded at, then hands the events to
+/// whatever processes them. Command handlers do not use it: they record, and
+/// their unit of work ([`UnitOfWork`]) appends.
 ///
-/// One publisher serves every aggregate of an event type.
 /// [`Events`](crate::Events) is one (it broadcasts the commit), and so is
-/// an [`InlinePublisher`](crate::InlinePublisher) (it feeds its processing group
-/// inline); a test double implements it to record what was committed.
+/// an [`InlinePublisher`](crate::InlinePublisher) (it feeds its processing
+/// group inline).
 pub trait EventPublisher<E: DomainEvent>: Send + Sync {
     /// Commits `pending` to `entity`'s stream; returns the position of the
     /// last event committed (`None` if there was nothing to commit).
@@ -381,7 +324,7 @@ pub trait EventPublisher<E: DomainEvent>: Send + Sync {
     /// # Errors
     ///
     /// [`StoreError::Conflict`] or [`StoreError::ConditionFailed`] if the
-    /// decision is stale; the store's error otherwise.
+    /// entity changed; the store's error otherwise.
     fn commit<A: Aggregate<Event = E>>(
         &self,
         entity: Loaded<A>,
@@ -389,7 +332,7 @@ pub trait EventPublisher<E: DomainEvent>: Send + Sync {
     ) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send;
 }
 
-/// A borrowed publisher is a publisher (what each run's appender holds).
+/// A borrowed publisher is a publisher.
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
 impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for &T {
@@ -415,135 +358,118 @@ impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for std::sync::Arc<
     }
 }
 
-/// Appends in a transaction its caller owns, for
-/// [`Appender::commit_in`]: the [`EventPublisher`] counterpart for
-/// applications that write their own state with the events.
-///
-/// [`Events`](crate::Events) is one, for every transaction its store can
-/// append in ([`AppendEvents<E, Tx>`](crate::AppendEvents)).
-/// [`InlinePublisher`](crate::InlinePublisher) is not: its handlers run
-/// right after the commit, which it cannot see, and a forgotten
-/// [`announce`](Committed::announce) would silently skip them.
-pub trait PublishIn<E: DomainEvent, Tx: Send>: Announce<E> {
-    /// Appends `pending` to `entity`'s stream in `tx`, expecting the
-    /// version it was loaded at (or the condition it was built from);
-    /// returns the envelopes, invisible to others until `tx` commits.
-    ///
-    /// # Errors
-    ///
-    /// As [`EventPublisher::commit`].
-    fn append_in<A: Aggregate<Event = E>>(
+/// How a command's unit of work runs: [`Autocommit`] or
+/// [`InTransaction<Tx>`], chosen by the handler's signature.
+pub trait UnitMode: Send {
+    /// What the handler borrows (`()` without a transaction).
+    type Tx: Send;
+    /// Whether the store appends on its own, one statement per command.
+    const AUTOCOMMIT: bool;
+}
+
+/// No transaction: the handler takes none, and what it recorded is appended
+/// by the store on its own, in one statement. The fastest path, for one
+/// entity per command (an event-sourced repository).
+#[derive(Clone, Copy, Debug)]
+pub struct Autocommit;
+
+impl UnitMode for Autocommit {
+    type Tx = ();
+    const AUTOCOMMIT: bool = true;
+}
+
+/// A transaction of type `Tx`, opened and committed by the unit of work,
+/// borrowed by the handler and its repositories (`tx: &mut Tx`): their
+/// writes and the events commit together.
+pub struct InTransaction<Tx>(PhantomData<fn() -> Tx>);
+
+impl<Tx: Send> UnitMode for InTransaction<Tx> {
+    type Tx = Tx;
+    const AUTOCOMMIT: bool = false;
+}
+
+/// Runs commands' units of work for events `E` in mode `U`: what a command
+/// gateway holds (`#[gateway(unit)]`). [`Events`](crate::Events) runs both
+/// modes (in a transaction, its
+/// [`TransactionManager`](crate::TransactionManager)'s);
+/// [`InlinePublisher`](crate::InlinePublisher) runs them in memory, feeding
+/// its handlers after each.
+pub trait UnitOfWork<E: DomainEvent, U: UnitMode>: Send + Sync {
+    /// Whether dropping the transaction undoes the appends made in it. In
+    /// memory it does not: after a lost race, the handler of a unit that
+    /// already appended something is not run again (the conflict reaches
+    /// the caller), so nothing is appended twice.
+    const ROLLS_BACK: bool = true;
+
+    /// Opens the unit's transaction (`()` in [`Autocommit`]).
+    fn begin(&self) -> impl Future<Output = Result<U::Tx, StoreError>> + Send;
+
+    /// Appends `write` in `tx`; returns the events' envelopes.
+    fn append(
         &self,
-        tx: &mut Tx,
-        entity: &Loaded<A>,
-        pending: Pending<E>,
+        tx: &mut U::Tx,
+        write: Write<E>,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send;
+
+    /// Commits `tx` (nothing to do in [`Autocommit`]).
+    fn commit(&self, tx: U::Tx) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Hands `events`, committed, to whatever follows them (processors,
+    /// subscriptions, inline handlers).
+    fn announce(&self, events: Vec<EventEnvelope<E>>) -> impl Future<Output = ()> + Send;
 }
 
-/// Hands events committed in a caller's transaction to whatever follows
-/// them (processors, subscriptions): the after-commit half of
-/// [`PublishIn`], whatever the transaction was.
-pub trait Announce<E>: Send + Sync {
-    /// `events` were committed: tell those following the log.
-    fn announce(&self, events: Vec<EventEnvelope<E>>);
-}
-
-/// A shared publisher announces too.
-impl<E, T: Announce<E>> Announce<E> for std::sync::Arc<T> {
-    fn announce(&self, events: Vec<EventEnvelope<E>>) {
-        (**self).announce(events);
-    }
-}
-
-/// A shared publisher appends in transactions too.
+/// A shared unit of work is one.
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
-impl<E: DomainEvent, Tx: Send, T: PublishIn<E, Tx>> PublishIn<E, Tx> for std::sync::Arc<T> {
-    fn append_in<A: Aggregate<Event = E>>(
+impl<E: DomainEvent, U: UnitMode, T: UnitOfWork<E, U>> UnitOfWork<E, U> for std::sync::Arc<T> {
+    const ROLLS_BACK: bool = T::ROLLS_BACK;
+
+    fn begin(&self) -> impl Future<Output = Result<U::Tx, StoreError>> + Send {
+        (**self).begin()
+    }
+
+    fn append(
         &self,
-        tx: &mut Tx,
-        entity: &Loaded<A>,
-        pending: Pending<E>,
+        tx: &mut U::Tx,
+        write: Write<E>,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        (**self).append_in(tx, entity, pending)
-    }
-}
-
-/// What [`Appender::commit_in`] appended in the caller's transaction: the
-/// entity as it is after the events (for a repository keeping its state),
-/// and the events, to [`announce`](Self::announce) once the caller
-/// committed. Drop it if the transaction rolled back.
-#[must_use = "announce() it once your transaction committed (or drop it if it rolled back)"]
-pub struct Committed<'p, A: Aggregate, P> {
-    /// The entity after the events, at its new version.
-    entity: Loaded<A>,
-    /// What was appended.
-    events: Vec<EventEnvelope<A::Event>>,
-    /// Who announces them.
-    publisher: &'p P,
-}
-
-impl<A: Aggregate, P> Committed<'_, A, P> {
-    /// The entity after the events ([`Aggregate::evolve`]), at the version
-    /// they took it to: what a repository keeping state saves in the same
-    /// transaction, with that version.
-    pub fn entity(&self) -> &Loaded<A> {
-        &self.entity
+        (**self).append(tx, write)
     }
 
-    /// The events appended, in order.
-    pub fn events(&self) -> &[EventEnvelope<A::Event>] {
-        &self.events
+    fn commit(&self, tx: U::Tx) -> impl Future<Output = Result<(), StoreError>> + Send {
+        (**self).commit(tx)
     }
 
-    /// The position of the last event appended (`None` if there was
-    /// nothing to append).
-    pub fn last_position(&self) -> Option<u64> {
-        self.events.last().map(|event| event.position)
-    }
-
-    /// Tells processors and subscriptions about the events, once the
-    /// transaction they were appended in committed; returns the entity.
-    pub fn announce(self) -> Loaded<A>
-    where
-        P: Announce<A::Event>,
-    {
-        self.publisher.announce(self.events);
-        self.entity
-    }
-}
-
-impl<A: Aggregate, P> std::fmt::Debug for Committed<'_, A, P>
-where
-    A::Event: std::fmt::Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Committed")
-            .field("version", &self.entity.version())
-            .field("events", &self.events)
-            .finish_non_exhaustive()
+    fn announce(&self, events: Vec<EventEnvelope<E>>) -> impl Future<Output = ()> + Send {
+        (**self).announce(events)
     }
 }
 
 /// Handles one command: finds what it needs (through the application's
-/// repositories), lets the domain append events, and commits them through
-/// its appender and its own publisher: `events.commit(entity, &self.events)`.
+/// repositories), lets the domain append events, and records them for the
+/// entity they change (`events.record(entity)`). Its unit of work commits.
 pub trait CommandHandler: Send + Sync {
     /// The command handled.
     type Command: Command + Sync;
     /// The events it decides on.
     type Event: DomainEvent;
+    /// Its unit of work: [`Autocommit`], or [`InTransaction<Tx>`] when
+    /// `handle` takes a `tx: &mut Tx` (filled in by `#[command_handler]`).
+    type Unit: UnitMode;
 
-    /// Decides and commits. Events still pending when it returns `Ok` are a
-    /// bug (a forgotten `commit`): debug builds panic.
+    /// Decides, and records what it decided. Events appended but never
+    /// recorded when it returns `Ok` are a bug (a forgotten `record`):
+    /// debug builds panic.
     ///
-    /// It may run again with a fresh appender if a commit lost a race (see
-    /// [`conflict_retries`](Self::conflict_retries)): besides committing,
-    /// it must have no side effects.
+    /// It may run again, with a fresh appender and transaction, if the
+    /// append lost a race (see [`conflict_retries`](Self::conflict_retries)):
+    /// besides writing in `tx`, it must have no side effects.
     fn handle(
         &self,
         command: &Self::Command,
         events: &mut Appender<Self::Event>,
+        tx: &mut <Self::Unit as UnitMode>::Tx,
     ) -> impl Future<Output = Result<OutputOf<Self::Command>, ErrorOf<Self::Command>>> + Send;
 
     /// How many times the handler re-runs after losing a race (0: never).
@@ -552,35 +478,105 @@ pub trait CommandHandler: Send + Sync {
     }
 }
 
-/// Runs `handler` on `command`: a fresh appender per run, carrying the
-/// command's `metadata`, and a re-run when a commit lost a race. What a
-/// command gateway does for each command, and how a handler is called
-/// directly.
+/// Whether `error` is a lost race: running the decision again on fresh
+/// state may succeed. Creating what exists already is not one.
+fn lost_race(error: &StoreError) -> bool {
+    matches!(
+        error,
+        StoreError::ConditionFailed
+            | StoreError::Conflict {
+                expected: ExpectedVersion::Exact(_),
+                ..
+            }
+    )
+}
+
+/// Runs `handler` on `command` in a unit of work of `unit`: opens it, runs
+/// the handler with a fresh appender (carrying the command's `metadata`)
+/// and the unit's transaction, appends what it recorded, commits, then
+/// announces. An error rolls the unit back; a lost race also runs the
+/// handler again. What a command gateway does for each command, and how a
+/// handler is called directly.
 ///
 /// # Errors
 ///
-/// What the handler returns (after the retries, for a lost race).
-pub async fn dispatch_command<H>(
+/// What the handler returns, or the store's error (converted), after the
+/// retries for a lost race. In [`Autocommit`], recording more than one
+/// entity is an error: their appends would not be atomic.
+pub async fn dispatch_command<H, U>(
     handler: &H,
     command: H::Command,
     metadata: Metadata,
+    unit: &U,
 ) -> Result<OutputOf<H::Command>, ErrorOf<H::Command>>
 where
     H: CommandHandler,
+    U: UnitOfWork<H::Event, H::Unit>,
+    ErrorOf<H::Command>: From<StoreError>,
 {
     let mut retries = handler.conflict_retries();
     loop {
         let mut events = Appender::with_metadata(metadata.clone());
-        let result = handler.handle(&command, &mut events).await;
-        if result.is_err() && events.retryable() && retries > 0 {
-            retries -= 1;
-            continue;
-        }
+        let mut tx = unit.begin().await?;
+        let output = handler.handle(&command, &mut events, &mut tx).await?;
         debug_assert!(
-            result.is_err() || events.pending().is_empty(),
-            "{} returned Ok with events it never committed",
+            events.pending().is_empty(),
+            "{} returned Ok with events it never recorded",
             std::any::type_name::<H>(),
         );
-        return result;
+        let writes = events.take_writes();
+        if <H::Unit as UnitMode>::AUTOCOMMIT && writes.len() > 1 {
+            return Err(StoreError::backend(format!(
+                "{} recorded {} entities without a transaction: their appends would not be atomic; \
+                 take the unit's transaction in `handle` (`tx: &mut Tx`)",
+                std::any::type_name::<H>(),
+                writes.len(),
+            ))
+            .into());
+        }
+        // A unit that cannot roll back keeps a write that went through
+        // before a lost race: running the handler again would append it twice.
+        let rerunnable = U::ROLLS_BACK || writes.len() <= 1;
+        let appended = match append_writes(unit, &mut tx, writes).await {
+            Ok(appended) => appended,
+            // Dropping `tx` rolls back what the handler wrote in it.
+            Err(error) if lost_race(&error) && rerunnable && retries > 0 => {
+                retries -= 1;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        unit.commit(tx).await?;
+        unit.announce(appended).await;
+        return Ok(output);
     }
+}
+
+/// Appends `writes` through `unit`, in `tx`, in order: what a unit of work
+/// does with what a handler recorded. A write's condition skips the events
+/// the writes before it appended: the run's own events match what it read,
+/// so a later write checks only what others appended.
+///
+/// # Errors
+///
+/// The first write's that failed; what was appended before it is in `tx`,
+/// which the caller then drops (rolling it back, in a database).
+pub async fn append_writes<E, U, W>(
+    unit: &W,
+    tx: &mut U::Tx,
+    writes: Vec<Write<E>>,
+) -> Result<Vec<EventEnvelope<E>>, StoreError>
+where
+    E: DomainEvent,
+    U: UnitMode,
+    W: UnitOfWork<E, U>,
+{
+    let mut appended: Vec<EventEnvelope<E>> = Vec::new();
+    for mut write in writes {
+        if let (Some(condition), Some(last)) = (&mut write.condition, appended.last()) {
+            condition.after = condition.after.max(last.position);
+        }
+        appended.extend(unit.append(tx, write).await?);
+    }
+    Ok(appended)
 }

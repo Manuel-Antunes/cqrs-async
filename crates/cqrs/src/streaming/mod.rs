@@ -268,40 +268,74 @@ where
     }
 }
 
-/// The events service appends in the caller's transaction too, for every
-/// transaction its store can append in, and broadcasts once told the
-/// caller committed ([`Appender::commit_in`](crate::Appender::commit_in)).
-impl<E, S, C, M, Tx> crate::PublishIn<E, Tx> for Events<E, S, C, M>
+/// Commands without a transaction: the store appends on its own, in one
+/// statement, then the commit is broadcast.
+impl<E, S, C, M> crate::UnitOfWork<E, crate::Autocommit> for Events<E, S, C, M>
 where
-    E: DomainEvent + Clone,
-    S: AppendEvents<E, Tx>,
+    E: DomainEvent,
+    S: AppendEvents<E>,
     C: Send + Sync,
     M: Send + Sync,
-    Tx: Send,
 {
-    fn append_in<A: Aggregate<Event = E>>(
+    fn begin(&self) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn append(
         &self,
-        tx: &mut Tx,
-        entity: &crate::Loaded<A>,
-        pending: crate::Pending<E>,
+        tx: &mut (),
+        write: crate::Write<E>,
     ) -> impl std::future::Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        crate::inline::append_in(&self.store, tx, entity, pending)
+        crate::inline::append_write(&self.store, tx, write)
+    }
+
+    fn commit(&self, (): ()) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    async fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        self.broadcast(events);
     }
 }
 
-/// Broadcasts what was committed: processors and subscriptions following the
-/// live feed see it at once (they also poll, so a missed announcement only
-/// costs latency).
-impl<E, S, C, M> crate::Announce<E> for Events<E, S, C, M>
+/// Commands in a transaction of the events' transaction manager: the
+/// handler and its repositories write in it, the events are appended in it
+/// last, it commits, then the commit is broadcast.
+impl<E, S, C, M> crate::UnitOfWork<E, crate::InTransaction<M::Tx>> for Events<E, S, C, M>
 where
     E: DomainEvent,
-    S: Send + Sync,
+    S: AppendEvents<E, M::Tx>,
     C: Send + Sync,
-    M: Send + Sync,
+    M: TransactionManager,
 {
-    fn announce(&self, events: Vec<EventEnvelope<E>>) {
+    const ROLLS_BACK: bool = M::ROLLS_BACK;
+
+    fn begin(&self) -> impl std::future::Future<Output = Result<M::Tx, StoreError>> + Send {
+        self.transactions.begin()
+    }
+
+    fn append(
+        &self,
+        tx: &mut M::Tx,
+        write: crate::Write<E>,
+    ) -> impl std::future::Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
+        crate::inline::append_write(&self.store, tx, write)
+    }
+
+    fn commit(&self, tx: M::Tx) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
+        self.transactions.commit(tx)
+    }
+
+    async fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        self.broadcast(events);
+    }
+}
+
+impl<E, S, C, M> Events<E, S, C, M> {
+    /// Hands committed `events` to the live feed (no receiver is fine).
+    fn broadcast(&self, events: Vec<EventEnvelope<E>>) {
         for event in events {
-            let _ = self.live.send(Arc::new(event)); // no receiver is fine
+            let _ = self.live.send(Arc::new(event));
         }
     }
 }

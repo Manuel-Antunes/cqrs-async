@@ -1722,9 +1722,70 @@ async fn save_kept(tx: &mut PgTransaction, clock: &cqrs::Loaded<KeptClock>) {
     .unwrap();
 }
 
-/// A repository keeping state commits it with the events, in a transaction
-/// it owns: rolled back, neither is there; committed, both are, and the
-/// announcement reaches processors. A stale version still conflicts.
+/// Ticks a clock whose state is kept in `clock_state`: the handler takes
+/// the unit's transaction, reads and saves the state in it, and records the
+/// ticks; the unit appends them in it and commits. `stale` decides on an old
+/// copy instead of the stored one; `fail_after_saving` fails once the state
+/// is written.
+#[cqrs::command(error = StoreError)]
+struct TickKept {
+    ticks: u64,
+    stale: Option<u64>,
+    fail_after_saving: bool,
+}
+
+struct TickKeptHandler;
+
+#[cqrs::command_handler]
+impl cqrs::CommandHandler for TickKeptHandler {
+    async fn handle(
+        &self,
+        command: &TickKept,
+        events: &mut cqrs::Appender<ClockEvent>,
+        tx: &mut PgTransaction,
+    ) -> Result<(), StoreError> {
+        let clock = match command.stale {
+            Some(version) => cqrs::Loaded::at(KeptClock { id: 1, ticks: version }, version),
+            None => find_kept_in(tx, 1).await.unwrap_or_else(|| cqrs::New(1).into()),
+        };
+        let from = clock.ticks + 1;
+        events.extend(ticks(from, command.ticks));
+        let clock = events.record(clock);
+        save_kept(tx, &clock).await;
+        if command.fail_after_saving {
+            return Err(StoreError::backend("failed after saving"));
+        }
+        Ok(())
+    }
+
+    /// Decided on a stale copy, it would be decided again: refuse instead.
+    fn conflict_retries(&self) -> u32 {
+        0
+    }
+}
+
+/// The kept state, read in the unit's transaction.
+async fn find_kept_in(tx: &mut PgTransaction, id: u32) -> Option<cqrs::Loaded<KeptClock>> {
+    let row: Option<(i64, i64)> = sqlx::query_as("SELECT ticks, version FROM clock_state WHERE id = $1")
+        .bind(i64::from(id))
+        .fetch_optional(&mut **tx)
+        .await
+        .unwrap();
+    row.map(|(ticks, version)| {
+        cqrs::Loaded::at(
+            KeptClock {
+                id,
+                ticks: ticks as u64,
+            },
+            version as u64,
+        )
+    })
+}
+
+/// A handler keeping state writes it with the events, in the unit of work
+/// the gateway opens and commits: failing after its write, neither is
+/// there; succeeding, both are, and the commit reaches subscribers. A stale
+/// version still conflicts, and undoes the state written with it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn state_and_events_commit_and_roll_back_together() {
     let pool = database_or_skip!();
@@ -1733,40 +1794,35 @@ async fn state_and_events_commit_and_roll_back_together() {
         .await
         .unwrap();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
-    let events = Events::new(store.clone());
+    let events = Events::new(store.clone()).with_transactions(PostgresTransactions::new(pool.clone()));
     let mut feed = std::pin::pin!(events.subscribe(0));
     let stream = StreamId::of::<KeptClock>(&1);
+    let send = |command: TickKept| cqrs::dispatch_command(&TickKeptHandler, command, Metadata::new(), &events);
 
-    // Rolled back: no state, no events.
-    let mut appender = cqrs::Appender::new();
-    appender.extend(ticks(1, 2));
-    let mut tx = pool.begin().await.unwrap();
-    let committed = appender
-        .commit_in(&mut tx, cqrs::New::<KeptClock>(1), &events)
-        .await
-        .unwrap();
-    save_kept(&mut tx, committed.entity()).await;
-    drop(committed);
-    drop(tx);
+    // Failed after saving: no state, no events.
+    let failed = send(TickKept {
+        ticks: 2,
+        stale: None,
+        fail_after_saving: true,
+    })
+    .await;
+    assert!(failed.is_err());
     assert!(find_kept(&pool, 1).await.is_none());
     assert!(store.load(&stream, 0).await.unwrap().is_empty());
 
-    // Committed: both, and the state is the events applied.
-    let mut appender = cqrs::Appender::new();
-    appender.extend(ticks(1, 2));
-    let mut tx = pool.begin().await.unwrap();
-    let committed = appender
-        .commit_in(&mut tx, cqrs::New::<KeptClock>(1), &events)
-        .await
-        .unwrap();
-    assert_eq!((committed.entity().ticks, committed.entity().version()), (2, Some(2)));
-    save_kept(&mut tx, committed.entity()).await;
-    tx.commit().await.unwrap();
-    let last = committed.last_position().unwrap();
-    committed.announce();
+    // Committed: both, the state being the events applied, and announced.
+    send(TickKept {
+        ticks: 2,
+        stale: None,
+        fail_after_saving: false,
+    })
+    .await
+    .unwrap();
     let kept = find_kept(&pool, 1).await.unwrap();
     assert_eq!((kept.ticks, kept.version()), (2, Some(2)));
-    assert_eq!(store.load(&stream, 0).await.unwrap().len(), 2);
+    let appended = store.load(&stream, 0).await.unwrap();
+    assert_eq!(appended.len(), 2);
+    let last = appended.last().unwrap().position;
     let seen = tokio::time::timeout(Duration::from_secs(5), async {
         let mut seen = 0;
         while seen < last {
@@ -1782,28 +1838,24 @@ async fn state_and_events_commit_and_roll_back_together() {
     .expect("announced");
     assert_eq!(seen, last);
 
-    // From the kept state: the next commit expects its version.
-    let mut appender = cqrs::Appender::new();
-    appender.extend(ticks(3, 1));
-    let mut tx = pool.begin().await.unwrap();
-    let committed = appender.commit_in(&mut tx, kept, &events).await.unwrap();
-    save_kept(&mut tx, committed.entity()).await;
-    tx.commit().await.unwrap();
-    committed.announce();
+    // From the kept state: the next unit expects its version.
+    send(TickKept {
+        ticks: 1,
+        stale: None,
+        fail_after_saving: false,
+    })
+    .await
+    .unwrap();
     assert_eq!(find_kept(&pool, 1).await.unwrap().version(), Some(3));
 
-    // A stale copy (version 2) conflicts, and its transaction is undone.
-    let stale = cqrs::Loaded::at(KeptClock { id: 1, ticks: 2 }, 2);
-    let mut appender = cqrs::Appender::new();
-    appender.extend(ticks(4, 1));
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("UPDATE clock_state SET ticks = 99 WHERE id = 1")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let refused = appender.commit_in(&mut tx, stale, &events).await;
+    // A stale copy (version 2) conflicts, and the state it wrote is undone.
+    let refused = send(TickKept {
+        ticks: 1,
+        stale: Some(2),
+        fail_after_saving: false,
+    })
+    .await;
     assert!(matches!(refused, Err(StoreError::Conflict { .. })), "{refused:?}");
-    drop(tx);
     let kept = find_kept(&pool, 1).await.unwrap();
     assert_eq!((kept.ticks, kept.version()), (3, Some(3)));
 }

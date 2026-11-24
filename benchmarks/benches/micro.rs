@@ -260,11 +260,12 @@ mod unit {
 
     use super::*;
 
-    /// A gateway of commands whose handler holds its publisher (baseline).
+    /// A gateway of commands and its unit of work (baseline).
     #[divan::bench]
     fn command_gateway(bencher: divan::Bencher) {
         let gateway = PingCommands {
-            ping: PingCommandHandler { events: NoStore },
+            ping: PingCommandHandler,
+            events: NoStore,
         };
         bencher.bench_local(|| now(gateway.send(Ping(black_box(1)))).unwrap());
     }
@@ -274,7 +275,8 @@ mod unit {
     fn command_through_unit(bencher: divan::Bencher) {
         let unit = Cqrs::from_publisher(NoStore)
             .commands(|events| PingCommands {
-                ping: PingCommandHandler { events },
+                ping: PingCommandHandler,
+                events,
             })
             .queries(())
             .build();

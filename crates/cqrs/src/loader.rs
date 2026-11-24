@@ -84,26 +84,20 @@ impl<A: Aggregate> Loaded<A> {
 
     /// The condition its commits are guarded by, if it was built from
     /// criteria.
-    #[cfg_attr(not(feature = "tokio"), allow(dead_code))] // only `Events` appends in a transaction
     pub(crate) fn condition(&self) -> Option<&AppendCondition> {
         self.condition.as_ref()
     }
 
-    /// This aggregate once `events` (just appended to its stream) are
-    /// applied, at the version they took it to.
-    pub(crate) fn after(mut self, events: &[EventEnvelope<A::Event>]) -> Self {
+    /// This aggregate once `events` (recorded for its stream, not appended
+    /// yet) are applied, at the version they take it to. One built from
+    /// criteria keeps no version: its condition guards it.
+    pub(crate) fn apply(&mut self, events: &[A::Event]) {
         for event in events {
-            self.aggregate.evolve(&event.payload);
+            self.aggregate.evolve(event);
         }
-        if let Some(last) = events.last() {
-            match &mut self.condition {
-                // Its own events match its criteria: the next commit checks
-                // only what others append after them.
-                Some(condition) => condition.after = last.position,
-                None => self.version = Some(last.sequence),
-            }
+        if self.condition.is_none() {
+            self.version = Some(self.version.unwrap_or(0) + events.len() as u64);
         }
-        self
     }
 
     /// The stream version this aggregate was loaded at (`None` when new).
@@ -121,11 +115,11 @@ impl<A: Aggregate> Loaded<A> {
 /// The aggregate `id`, not stored yet: what a creation commits to.
 ///
 /// A creation is decided without an instance, by an associated function of
-/// the aggregate (Axon 5's static creational command handler), and committed
-/// to `New`, which expects the stream not to exist:
+/// the aggregate (Axon 5's static creational command handler), and recorded
+/// for `New`, which expects the stream not to exist:
 ///
 /// ```
-/// # use cqrs::{Appender, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, testing::block_on};
+/// # use cqrs::{Appender, Autocommit, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, append_writes, testing::block_on};
 /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 /// # enum DoorEvent { Installed { id: u32 } }
 /// # #[cqrs::aggregate(event = DoorEvent)]
@@ -140,13 +134,16 @@ impl<A: Aggregate> Loaded<A> {
 ///
 /// # block_on(async {
 /// let publisher = InlinePublisher::new(InMemoryEventStore::new());
+/// // What a command's unit of work does, by hand: record, then append.
 /// let mut events = Appender::new();
 /// Door::install(1, &mut events);
-/// events.commit(New::<Door>(1), &publisher).await?;
+/// events.record(New::<Door>(1));
+/// append_writes::<_, Autocommit, _>(&publisher, &mut (), events.take_writes()).await?;
 ///
 /// // Once more: the stream exists now.
 /// Door::install(1, &mut events);
-/// let again = events.commit(New::<Door>(1), &publisher).await;
+/// events.record(New::<Door>(1));
+/// let again = append_writes::<_, Autocommit, _>(&publisher, &mut (), events.take_writes()).await;
 /// assert!(matches!(again, Err(StoreError::Conflict { .. })));
 /// # Ok::<(), StoreError>(())
 /// # }).unwrap();
