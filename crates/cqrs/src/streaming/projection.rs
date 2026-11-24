@@ -38,19 +38,38 @@ where
                 processor(P::processor_name(namespace), handler)
             })
             .collect();
+        Self::with_batches(processors)
+    }
+
+    /// `processors` with the batch each namespace asks for, if it does.
+    fn with_batches(processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M>>) -> Self {
+        let processors = processors
+            .into_iter()
+            .enumerate()
+            .map(|(namespace, processor)| match P::batch_size(namespace) {
+                Some(batch_size) => {
+                    let options = TrackingOptions {
+                        batch_size,
+                        ..processor.options()
+                    };
+                    processor.with_options(options)
+                }
+                None => processor,
+            })
+            .collect();
         Self { processors }
     }
 
-    /// Settings for every namespace's processor.
+    /// Settings for every namespace's processor; a namespace that sets its
+    /// batch (`batch = N` on its handler) keeps it.
     #[must_use]
     pub fn with_options(self, options: TrackingOptions) -> Self {
-        Self {
-            processors: self
-                .processors
+        Self::with_batches(
+            self.processors
                 .into_iter()
                 .map(|processor| processor.with_options(options))
                 .collect(),
-        }
+        )
     }
 
     /// Replays the projection from the start: resets every namespace's

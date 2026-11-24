@@ -2002,29 +2002,40 @@ async fn cost_per_namespace() {
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
     for clock in 0..500 {
         store
-            .append(&mut (), &stream(clock), ExpectedVersion::NoStream, ticks(1, 10), &Metadata::new())
+            .append(
+                &mut (),
+                &stream(clock),
+                ExpectedVersion::NoStream,
+                ticks(1, 10),
+                &Metadata::new(),
+            )
             .await
             .unwrap();
     }
     let head = store.last_position().await.unwrap();
     let events = cqrs_postgres::Postgres::new(pool.clone()).events::<ClockEvent>("clocks");
     let stats = || async {
-        let (xacts, rows): (i64, i64) = sqlx::query_as(
-            "SELECT xact_commit, tup_returned FROM pg_stat_database WHERE datname = current_database()",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (xacts, rows): (i64, i64) =
+            sqlx::query_as("SELECT xact_commit, tup_returned FROM pg_stat_database WHERE datname = current_database()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         (xacts, rows)
     };
     // `CQRS_BATCH=n`: n events per unit of work (the processors' batch_size).
-    let batch_size = std::env::var("CQRS_BATCH").ok().and_then(|n| n.parse().ok()).unwrap_or(1);
+    let batch_size = std::env::var("CQRS_BATCH")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
     let options = TrackingOptions {
         batch_size,
         ..TrackingOptions::default()
     };
     for (name, namespaces) in [("one namespace", 1), ("four namespaces", 4)] {
-        sqlx::query("SELECT pg_stat_clear_snapshot()").execute(&pool).await.unwrap();
+        sqlx::query("SELECT pg_stat_clear_snapshot()")
+            .execute(&pool)
+            .await
+            .unwrap();
         let before = stats().await;
         let started = std::time::Instant::now();
         let running = if namespaces == 1 {

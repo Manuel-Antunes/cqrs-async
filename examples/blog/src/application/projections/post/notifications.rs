@@ -27,7 +27,9 @@ impl fmt::Display for NotificationError {
 impl std::error::Error for NotificationError {}
 
 /// Announces every post that gets published. A notification already went
-/// out: a replay must not send it again, so it does not see replays.
+/// out: a replay must not send it again, so it does not see replays; and
+/// it is not undone with a transaction, so it takes events one at a time
+/// (no `batch`): a failing batch, handled again, would send it twice.
 #[cqrs::event_handler(namespace = "notifications")]
 impl<S: Send + Sync, N: Notifier> EventHandler for PostProjection<S, N> {
     const REPLAY: bool = false;

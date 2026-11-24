@@ -14,8 +14,9 @@
 //!     sent: Mutex<Vec<String>>,
 //! }
 //!
-//! /// A read model: rebuilt by a replay.
-//! #[cqrs::event_handler(namespace = "counts")]
+//! /// A read model: rebuilt by a replay. Everything it does is undone with
+//! /// its transaction, so it takes events by batches.
+//! #[cqrs::event_handler(namespace = "counts", batch = 64)]
 //! impl EventHandler for PostProjection {
 //!     async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
 //!         if let PostEvent::Published = event.payload {
@@ -58,6 +59,20 @@
 //!
 //! fn runs<P: cqrs::Route<()>>(_: P) {}
 //! runs(PostProjection); // "notifications" has no handler
+//! ```
+//!
+//! a batch on a handler of no namespace (a processor's batch is in its
+//! options):
+//!
+//! ```compile_fail
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
+//! struct Counts;
+//!
+//! #[cqrs::event_handler(batch = 8)]
+//! impl EventHandler for Counts {
+//!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
+//! }
 //! ```
 //!
 //! and a handler for a namespace the projection does not list:
@@ -135,6 +150,11 @@ pub trait Route<Tx: Send>: Projection {
     /// Whether the handler of `namespace` sees replays
     /// ([`EventHandler::REPLAY`]): a read model does, a side effect does not.
     fn replays(namespace: usize) -> bool;
+
+    /// The events per unit of work `namespace` asks for
+    /// (`#[cqrs::event_handler(namespace = "...", batch = N)]`): it wins over
+    /// the processors' options. `None`: theirs.
+    fn batch_size(namespace: usize) -> Option<usize>;
 }
 
 /// The handler of one namespace of a projection, the namespace named by
@@ -149,6 +169,14 @@ pub trait Route<Tx: Send>: Projection {
 pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>: HasNamespace<ID> + Send + Sync {
     /// As [`EventHandler::REPLAY`].
     const REPLAY: bool = true;
+
+    /// Events handled in one unit of work, with one token update, when the
+    /// namespace sets it (`batch = N`). Larger is much faster, as long as
+    /// everything the handler does is undone with its transaction: a batch
+    /// that fails is rolled back and handled again one event at a time, so
+    /// a side effect (a notification) would happen again. `None`: the
+    /// processors' options (1 by default, as Axon's).
+    const BATCH_SIZE: Option<usize> = None;
 
     /// As [`EventHandler::handle`].
     fn handle(
@@ -278,5 +306,9 @@ impl<P: Route<Tx>, Tx: Send> Route<Tx> for Arc<P> {
 
     fn replays(namespace: usize) -> bool {
         P::replays(namespace)
+    }
+
+    fn batch_size(namespace: usize) -> Option<usize> {
+        P::batch_size(namespace)
     }
 }

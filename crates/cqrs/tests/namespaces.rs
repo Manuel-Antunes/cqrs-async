@@ -31,7 +31,7 @@ struct ClockProjection {
     alerts_up: AtomicBool,
 }
 
-#[cqrs::event_handler(namespace = "counts")]
+#[cqrs::event_handler(namespace = "counts", batch = 64)]
 impl EventHandler for ClockProjection {
     async fn handle(&self, event: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
         let Ticked::Tick(n) = event.payload;
@@ -98,6 +98,10 @@ async fn each_namespace_runs_on_its_own_and_only_read_models_replay() {
     running.caught_up(last).await;
     assert_eq!(*projection.alerted.lock().unwrap(), [1, 2, 3]);
     running.stop().await;
+
+    // `counts` asks for batches of 64; `alerts` takes the processors' options.
+    assert_eq!(<ClockProjection as cqrs::Route<()>>::batch_size(0), Some(64));
+    assert_eq!(<ClockProjection as cqrs::Route<()>>::batch_size(1), None);
 
     // Each namespace has its own token, named after the projection.
     assert_eq!(ClockProjection::processor_name(0), "clock.counts");

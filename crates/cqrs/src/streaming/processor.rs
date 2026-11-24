@@ -240,6 +240,11 @@ where
     M: TransactionManager + 'static,
     D: DeadLetterQueue<E, M::Tx> + 'static,
 {
+    /// Its settings.
+    pub fn options(&self) -> TrackingOptions {
+        self.options
+    }
+
     /// Replaces the default settings.
     #[must_use]
     pub fn with_options(mut self, options: TrackingOptions) -> Self {

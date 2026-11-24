@@ -18,20 +18,37 @@ use crate::krate;
 pub struct HandlerArguments {
     /// `namespace = "..."`: the projection's namespace it handles.
     pub namespace: Option<LitStr>,
+    /// `batch = N`: events per unit of work of the namespace's processor.
+    pub batch: Option<syn::LitInt>,
 }
 
 impl syn::parse::Parse for HandlerArguments {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
         let mut arguments = Self::default();
-        if input.is_empty() {
-            return Ok(arguments);
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            match key.to_string().as_str() {
+                "namespace" => arguments.namespace = Some(input.parse()?),
+                "batch" => {
+                    let batch: syn::LitInt = input.parse()?;
+                    if batch.base10_parse::<usize>()? == 0 {
+                        return Err(Error::new(batch.span(), "a batch holds at least one event"));
+                    }
+                    arguments.batch = Some(batch);
+                }
+                _ => return Err(Error::new(key.span(), "expected `namespace = \"...\"` or `batch = N`")),
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+            }
         }
-        let key: syn::Ident = input.parse()?;
-        if key != "namespace" {
-            return Err(Error::new(key.span(), "expected `namespace = \"...\"`"));
+        if let (Some(batch), None) = (&arguments.batch, &arguments.namespace) {
+            return Err(Error::new(
+                batch.span(),
+                "`batch` is a namespace's: a handler run on its own gets it from its processor's options",
+            ));
         }
-        input.parse::<syn::Token![=]>()?;
-        arguments.namespace = Some(input.parse()?);
         Ok(arguments)
     }
 }
@@ -93,6 +110,12 @@ pub fn event_handler(arguments: HandlerArguments, mut item: ItemImpl) -> Result<
         }
     };
 
+    if let Some(batch) = &arguments.batch {
+        item.items.insert(
+            0,
+            parse_quote!(const BATCH_SIZE: ::core::option::Option<usize> = ::core::option::Option::Some(#batch);),
+        );
+    }
     let (_, trait_path, _) = item.trait_.as_mut().expect("checked above");
     // The path as written (`EventHandler`), still referred to below so its
     // import does not read as unused once the impl names another trait.
@@ -237,7 +260,8 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
     let commits = ids.iter().map(&handler);
     let resets = ids.iter().map(&handler);
     let replays = ids.iter().map(&handler);
-    let (i1, i2, i3, i4) = (&indices, &indices, &indices, &indices);
+    let batches = ids.iter().map(&handler);
+    let (i1, i2, i3, i4, i5) = (&indices, &indices, &indices, &indices, &indices);
 
     Ok(quote! {
         #item
@@ -287,6 +311,13 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
                 match namespace {
                     #(#i4 => #replays::REPLAY,)*
                     _ => true,
+                }
+            }
+
+            fn batch_size(namespace: usize) -> ::core::option::Option<usize> {
+                match namespace {
+                    #(#i5 => #batches::BATCH_SIZE,)*
+                    _ => ::core::option::Option::None,
                 }
             }
         }

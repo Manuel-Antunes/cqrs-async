@@ -378,4 +378,8 @@ where
     fn replays(namespace: usize) -> bool {
         P::replays(namespace)
     }
+
+    fn batch_size(namespace: usize) -> Option<usize> {
+        P::batch_size(namespace)
+    }
 }
