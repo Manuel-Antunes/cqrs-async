@@ -84,6 +84,7 @@ impl<A: Aggregate> Loaded<A> {
 
     /// The condition its commits are guarded by, if it was built from
     /// criteria.
+    #[cfg_attr(not(feature = "tokio"), allow(dead_code))] // only `Events` appends in a transaction
     pub(crate) fn condition(&self) -> Option<&AppendCondition> {
         self.condition.as_ref()
     }

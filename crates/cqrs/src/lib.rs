@@ -28,6 +28,8 @@
 //! # Features
 //!
 //! - `derive` (default): the derives and `#[derive(Gateway)]`.
+//! - `json`: events stored as JSON, upcasters, and the `Json` codec.
+//! - `protobuf`: the `Protobuf` [`Codec`], for `prost` messages.
 //! - `tokio` (default): live event processing, [`Events`]: catch-up
 //!   subscriptions, tracking processors and the broadcast after commit.
 //!   Without it the crate is runtime-agnostic: every contract is a `Future`
@@ -39,12 +41,14 @@
 extern crate self as cqrs;
 
 mod aggregate;
+mod codec;
 mod command_handler;
 mod criteria;
 mod cursor;
 mod dead_letter;
 mod event;
 mod feed;
+mod forward;
 mod inline;
 mod interceptor;
 mod loader;
@@ -62,6 +66,11 @@ mod unit;
 mod upcast;
 
 pub use aggregate::{Aggregate, EventAppender};
+#[cfg(feature = "json")]
+pub use codec::Json;
+#[cfg(feature = "protobuf")]
+pub use codec::Protobuf;
+pub use codec::{Codec, CodecError};
 pub use command_handler::{
     Announce, Appender, CommandHandler, Committed, EventPublisher, Pending, PublishIn, dispatch_command,
 };
@@ -70,6 +79,7 @@ pub use cursor::{Cursor, Gap, Horizon};
 pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
+pub use forward::{FixedTopic, Forward, Outgoing, Publish, RoutedTopic, TopicOf};
 pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
 pub use loader::{AggregateLoader, Loaded, New, NotFound};

@@ -74,27 +74,44 @@ pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared
 // with any other store keeping JSON.
 pub use cqrs::{StoredEvent, Upcast, Upcaster, upcast};
+/// The `sqlx` this crate is built on: [`PgPool`](sqlx::PgPool) and
+/// [`PgTransaction`] are in its API, so a new major version of `sqlx` is a
+/// breaking change of this crate. Use this one to name them.
+pub use sqlx;
 
 use cqrs::StoreError;
 use sqlx::PgPool;
 
-/// Creates the tables (idempotent): `cqrs_events`, `cqrs_event_tags`,
-/// `cqrs_snapshots`, `cqrs_tokens`, `cqrs_dead_letters`.
+/// The schema, as SQL migrations in order (name, statements): for the
+/// application's own migration tool (`sqlx migrate`, `sea-orm-migration`,
+/// refinery...), which then owns when they run.
+///
+/// The tables keep their names (`cqrs_events`, `cqrs_event_tags`,
+/// `cqrs_snapshots`, `cqrs_tokens`, `cqrs_dead_letters`): every statement
+/// of this crate is checked against them at compile time. To keep them apart
+/// from the application's, run the migrations and the stores in a schema of
+/// their own, chosen by the connection's `search_path`
+/// (`PgConnectOptions::options([("search_path", "events")])`).
+pub const MIGRATIONS: &[(&str, &str)] = &[("0001_cqrs", include_str!("../migrations/0001_cqrs.sql"))];
+
+/// Creates the tables (idempotent), for applications that let the crate
+/// run its own [`MIGRATIONS`]: in one implicit transaction behind a lock, so
+/// instances starting together run them one after the other.
 ///
 /// # Errors
 ///
 /// If the database refuses the statements.
 pub async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
-    sqlx::raw_sql(SCHEMA).execute(pool).await.map_err(backend)?;
+    let mut schema = String::from("SELECT pg_advisory_xact_lock(7239048102394);\n");
+    for (_, statements) in MIGRATIONS {
+        schema.push_str(statements);
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(schema))
+        .execute(pool)
+        .await
+        .map_err(backend)?;
     Ok(())
 }
-
-/// The migrations, in one implicit transaction behind a lock: instances
-/// starting together run them one after the other.
-const SCHEMA: &str = concat!(
-    "SELECT pg_advisory_xact_lock(7239048102394);\n",
-    include_str!("../migrations/0001_cqrs.sql"),
-);
 
 /// Any database failure, as the core sees it: the original error, kept as
 /// the source.

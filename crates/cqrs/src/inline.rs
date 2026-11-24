@@ -268,6 +268,7 @@ where
 /// Appends `pending` to `entity`'s stream in `store`, within `tx`, expecting
 /// the version it was loaded at and the conditions of what was read: what
 /// every [`PublishIn`](crate::PublishIn) does.
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))] // only `Events` appends in a transaction
 pub(crate) async fn append_in<E, A, S, Tx>(
     store: &S,
     tx: &mut Tx,

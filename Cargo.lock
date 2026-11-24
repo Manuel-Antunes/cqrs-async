@@ -433,6 +433,7 @@ dependencies = [
  "cqrs-derive",
  "futures-core",
  "futures-util",
+ "prost",
  "serde",
  "serde_json",
  "tokio",
@@ -1843,6 +1844,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef0b569d1d907ab3a28596aee62cf1f61dacb0529a4bedcd8e7460e2d5228b4"
+dependencies = [
+ "bytes",
 ]
 
 [[package]]
