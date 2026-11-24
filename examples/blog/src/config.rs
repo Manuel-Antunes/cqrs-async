@@ -136,7 +136,7 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscription
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
-    let app = Cqrs::new(store, InMemoryTokenStore::default())
+    let app = Cqrs::new(Events::new(store))
         .commands(|events| PostCommandGateway::new(posts, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))

@@ -20,8 +20,20 @@ use super::{
 };
 use crate::{
     Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
-    ProcessingContext, StoreError, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
+    ProcessingContext, StoreError, TokenStore, TrackingToken, TransactionManager, segment_of,
 };
+
+/// What moving a segment's token did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenUpdate {
+    /// Nothing: the processor stores the cursor itself.
+    Untouched,
+    /// Moved past the event, atomically with the handler's effects.
+    Stored,
+    /// Another instance holds the segment now; nothing was committed and
+    /// the processor stops handling it.
+    ClaimLost,
+}
 
 /// How a [`TrackingProcessor`] splits, claims, reads and retries.
 #[derive(Clone, Copy, Debug)]
@@ -102,11 +114,13 @@ impl Default for TrackingOptions {
 ///   only holds back its own segment. With a dead-letter queue, after
 ///   `dead_letter_after` attempts it is parked together with the later
 ///   events of its aggregate, and everything else keeps flowing.
-/// - **At-least-once.** A position is stored after the event is handled, so
-///   an event handled just before a crash (or a lost claim) is handled again:
-///   handlers must be idempotent. A SQL token store can store the position in
-///   the handler's own transaction to make it exactly-once.
-pub struct TrackingProcessor<E, S, H, T, D = ()> {
+/// - **One unit of work per event.** The transaction manager `M` opens it;
+///   the handler, the token store `T` and the dead-letter queue `D` borrow
+///   it; it commits the handler's changes with the token. A read model in
+///   the same database as the tokens applies each event exactly once.
+///   Outside of it (an e-mail, a call to another service), delivery is
+///   at-least-once: an event handled just before a crash is handled again.
+pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     /// Key of the tokens, and the name in logs.
     name: String,
     /// Where the events are read from.
@@ -117,6 +131,8 @@ pub struct TrackingProcessor<E, S, H, T, D = ()> {
     handler: Arc<H>,
     /// Positions and claims.
     tokens: Arc<T>,
+    /// Opens and commits the units of work.
+    transactions: Arc<M>,
     /// Parked events.
     dead_letters: Arc<D>,
     /// Splitting, claiming, reading and retry settings.
@@ -148,22 +164,32 @@ impl ProcessorStatus {
     }
 }
 
-impl<E, S, H, T> TrackingProcessor<E, S, H, T>
+impl<E, S, H, T, M> TrackingProcessor<E, S, H, T, M>
 where
     E: DomainEvent,
     S: EventStore<E> + Clone + 'static,
-    H: EventHandler<E, T::Transaction> + 'static,
-    T: TransactionalTokenStore + 'static,
+    H: EventHandler<E, M::Tx> + 'static,
+    T: TokenStore<Tx = M::Tx> + 'static,
+    M: TransactionManager + 'static,
 {
-    /// A processor named `name` feeding `handler`. The store must be the one
-    /// the engine appends to, shared (`Arc`), so it is `Clone`.
-    pub fn new(name: impl Into<String>, store: S, live: &LiveEvents<E>, handler: H, tokens: T) -> Self {
+    /// A processor named `name` feeding `handler`, in units of work from
+    /// `transactions` that its tokens join. The store must be the one the
+    /// publisher appends to (a handle, so it is `Clone`).
+    pub fn new(
+        name: impl Into<String>,
+        store: S,
+        live: &LiveEvents<E>,
+        handler: H,
+        tokens: T,
+        transactions: M,
+    ) -> Self {
         Self {
             name: name.into(),
             store,
             live: live.clone(),
             handler: Arc::new(handler),
             tokens: Arc::new(tokens),
+            transactions: Arc::new(transactions),
             dead_letters: Arc::new(()),
             options: TrackingOptions::default(),
             replay_until: AtomicU64::new(0),
@@ -171,13 +197,14 @@ where
     }
 }
 
-impl<E, S, H, T, D> TrackingProcessor<E, S, H, T, D>
+impl<E, S, H, T, M, D> TrackingProcessor<E, S, H, T, M, D>
 where
     E: DomainEvent,
     S: EventStore<E> + Clone + 'static,
-    H: EventHandler<E, T::Transaction> + 'static,
-    T: TransactionalTokenStore + 'static,
-    D: DeadLetterQueue<E, T::Transaction> + 'static,
+    H: EventHandler<E, M::Tx> + 'static,
+    T: TokenStore<Tx = M::Tx> + 'static,
+    M: TransactionManager + 'static,
+    D: DeadLetterQueue<E, M::Tx> + 'static,
 {
     /// Replaces the default settings.
     #[must_use]
@@ -188,11 +215,11 @@ where
 
     /// Parks events in `queue` after `after` failed attempts (with the later
     /// events of their aggregate) instead of retrying forever. The queue
-    /// joins the token store's unit of work, so it is the one of that store:
-    /// a queue of another one is refused here.
-    pub fn with_dead_letters<D2>(self, queue: D2, after: u32) -> TrackingProcessor<E, S, H, T, D2>
+    /// joins the processor's units of work: a queue that cannot (in memory,
+    /// for a database's) is refused here.
+    pub fn with_dead_letters<D2>(self, queue: D2, after: u32) -> TrackingProcessor<E, S, H, T, M, D2>
     where
-        D2: DeadLetterQueue<E, T::Transaction>,
+        D2: DeadLetterQueue<E, M::Tx>,
     {
         TrackingProcessor {
             name: self.name,
@@ -200,6 +227,7 @@ where
             live: self.live,
             handler: self.handler,
             tokens: self.tokens,
+            transactions: self.transactions,
             dead_letters: Arc::new(queue),
             options: TrackingOptions {
                 dead_letter_after: Some(after.max(1)),
@@ -227,16 +255,16 @@ where
         if !self.tokens.reset(&self.name, clock(), replay_until).await? {
             return Err(ResetError::Running);
         }
-        let mut tx = self.tokens.begin().await?;
+        let mut tx = self.transactions.begin().await?;
         self.handler
             .reset(&mut ProcessingContext::new(&mut tx, false))
             .await
             .map_err(ResetError::Handler)?;
-        Ok(self.tokens.commit(tx).await?)
+        Ok(self.transactions.commit(tx).await?)
     }
 
     /// Retries the events this processor parked (Axon's dead-letter
-    /// processor), each in a unit of work of its token store: see
+    /// processor), each in a unit of work of its own: see
     /// [`retry_dead_letters`](crate::retry_dead_letters). Run it once the
     /// cause is fixed; running instances may keep parking meanwhile.
     ///
@@ -244,7 +272,7 @@ where
     ///
     /// The queue's, or a unit of work that cannot begin or commit.
     pub async fn retry_dead_letters(&self) -> Result<crate::RetryOutcome, StoreError> {
-        crate::retry_dead_letters(&*self.dead_letters, &self.name, &*self.tokens, &*self.handler).await
+        crate::retry_dead_letters(&*self.dead_letters, &self.name, &*self.transactions, &*self.handler).await
     }
 
     /// Starts the processor (its coordinator, then one worker per claimed
@@ -711,7 +739,7 @@ where
             return Ok(TokenUpdate::Untouched);
         };
         let replay_until = self.replay_until.load(Ordering::Relaxed);
-        let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
+        let mut tx = self.transactions.begin().await.map_err(HandlerError::from)?;
         for (event, _) in batch {
             let replay = event.position <= replay_until;
             self.handler
@@ -725,10 +753,10 @@ where
             replay: last.position <= replay_until,
             cursor,
         };
-        if let TokenUpdate::ClaimLost = self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
+        if !self.tokens.store(&mut tx, token).await.map_err(HandlerError::from)? {
             return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls back
         }
-        self.tokens.commit(tx).await.map_err(HandlerError::from)?;
+        self.transactions.commit(tx).await.map_err(HandlerError::from)?;
         for (event, _) in batch {
             self.handler.committed_in(event, event.position <= replay_until).await;
         }
@@ -811,23 +839,22 @@ where
     }
 
     /// One attempt: `event` handled and the token stored in one unit of
-    /// work from the token store, committed together; then the handler's
-    /// post-commit step. A lost claim rolls the unit back.
+    /// work, committed together; then the handler's post-commit step. A
+    /// lost claim rolls the unit back.
     async fn handle_in_unit_of_work(
         &self,
         event: &EventEnvelope<E>,
         token: TrackingToken<'_>,
     ) -> Result<TokenUpdate, HandlerError> {
-        let mut tx = self.tokens.begin().await.map_err(HandlerError::from)?;
+        let mut tx = self.transactions.begin().await.map_err(HandlerError::from)?;
         self.handler
             .handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay))
             .await?;
-        match self.tokens.store_in(&mut tx, token).await.map_err(HandlerError::from)? {
+        if !self.tokens.store(&mut tx, token).await.map_err(HandlerError::from)? {
             // Another instance owns the segment: dropping `tx` rolls back.
-            TokenUpdate::ClaimLost => return Ok(TokenUpdate::ClaimLost),
-            TokenUpdate::Stored | TokenUpdate::Untouched => {}
+            return Ok(TokenUpdate::ClaimLost);
         }
-        self.tokens.commit(tx).await.map_err(HandlerError::from)?;
+        self.transactions.commit(tx).await.map_err(HandlerError::from)?;
         self.handler.committed_in(event, token.replay).await;
         Ok(TokenUpdate::Stored)
     }
@@ -884,23 +911,40 @@ where
         cause: &str,
         token: TrackingToken<'_>,
     ) -> Result<TokenUpdate, StoreError> {
-        let mut tx = self.tokens.begin().await?;
+        let mut tx = self.transactions.begin().await?;
         let letter = DeadLetter {
             sequence: sequence.to_owned(),
             event: Arc::clone(event),
             cause: cause.to_owned(),
         };
         self.dead_letters.enqueue_in(&mut tx, &self.name, letter).await?;
-        let update = self.tokens.store_in(&mut tx, token).await?;
-        if update != TokenUpdate::ClaimLost {
-            self.tokens.commit(tx).await?;
+        if !self.tokens.store(&mut tx, token).await? {
+            return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls the letter back
         }
-        Ok(update)
+        self.transactions.commit(tx).await?;
+        Ok(TokenUpdate::Stored)
     }
 
-    /// Stores the segment's cursor. `false`: the claim was lost.
+    /// Stores the segment's cursor, in a unit of work of its own (no event
+    /// was handled: other segments' events moved it). `false`: the claim
+    /// was lost.
     async fn store_position(&self, segment: u32, owner: &str, cursor: &Cursor) -> bool {
-        match self.tokens.store(&self.name, segment, owner, cursor).await {
+        let token = TrackingToken {
+            processor: &self.name,
+            segment,
+            owner,
+            replay: false,
+            cursor,
+        };
+        let stored = async {
+            let mut tx = self.transactions.begin().await?;
+            let owned = self.tokens.store(&mut tx, token).await?;
+            if owned {
+                self.transactions.commit(tx).await?;
+            }
+            Ok::<_, StoreError>(owned)
+        };
+        match stored.await {
             Ok(owned) => owned,
             Err(error) => {
                 // Only means handling events again after a restart.

@@ -56,6 +56,7 @@ mod store;
 mod streaming;
 pub mod testing;
 mod token;
+mod transaction;
 mod unit;
 #[cfg(feature = "json")]
 mod upcast;
@@ -74,7 +75,7 @@ pub use message::{
     Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
     ProcessingContext, Query, QueryGateway,
 };
-pub use projection::{Projection, TransactionalTokenStore};
+pub use projection::Projection;
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
 pub use store::{EventStore, ExpectedVersion, InMemoryEventStore, Recorded, StoreError, TaggedEvent};
 #[cfg(feature = "tokio")]
@@ -83,7 +84,8 @@ pub use streaming::{
     Projected, ProjectionProgress, QueryUpdateEmitter, ResetError, SubscriptionOptions, SubscriptionQueries,
     TrackingOptions, TrackingProcessor, UpdatesOf, subscribe,
 };
-pub use token::{InMemoryTokenStore, TokenStore, TokenUpdate, TrackingToken, segment_of};
+pub use token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
+pub use transaction::TransactionManager;
 pub use unit::{Cqrs, CqrsBuilder};
 #[cfg(feature = "json")]
 pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};

@@ -12,7 +12,9 @@ use cqrs::{
     EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext,
     ProcessorHandle, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
-use cqrs_postgres::{PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore};
+use cqrs_postgres::{
+    PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, PostgresTransactions,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
@@ -150,7 +152,7 @@ impl<B: CommandGateway<Execute> + 'static> EventHandler for TransferPolicy<B> {
 }
 
 type Store = PostgresEventStore<AccountEvent>;
-type OurEvents = Events<AccountEvent, Store, PostgresTokenStore>;
+type OurEvents = Events<AccountEvent, Store, PostgresTokenStore, PostgresTransactions>;
 type Repo<N> = AggregateLoader<OurAccount, Store, N>;
 
 pub struct Ours<N> {
@@ -210,8 +212,9 @@ where
         .execute(&pool)
         .await
         .expect("creating the view");
-        let events =
-            Events::new(Store::new(pool.clone(), "accounts")).with_tokens(PostgresTokenStore::new(pool.clone()));
+        let events = Events::new(Store::new(pool.clone(), "accounts"))
+            .with_tokens(PostgresTokenStore::new(pool.clone()))
+            .with_transactions(PostgresTransactions::new(pool.clone()));
         let accounts = Arc::new(snapshots(AggregateLoader::new(events.store().clone())));
         let execute = ExecuteHandler {
             accounts: EventSourcedAccounts(accounts),

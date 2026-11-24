@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{DomainEvent, EventEnvelope, EventHandler, ProcessingContext, StoreError, TransactionalTokenStore};
+use crate::{DomainEvent, EventEnvelope, EventHandler, ProcessingContext, StoreError, TransactionManager};
 
 /// An event a processor gave up on, for now.
 #[derive(Debug)]
@@ -35,14 +35,14 @@ impl<E> Clone for DeadLetter<E> {
 
 /// Parked events per processor and sequence, oldest first.
 ///
-/// `Tx` is the unit of work of the processor's token store
-/// ([`TransactionalTokenStore::Transaction`]). A letter enters and leaves the
-/// queue inside one: parked in the unit of work that moves the token past
-/// its event, removed in the one that applies it. So a crash can neither lose
-/// a letter nor apply its event twice, and a queue only fits the token store
-/// whose unit of work it joins: `InMemoryDeadLetters` goes with
-/// `InMemoryTokenStore` (`Tx = ()`), not with a database's, where its
-/// letters would be lost on restart with the tokens already past them.
+/// `Tx` is the processor's unit of work (its
+/// [`TransactionManager::Tx`](crate::TransactionManager::Tx)). A letter
+/// enters and leaves the queue inside one: parked in the unit of work that
+/// moves the token past its event, removed in the one that applies it. So a
+/// crash can neither lose a letter nor apply its event twice, and a queue
+/// only fits the units of work it can join: `InMemoryDeadLetters` goes with
+/// tokens in memory (`Tx = ()`), not with a database's, where its letters
+/// would be lost on restart with the tokens already past them.
 ///
 /// ```compile_fail,E0277
 /// use cqrs::{DeadLetterQueue, InMemoryDeadLetters};
@@ -219,14 +219,14 @@ pub struct RetryOutcome {
 
 /// Retries `processor`'s parked events with `handler`, each sequence in
 /// order, stopping a sequence at its first failure (so it stays ordered).
-/// Run it once the cause is fixed, with the same handler and token store
-/// the processor uses (or [`TrackingProcessor::retry_dead_letters`]).
+/// Run it once the cause is fixed, with the same handler and transaction
+/// manager the processor uses (or [`TrackingProcessor::retry_dead_letters`]).
 ///
-/// Each event runs in its own unit of work from `units`, as in the
+/// Each event runs in its own unit of work from `transactions`, as in the
 /// processor: `handle`, the letter's removal, commit, then `committed`. A
 /// failure rolls its changes back and the letter stays. The removal commits
-/// with what the handler wrote: with a transactional token store, a crash
-/// (or another retry running at the same time) never applies a parked event
+/// with what the handler wrote: in a database transaction, a crash (or
+/// another retry running at the same time) never applies a parked event
 /// twice, nor removes one that was not handled.
 ///
 /// # Errors
@@ -234,22 +234,22 @@ pub struct RetryOutcome {
 /// If the queue itself fails, or a unit of work cannot begin or commit.
 ///
 /// [`TrackingProcessor::retry_dead_letters`]: crate::TrackingProcessor::retry_dead_letters
-pub async fn retry_dead_letters<E, Q, T, H>(
+pub async fn retry_dead_letters<E, Q, M, H>(
     queue: &Q,
     processor: &str,
-    units: &T,
+    transactions: &M,
     handler: &H,
 ) -> Result<RetryOutcome, StoreError>
 where
     E: DomainEvent,
-    Q: DeadLetterQueue<E, T::Transaction>,
-    T: TransactionalTokenStore,
-    H: EventHandler<E, T::Transaction>,
+    Q: DeadLetterQueue<E, M::Tx>,
+    M: TransactionManager,
+    H: EventHandler<E, M::Tx>,
 {
     let mut outcome = RetryOutcome::default();
     for sequence in queue.sequences(processor).await? {
         while let Some(letter) = queue.first(processor, &sequence).await? {
-            let mut tx = units.begin().await?;
+            let mut tx = transactions.begin().await?;
             if handler
                 .handle(&letter.event, &mut ProcessingContext::new(&mut tx, false))
                 .await
@@ -263,7 +263,7 @@ where
                 // what this one did, and the next letter is looked up again.
                 continue;
             }
-            units.commit(tx).await?;
+            transactions.commit(tx).await?;
             handler.committed(&letter.event).await;
             outcome.handled += 1;
         }

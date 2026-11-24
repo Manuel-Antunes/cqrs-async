@@ -19,7 +19,17 @@ use crate::{Cursor, StoreError};
 /// once they expire, another one takes the segments over from their stored
 /// positions. Times are milliseconds on a clock the caller provides (a SQL
 /// adapter may use the database's own clock instead).
+///
+/// Moving a token past an event is done in the unit of work the event was
+/// handled in ([`store`](Self::store) borrows its `Tx`), so a read model in
+/// the same database commits with its token: each event is applied once.
+/// Claims and resets are bookkeeping of their own, outside any unit of work.
 pub trait TokenStore: Send + Sync {
+    /// The unit of work tokens are moved in: that of the
+    /// [`TransactionManager`](crate::TransactionManager) the processor runs
+    /// with (`()` in memory, a database transaction in SQL).
+    type Tx: Send;
+
     /// Gives `processor` `segments` segments at the start, unless it
     /// already has some. Returns how many segments it has: the count is
     /// fixed by whoever initializes first.
@@ -38,15 +48,13 @@ pub trait TokenStore: Send + Sync {
         until: u64,
     ) -> impl Future<Output = Result<Option<Cursor>, StoreError>> + Send;
 
-    /// Records that `segment` handled everything `cursor` saw, if `owner`
-    /// still holds it. `false` means the claim was lost: the caller must
-    /// stop processing the segment.
+    /// Moves `token`'s segment to its cursor within `tx`, if its owner still
+    /// holds it. `false`: the claim was lost; the caller drops `tx` (rolling
+    /// back what was handled in it) and stops processing the segment.
     fn store(
         &self,
-        processor: &str,
-        segment: u32,
-        owner: &str,
-        cursor: &Cursor,
+        tx: &mut Self::Tx,
+        token: TrackingToken<'_>,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     /// Gives `segment` up, if `owner` holds it.
@@ -79,9 +87,8 @@ pub trait TokenStore: Send + Sync {
 }
 
 /// Which token a tracking processor moves past an event, in the same unit
-/// of work as the handler's changes
-/// ([`TransactionalTokenStore::store_in`](crate::TransactionalTokenStore::store_in)):
-/// Axon's token stored with the projection.
+/// of work as the handler's changes ([`TokenStore::store`]): Axon's token
+/// stored with the projection.
 #[derive(Clone, Copy, Debug)]
 pub struct TrackingToken<'a> {
     /// The processor's name.
@@ -96,19 +103,6 @@ pub struct TrackingToken<'a> {
     pub replay: bool,
     /// The segment's cursor once the event is handled: what to store.
     pub cursor: &'a Cursor,
-}
-
-/// What storing a token did
-/// ([`TransactionalTokenStore::store_in`](crate::TransactionalTokenStore::store_in)).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenUpdate {
-    /// Nothing: the processor stores the cursor itself.
-    Untouched,
-    /// Moved past the event, atomically with the handler's effects.
-    Stored,
-    /// Another instance holds the segment now; nothing was committed and
-    /// the processor stops handling it.
-    ClaimLost,
 }
 
 /// One segment's token.
@@ -156,7 +150,11 @@ impl InMemoryTokenStore {
     }
 }
 
+/// In memory, a crash loses the read model and the tokens together: there
+/// is nothing to roll back, and the unit of work is `()`.
 impl TokenStore for InMemoryTokenStore {
+    type Tx = ();
+
     async fn initialize(&self, processor: &str, segments: u32) -> Result<u32, StoreError> {
         let mut processors = self.processors.lock().expect("token store poisoned");
         let tokens = processors
@@ -185,11 +183,11 @@ impl TokenStore for InMemoryTokenStore {
         })
     }
 
-    async fn store(&self, processor: &str, segment: u32, owner: &str, cursor: &Cursor) -> Result<bool, StoreError> {
-        self.with(processor, segment, |token| {
-            let owns = token.claim.as_ref().is_some_and(|(holder, _)| holder == owner);
+    async fn store(&self, (): &mut (), token: TrackingToken<'_>) -> Result<bool, StoreError> {
+        self.with(token.processor, token.segment, |stored| {
+            let owns = stored.claim.as_ref().is_some_and(|(holder, _)| holder == token.owner);
             if owns {
-                token.cursor = cursor.clone();
+                stored.cursor = token.cursor.clone();
             }
             owns
         })
@@ -243,29 +241,4 @@ pub fn segment_of(stream: &crate::StreamId, segments: u32) -> u32 {
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     (hash % u64::from(segments.max(1))) as u32
-}
-
-/// In memory there is nothing to roll back, and a crash loses the read model
-/// and the tokens together: the unit of work is `()`.
-impl crate::TransactionalTokenStore for InMemoryTokenStore {
-    type Transaction = ();
-
-    async fn begin(&self) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    async fn store_in(&self, _: &mut (), token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
-        let owned = self
-            .store(token.processor, token.segment, token.owner, token.cursor)
-            .await?;
-        Ok(if owned {
-            TokenUpdate::Stored
-        } else {
-            TokenUpdate::ClaimLost
-        })
-    }
-
-    async fn commit(&self, (): ()) -> Result<(), StoreError> {
-        Ok(())
-    }
 }

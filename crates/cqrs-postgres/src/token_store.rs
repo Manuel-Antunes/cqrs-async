@@ -1,4 +1,4 @@
-use cqrs::{Cursor, Gap, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalTokenStore};
+use cqrs::{Cursor, Gap, StoreError, TokenStore, TrackingToken, TransactionManager};
 use sqlx::PgPool;
 
 use crate::backend;
@@ -63,7 +63,11 @@ fn cursor(position: i64, gaps: &[i64], horizons: &[i64]) -> Cursor {
     Cursor::new(position as u64, gaps)
 }
 
+/// Tokens move in the transaction the event was handled in, so a read model
+/// in the same database commits with its token.
 impl TokenStore for PostgresTokenStore {
+    type Tx = PgTransaction;
+
     async fn initialize(&self, processor: &str, segments: u32) -> Result<u32, StoreError> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
         // Instances starting together: one creates, the others see its count.
@@ -122,13 +126,20 @@ impl TokenStore for PostgresTokenStore {
         Ok(token.map(|token| cursor(token.position, &token.gaps, &token.gap_horizons)))
     }
 
-    async fn store(&self, processor: &str, segment: u32, owner: &str, cursor: &Cursor) -> Result<bool, StoreError> {
-        let (gaps, horizons) = columns(cursor);
-        let updated = move_token(processor, segment, owner, cursor.position(), &gaps, &horizons)
-            .execute(&self.pool)
-            .await
-            .map_err(backend)?;
-        Ok(updated.rows_affected() == 1)
+    async fn store(&self, tx: &mut PgTransaction, token: TrackingToken<'_>) -> Result<bool, StoreError> {
+        let (gaps, horizons) = columns(token.cursor);
+        let moved = move_token(
+            token.processor,
+            token.segment,
+            token.owner,
+            token.cursor.position(),
+            &gaps,
+            &horizons,
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(backend)?;
+        Ok(moved.rows_affected() == 1)
     }
 
     async fn release(&self, processor: &str, segment: u32, owner: &str) -> Result<(), StoreError> {
@@ -198,36 +209,36 @@ impl TokenStore for PostgresTokenStore {
     }
 }
 
-/// The transaction a [`Projection`](cqrs::Projection) over a
-/// [`PostgresTokenStore`] writes in: `&mut **tx` is a connection.
+/// The transaction processors over PostgreSQL run their units of work in:
+/// `&mut **tx` is a connection, for sqlx or anything built on it.
 pub type PgTransaction = sqlx::Transaction<'static, sqlx::Postgres>;
 
-/// Read models in the same database as the tokens commit with them.
-impl TransactionalTokenStore for PostgresTokenStore {
-    type Transaction = PgTransaction;
+/// The units of work of processors whose tokens (and read models) live in
+/// PostgreSQL: a transaction of `pool` per event (or batch).
+///
+/// ```text
+/// let events = Events::new(store)
+///     .with_tokens(PostgresTokenStore::new(pool.clone()))
+///     .with_transactions(PostgresTransactions::new(pool));
+/// ```
+#[derive(Clone)]
+pub struct PostgresTransactions {
+    /// Where transactions are opened.
+    pool: PgPool,
+}
+
+impl PostgresTransactions {
+    /// Transactions of `pool`.
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl TransactionManager for PostgresTransactions {
+    type Tx = PgTransaction;
 
     async fn begin(&self) -> Result<PgTransaction, StoreError> {
         self.pool.begin().await.map_err(backend)
-    }
-
-    async fn store_in(&self, tx: &mut PgTransaction, token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
-        let (gaps, horizons) = columns(token.cursor);
-        let moved = move_token(
-            token.processor,
-            token.segment,
-            token.owner,
-            token.cursor.position(),
-            &gaps,
-            &horizons,
-        )
-        .execute(&mut **tx)
-        .await
-        .map_err(backend)?;
-        Ok(if moved.rows_affected() == 1 {
-            TokenUpdate::Stored
-        } else {
-            TokenUpdate::ClaimLost
-        })
     }
 
     async fn commit(&self, tx: PgTransaction) -> Result<(), StoreError> {

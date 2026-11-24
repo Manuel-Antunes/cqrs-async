@@ -33,7 +33,7 @@ pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, U
 
 use crate::{
     Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, EventStore, HandlerError,
-    InMemoryTokenStore, ProcessingFailure, StoreError, TransactionalTokenStore,
+    InMemoryTokenStore, ProcessingFailure, StoreError, TokenStore, TransactionManager,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -72,15 +72,22 @@ impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
 ///
 /// The blog example wires its whole asynchronous side this way.
 ///
-/// Cloning is cheap and shares everything (the store, the live feed and the
-/// tokens): give a clone to each part of the application.
-pub struct Events<E, S, C = InMemoryTokenStore> {
-    /// The source of truth, shared with the repositories (`Arc` or a pool).
+/// Cloning is cheap and shares everything (the store, the live feed, the
+/// tokens and the transaction manager): give a clone to each part of the
+/// application.
+///
+/// Its processors run their units of work in transactions from `M` (`()`:
+/// in memory), which the tokens `C` must join: a SQL token store goes with
+/// that database's transactions, checked when a processor is made.
+pub struct Events<E, S, C = InMemoryTokenStore, M = ()> {
+    /// The source of truth, shared with the repositories (a handle).
     store: S,
     /// The live feed the repositories publish to after each commit.
     live: LiveEvents<E>,
     /// Where tracking processors keep their positions and claims.
     tokens: C,
+    /// Opens and commits the processors' units of work.
+    transactions: M,
     /// How subscriptions read.
     options: SubscriptionOptions,
 }
@@ -93,19 +100,35 @@ impl<E, S> Events<E, S> {
             store,
             live: broadcast::channel(1024).0,
             tokens: InMemoryTokenStore::default(),
+            transactions: (),
             options: SubscriptionOptions::default(),
         }
     }
 }
 
-impl<E, S, C> Events<E, S, C> {
+impl<E, S, C, M> Events<E, S, C, M> {
     /// Keeps tracking processors' tokens in `tokens` instead (e.g. a SQL
-    /// token store shared by every instance).
-    pub fn with_tokens<C2>(self, tokens: C2) -> Events<E, S, C2> {
+    /// token store shared by every instance). Its unit of work must be the
+    /// one of [`with_transactions`](Self::with_transactions).
+    pub fn with_tokens<C2>(self, tokens: C2) -> Events<E, S, C2, M> {
         Events {
             store: self.store,
             live: self.live,
             tokens,
+            transactions: self.transactions,
+            options: self.options,
+        }
+    }
+
+    /// Runs the processors' units of work in transactions from
+    /// `transactions` (e.g. the database the read models and the tokens
+    /// live in).
+    pub fn with_transactions<M2>(self, transactions: M2) -> Events<E, S, C, M2> {
+        Events {
+            store: self.store,
+            live: self.live,
+            tokens: self.tokens,
+            transactions,
             options: self.options,
         }
     }
@@ -132,6 +155,11 @@ impl<E, S, C> Events<E, S, C> {
         &self.tokens
     }
 
+    /// What opens and commits the processors' units of work.
+    pub fn transactions(&self) -> &M {
+        &self.transactions
+    }
+
     /// The progress of processor `name` across all its instances, for live
     /// queries when several instances share its segments.
     pub fn global_progress(&self, name: &str) -> GlobalProgress<C>
@@ -142,64 +170,73 @@ impl<E, S, C> Events<E, S, C> {
     }
 }
 
-impl<E, S, C> Events<E, S, C>
+impl<E, S, C, M> Events<E, S, C, M>
 where
     E: DomainEvent + Clone,
     S: EventStore<E> + Clone + 'static,
-    C: TransactionalTokenStore + Clone + 'static,
+    C: TokenStore<Tx = M::Tx> + Clone + 'static,
+    M: TransactionManager + Clone + 'static,
 {
     /// A [`TrackingProcessor`] named `name` (its token key) feeding
-    /// `handler` (or a tuple of them: a processing group) in the token
-    /// store's units of work, to configure (segments, dead letters) and
+    /// `handler` (or a tuple of them: a processing group) in the
+    /// processors' units of work, to configure (segments, dead letters) and
     /// `spawn`.
-    pub fn processor<H>(&self, name: &str, handler: H) -> TrackingProcessor<E, S, H, C>
+    pub fn processor<H>(&self, name: &str, handler: H) -> TrackingProcessor<E, S, H, C, M>
     where
-        H: EventHandler<E, C::Transaction> + 'static,
+        H: EventHandler<E, M::Tx> + 'static,
     {
-        TrackingProcessor::new(name, self.store.clone(), &self.live, handler, self.tokens.clone()).with_options(
-            TrackingOptions {
-                subscription: self.options,
-                ..TrackingOptions::default()
-            },
+        TrackingProcessor::new(
+            name,
+            self.store.clone(),
+            &self.live,
+            handler,
+            self.tokens.clone(),
+            self.transactions.clone(),
         )
+        .with_options(TrackingOptions {
+            subscription: self.options,
+            ..TrackingOptions::default()
+        })
     }
 
     /// Starts a processor with the default settings (one segment). Must run
     /// inside a Tokio runtime.
     pub fn track<H>(&self, name: &str, handler: H) -> ProcessorHandle
     where
-        H: EventHandler<E, C::Transaction> + 'static,
+        H: EventHandler<E, M::Tx> + 'static,
     {
         self.processor(name, handler).spawn()
     }
 
     /// The processor of `projection`, named after its namespace
     /// ([`Projection::NAMESPACE`](crate::Projection::NAMESPACE)).
-    pub fn projection<P>(&self, projection: P) -> TrackingProcessor<E, S, P, C>
+    pub fn projection<P>(&self, projection: P) -> TrackingProcessor<E, S, P, C, M>
     where
-        P: crate::Projection + EventHandler<E, C::Transaction> + 'static,
+        P: crate::Projection + EventHandler<E, M::Tx> + 'static,
     {
         self.processor(P::NAMESPACE, projection)
     }
 }
 
-impl<E, S: Clone, C: Clone> Clone for Events<E, S, C> {
+impl<E, S: Clone, C: Clone, M: Clone> Clone for Events<E, S, C, M> {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
             live: self.live.clone(),
             tokens: self.tokens.clone(),
+            transactions: self.transactions.clone(),
             options: self.options,
         }
     }
 }
 
 /// As the processing group of an [`InlinePublisher`](crate::InlinePublisher): broadcasts what was committed.
-impl<E, S, C> EventProcessor<E> for Events<E, S, C>
+impl<E, S, C, M> EventProcessor<E> for Events<E, S, C, M>
 where
     E: DomainEvent + Clone,
     S: Send + Sync,
     C: Send + Sync,
+    M: Send + Sync,
 {
     async fn process(&self, events: &[EventEnvelope<E>]) -> Result<(), ProcessingFailure> {
         for event in events {
@@ -211,11 +248,12 @@ where
 
 /// The events service publishes what command handlers commit: appended to
 /// the store, then broadcast to the processors and subscriptions.
-impl<E, S, C> crate::EventPublisher<E> for Events<E, S, C>
+impl<E, S, C, M> crate::EventPublisher<E> for Events<E, S, C, M>
 where
     E: DomainEvent + Clone,
     S: EventStore<E>,
     C: Send + Sync,
+    M: Send + Sync,
 {
     fn commit<A: Aggregate<Event = E>>(
         &self,
@@ -228,16 +266,17 @@ where
 
 /// As the [`EventFeed`] port: catch-up subscriptions over the store, followed
 /// live.
-impl<E, S, C> EventFeed<E> for Events<E, S, C>
+impl<E, S, C, M> EventFeed<E> for Events<E, S, C, M>
 where
     E: DomainEvent,
     S: EventStore<E> + Clone + 'static,
     C: Send + Sync,
+    M: Send + Sync,
 {
     fn subscribe(
         &self,
         after: u64,
-    ) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<E, S, C> {
+    ) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<E, S, C, M> {
         subscribe(self.store.clone(), &self.live, after, self.options)
     }
 

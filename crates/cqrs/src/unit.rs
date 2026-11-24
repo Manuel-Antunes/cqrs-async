@@ -6,7 +6,7 @@
 //! let store = InMemoryEventStore::new();
 //! let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));  // yours, over the store
 //!
-//! let app = Cqrs::new(store, InMemoryTokenStore::default())   // the stores; the unit makes its events
+//! let app = Cqrs::new(Events::new(store))                       // in-memory tokens, no transactions
 //!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher
 //!     .intercept(Audit(log))
 //!     .queries(PostQueryGateway::new(summaries.clone()))
@@ -19,12 +19,12 @@
 //! app.queries().subscribe(FindPost { id });
 //! ```
 //!
-//! The event store and the token store are the constructor's: a unit
-//! cannot be built without deciding where tokens live. The publisher is
-//! the events service the unit makes from them
-//! ([`Events`](crate::Events): append, then broadcast); `commands` hands it
-//! to the closure that builds the command gateway, whose handlers hold it
-//! and commit with `events.commit(entity, &self.events)`.
+//! The unit is sugar over what can be assembled by hand: it starts from an
+//! [`Events`](crate::Events) (the store, where tokens live and the
+//! transactions processors run in), which is also the publisher (append,
+//! then broadcast); `commands` hands it to the closure that builds the
+//! command gateway, whose handlers hold it and commit with
+//! `events.commit(entity, &self.events)`.
 //! [`Cqrs::from_publisher`] starts from a publisher built by hand instead
 //! (e.g. an [`InlinePublisher`](crate::InlinePublisher) feeding handlers
 //! inline, with no runtime).
@@ -42,7 +42,7 @@ use crate::Intercepted;
 #[cfg(feature = "tokio")]
 use crate::{
     DomainEvent, EventFeed, EventHandler, EventStore, Events, LocalProgress, ProcessorHandle, Projected, Projection,
-    ProjectionProgress, SubscriptionQueries, TrackingOptions, TransactionalTokenStore,
+    ProjectionProgress, SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
 };
 
 /// An application's CQRS unit: the command gateway `C`, the query gateway
@@ -80,20 +80,21 @@ struct Processing {
 struct Processing;
 
 impl Cqrs<(), (), ()> {
-    /// Starts building a unit over the event store `store`, keeping its
-    /// processors' tokens in `tokens` (e.g. PostgreSQL's, shared by every
-    /// instance: its transaction is the processors' unit of work). The unit
-    /// makes its events service from them, which is also the publisher its
-    /// command handlers commit through.
+    /// Starts building a unit over `events`, assembled by hand: its store,
+    /// its processors' tokens and the transactions they run in
+    /// (`Events::new(store).with_tokens(..).with_transactions(..)`). They are
+    /// also the publisher its command handlers commit through.
     // The unit's constructor: what it builds is configured step by step.
     #[cfg(feature = "tokio")]
     #[allow(clippy::new_ret_no_self, clippy::type_complexity)]
-    pub fn new<Ev, S, T>(store: S, tokens: T) -> CqrsBuilder<Events<Ev, S, T>, (), (), Events<Ev, S, T>>
+    pub fn new<Ev, S, T, M>(
+        events: Events<Ev, S, T, M>,
+    ) -> CqrsBuilder<Events<Ev, S, T, M>, (), (), Events<Ev, S, T, M>>
     where
         S: Clone,
         T: Clone,
+        M: Clone,
     {
-        let events = Events::new(store).with_tokens(tokens);
         CqrsBuilder {
             publisher: Arc::new(events.clone()),
             commands: (),
@@ -152,11 +153,12 @@ impl<C, Q, E> Cqrs<C, Q, E> {
 }
 
 #[cfg(feature = "tokio")]
-impl<C, Q, Ev, S, T> Cqrs<C, Q, Events<Ev, S, T>>
+impl<C, Q, Ev, S, T, M> Cqrs<C, Q, Events<Ev, S, T, M>>
 where
     Ev: DomainEvent,
     S: EventStore<Ev> + Clone + 'static,
     T: Send + Sync,
+    M: Send + Sync,
 {
     /// Returns once every processor of the unit handled every event
     /// committed before the call: queries then see every change made
@@ -305,11 +307,12 @@ impl<P, C, Q, U> CqrsBuilder<P, C, Q, (), U> {
 }
 
 #[cfg(feature = "tokio")]
-impl<P, C, Q, Ev, S, T, U> CqrsBuilder<P, C, Q, Events<Ev, S, T>, U>
+impl<P, C, Q, Ev, S, T, M, U> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, U>
 where
     Ev: DomainEvent + Clone,
     S: EventStore<Ev> + Clone + 'static,
-    T: TransactionalTokenStore + Clone + 'static,
+    T: TokenStore<Tx = M::Tx> + Clone + 'static,
+    M: TransactionManager + Clone + 'static,
 {
     /// Settings (segments, batch size, dead letters...) for the processors
     /// started after this call.
@@ -328,7 +331,7 @@ where
     #[must_use]
     pub fn projection<H>(mut self, projection: H) -> Self
     where
-        H: Projection + EventHandler<Ev, T::Transaction> + 'static,
+        H: Projection + EventHandler<Ev, M::Tx> + 'static,
     {
         let progress = self.start(projection);
         self.processing.projections.push(progress);
@@ -344,7 +347,7 @@ where
     #[must_use]
     pub fn policy<H>(mut self, policy: H) -> Self
     where
-        H: Projection + EventHandler<Ev, T::Transaction> + 'static,
+        H: Projection + EventHandler<Ev, M::Tx> + 'static,
     {
         self.start(policy);
         self
@@ -353,7 +356,7 @@ where
     /// Spawns `handler`'s processor and keeps its handle.
     fn start<H>(&mut self, handler: H) -> LocalProgress
     where
-        H: Projection + EventHandler<Ev, T::Transaction> + 'static,
+        H: Projection + EventHandler<Ev, M::Tx> + 'static,
     {
         let handle = self
             .events
@@ -418,17 +421,19 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
 }
 
 #[cfg(feature = "tokio")]
-impl<P, C, Q, Ev, S, T, U> CqrsBuilder<P, C, Q, Events<Ev, S, T>, Arc<U>>
+impl<P, C, Q, Ev, S, T, M, U> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, Arc<U>>
 where
     Ev: DomainEvent,
     S: EventStore<Ev> + Clone + 'static,
     T: Clone + Send + Sync + 'static,
+    M: Clone + Send + Sync + 'static,
 {
     /// The unit, its queries subscribable.
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
-    ) -> Cqrs<C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T>> {
+    ) -> Cqrs<C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T, M>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T, M>>
+    {
         let CqrsBuilder {
             commands,
             queries,

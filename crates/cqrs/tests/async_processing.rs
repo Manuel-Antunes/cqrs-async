@@ -206,6 +206,7 @@ async fn a_tracking_processor_retries_in_order_until_it_succeeds() {
         &world.live,
         Arc::clone(&recorder),
         checkpoints.clone(),
+        (),
     )
     .spawn();
 
@@ -230,6 +231,7 @@ async fn a_restarted_processor_resumes_from_its_checkpoint() {
         &world.live,
         Arc::clone(&first),
         checkpoints.clone(),
+        (),
     )
     .spawn();
     world.tick(2).await;
@@ -245,6 +247,7 @@ async fn a_restarted_processor_resumes_from_its_checkpoint() {
         &world.live,
         Arc::clone(&second),
         checkpoints.clone(),
+        (),
     )
     .spawn();
     processor.caught_up(4).await;
@@ -266,6 +269,7 @@ async fn a_failing_processor_reports_it_and_does_not_block_others() {
         &world.live,
         Arc::clone(&stuck),
         checkpoints.clone(),
+        (),
     )
     .spawn();
     let healthy_processor = TrackingProcessor::new(
@@ -274,6 +278,7 @@ async fn a_failing_processor_reports_it_and_does_not_block_others() {
         &world.live,
         Arc::clone(&healthy),
         checkpoints.clone(),
+        (),
     )
     .spawn();
 

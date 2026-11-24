@@ -218,14 +218,26 @@ async fn plain_queries_still_work_through_the_same_gateway() {
 
 #[tokio::test(start_paused = true)]
 async fn global_progress_waits_for_every_segment_of_every_instance() {
-    use cqrs::{GlobalProgress, InMemoryTokenStore, ProjectionProgress, TokenStore};
+    use cqrs::{GlobalProgress, InMemoryTokenStore, ProjectionProgress, TokenStore, TrackingToken};
+    // Moves `segment`'s token to `position`, as its owner's processor would.
+    async fn store(tokens: &InMemoryTokenStore, segment: u32, owner: &str, position: u64) {
+        let cursor = cqrs::Cursor::at(position);
+        let token = TrackingToken {
+            processor: "p",
+            segment,
+            owner,
+            replay: false,
+            cursor: &cursor,
+        };
+        assert!(tokens.store(&mut (), token).await.unwrap(), "owned");
+    }
     let tokens = InMemoryTokenStore::default();
     tokens.initialize("p", 2).await.unwrap();
     tokens.claim("p", 0, "a", 0, u64::MAX).await.unwrap();
     tokens.claim("p", 1, "b", 0, u64::MAX).await.unwrap();
     let progress = GlobalProgress::new(tokens.clone(), "p");
 
-    tokens.store("p", 0, "a", &cqrs::Cursor::at(5)).await.unwrap(); // only one instance got there
+    store(&tokens, 0, "a", 5).await; // only one instance got there
     let waiting = tokio::spawn({
         let progress = progress.clone();
         async move { progress.reached(5).await }
@@ -233,7 +245,7 @@ async fn global_progress_waits_for_every_segment_of_every_instance() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(!waiting.is_finished(), "segment 1 is still behind");
 
-    tokens.store("p", 1, "b", &cqrs::Cursor::at(7)).await.unwrap();
+    store(&tokens, 1, "b", 7).await;
     tokio::time::timeout(Duration::from_secs(1), waiting)
         .await
         .expect("released")

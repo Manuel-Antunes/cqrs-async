@@ -21,8 +21,7 @@ use cqrs::{
     Aggregate, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
     EventInterceptor, EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters,
     InMemoryEventStore, InMemoryTokenStore, InlinePublisher, Intercepted, Metadata, Pending, ProcessingContext,
-    StoreError, StreamId, TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore,
-    retry_dead_letters,
+    StoreError, StreamId, TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -35,8 +34,9 @@ fn log(phases: &Phases, entry: impl Into<String>) {
     phases.lock().unwrap().push(entry.into());
 }
 
-/// A token store whose unit of work is a journal of rows: committed into
-/// `database`, lost if dropped. A handle, as token stores are.
+/// A transaction manager whose unit of work is a journal of rows: committed
+/// into `database`, lost if dropped; and the token store taking part in it.
+/// A handle, as token stores are.
 #[derive(Clone, Default)]
 struct Journal {
     tokens: InMemoryTokenStore,
@@ -45,6 +45,8 @@ struct Journal {
 }
 
 impl TokenStore for Journal {
+    type Tx = Vec<String>;
+
     async fn initialize(&self, processor: &str, segments: u32) -> Result<u32, StoreError> {
         self.tokens.initialize(processor, segments).await
     }
@@ -60,8 +62,10 @@ impl TokenStore for Journal {
         self.tokens.claim(processor, segment, owner, now, until).await
     }
 
-    async fn store(&self, processor: &str, segment: u32, owner: &str, cursor: &Cursor) -> Result<bool, StoreError> {
-        self.tokens.store(processor, segment, owner, cursor).await
+    async fn store(&self, rows: &mut Vec<String>, token: TrackingToken<'_>) -> Result<bool, StoreError> {
+        log(&self.phases, "token");
+        rows.push(format!("token {}", token.cursor.position()));
+        self.tokens.store(&mut (), token).await
     }
 
     async fn release(&self, processor: &str, segment: u32, owner: &str) -> Result<(), StoreError> {
@@ -81,26 +85,12 @@ impl TokenStore for Journal {
     }
 }
 
-impl TransactionalTokenStore for Journal {
-    type Transaction = Vec<String>;
+impl TransactionManager for Journal {
+    type Tx = Vec<String>;
 
     async fn begin(&self) -> Result<Vec<String>, StoreError> {
         log(&self.phases, "begin");
         Ok(Vec::new())
-    }
-
-    async fn store_in(&self, rows: &mut Vec<String>, token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
-        log(&self.phases, "token");
-        rows.push(format!("token {}", token.cursor.position()));
-        let owned = self
-            .tokens
-            .store(token.processor, token.segment, token.owner, token.cursor)
-            .await?;
-        Ok(if owned {
-            TokenUpdate::Stored
-        } else {
-            TokenUpdate::ClaimLost
-        })
     }
 
     async fn commit(&self, rows: Vec<String>) -> Result<(), StoreError> {
@@ -179,7 +169,9 @@ async fn tick(store: &InMemoryEventStore<Ticked>, ticks: impl IntoIterator<Item 
 #[tokio::test(start_paused = true)]
 async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
     let journal = Journal::default();
-    let events = Events::new(InMemoryEventStore::new()).with_tokens(journal.clone());
+    let events = Events::new(InMemoryEventStore::new())
+        .with_tokens(journal.clone())
+        .with_transactions(journal.clone());
     let projection = Intercepted::new(rows(&journal, 1), Stamp(Arc::clone(&journal.phases)));
     let running = events.projection(projection).spawn();
     let last = tick(events.store(), [1, 2]).await.last().unwrap().position;
@@ -222,7 +214,9 @@ async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
 /// 1..=3 stored before it starts, so they wait in its queue together.
 async fn batched(fail_on: u64) -> Journal {
     let journal = Journal::default();
-    let events = Events::new(InMemoryEventStore::new()).with_tokens(journal.clone());
+    let events = Events::new(InMemoryEventStore::new())
+        .with_tokens(journal.clone())
+        .with_transactions(journal.clone());
     let last = tick(events.store(), [1, 2, 3]).await.last().unwrap().position;
     let options = TrackingOptions {
         batch_size: 10,

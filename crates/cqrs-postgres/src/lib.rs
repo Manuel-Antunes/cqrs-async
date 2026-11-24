@@ -1,16 +1,18 @@
 //! PostgreSQL storage for the `cqrs` crate, over a plain `sqlx` pool: an
 //! [`EventStore`](cqrs::EventStore) (with [`Upcaster`]s for old event
-//! shapes), a [`SnapshotStore`](cqrs::SnapshotStore) and a
-//! [`TokenStore`](cqrs::TokenStore) that is also a
-//! [`TransactionalTokenStore`](cqrs::TransactionalTokenStore):
-//! [`Projection`](cqrs::Projection)s over [`PgTransaction`] write their read
-//! model in the transaction that moves the processor's token.
+//! shapes), a [`SnapshotStore`](cqrs::SnapshotStore), a
+//! [`TokenStore`](cqrs::TokenStore) and the
+//! [`TransactionManager`](cqrs::TransactionManager) they share
+//! ([`PostgresTransactions`]): [`Projection`](cqrs::Projection)s over
+//! [`PgTransaction`] write their read model in the transaction that moves
+//! the processor's token.
 //!
 //! ```text
 //! let pool = PgPool::connect(&url).await?;
 //! cqrs_postgres::migrate(&pool).await?;
 //! let events = Events::new(PostgresEventStore::<PostEvent>::new(pool.clone(), "posts"))
-//!     .with_tokens(PostgresTokenStore::new(pool));
+//!     .with_tokens(PostgresTokenStore::new(pool.clone()))
+//!     .with_transactions(PostgresTransactions::new(pool));
 //! ```
 //!
 //! # Global order (Axon's JDBC design)
@@ -68,7 +70,7 @@ mod token_store;
 pub use dead_letters::PostgresDeadLetters;
 pub use event_store::PostgresEventStore;
 pub use snapshot_store::PostgresSnapshotStore;
-pub use token_store::{PgTransaction, PostgresTokenStore};
+pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared
 // with any other store keeping JSON.
 pub use cqrs::{StoredEvent, Upcast, Upcaster, upcast};

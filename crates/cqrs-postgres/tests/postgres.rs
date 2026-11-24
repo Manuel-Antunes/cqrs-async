@@ -21,10 +21,11 @@ use cqrs::SnapshotStore;
 use cqrs::{
     Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventPublisher, EventStore,
     Events, ExpectedVersion, Gap, HandlerError, Metadata, Pending, ProcessingContext, StoreError, StreamId,
-    SubscriptionOptions, TokenStore, TrackingOptions, TransactionalTokenStore, retry_dead_letters,
+    SubscriptionOptions, TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
 };
 use cqrs_postgres::{
-    PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, migrate, upcast,
+    PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore,
+    PostgresTransactions, migrate, upcast,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -378,10 +379,30 @@ async fn a_subscription_reading_while_writers_race_misses_nothing() {
     }
 }
 
+/// Moves `segment`'s token to `cursor` for `owner`, in a transaction of its
+/// own: `false` if `owner` does not hold the segment.
+async fn store_token(pool: &PgPool, segment: u32, owner: &str, cursor: &Cursor) -> bool {
+    let transactions = PostgresTransactions::new(pool.clone());
+    let mut tx = transactions.begin().await.unwrap();
+    let token = TrackingToken {
+        processor: "p",
+        segment,
+        owner,
+        replay: false,
+        cursor,
+    };
+    let owned = PostgresTokenStore::new(pool.clone())
+        .store(&mut tx, token)
+        .await
+        .unwrap();
+    transactions.commit(tx).await.unwrap();
+    owned
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn token_claims_are_exclusive_fenced_and_expire() {
     let pool = database_or_skip!();
-    let tokens = PostgresTokenStore::new(pool);
+    let tokens = PostgresTokenStore::new(pool.clone());
     assert_eq!(tokens.initialize("p", 2).await.unwrap(), 2);
     assert_eq!(tokens.initialize("p", 8).await.unwrap(), 2, "fixed by the first");
 
@@ -401,11 +422,8 @@ async fn token_claims_are_exclusive_fenced_and_expire() {
             horizon: 99,
         }],
     );
-    assert!(tokens.store("p", 0, "a", &seven).await.unwrap());
-    assert!(
-        !tokens.store("p", 0, "b", &Cursor::at(9)).await.unwrap(),
-        "b does not own it"
-    );
+    assert!(store_token(&pool, 0, "a", &seven).await);
+    assert!(!store_token(&pool, 0, "b", &Cursor::at(9)).await, "b does not own it");
 
     tokio::time::sleep(Duration::from_millis(500)).await; // a's lease expires
     assert_eq!(
@@ -413,10 +431,7 @@ async fn token_claims_are_exclusive_fenced_and_expire() {
         Some(seven.clone()),
         "taken over at 7"
     );
-    assert!(
-        !tokens.store("p", 0, "a", &Cursor::at(8)).await.unwrap(),
-        "a is fenced off"
-    );
+    assert!(!store_token(&pool, 0, "a", &Cursor::at(8)).await, "a is fenced off");
 
     tokens.release("p", 0, "b").await.unwrap();
     assert_eq!(tokens.claim("p", 0, "a", now, until).await.unwrap(), Some(seven));
@@ -463,7 +478,8 @@ fn options(segments: u32, max_segments: u32) -> TrackingOptions {
 async fn instances_share_segments_through_postgres() {
     let pool = database_or_skip!();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool));
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
     let a = events
         .processor("shared", Arc::clone(&first))
@@ -566,9 +582,13 @@ async fn two_event_enums_in_one_database_read_only_their_own_events() {
 async fn a_processor_for_each_event_enum_advances_on_one_database() {
     let pool = database_or_skip!();
     let tokens = PostgresTokenStore::new(pool.clone());
-    let clock_events =
-        Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks")).with_tokens(tokens.clone());
-    let bell_events = Events::new(PostgresEventStore::<BellEvent>::new(pool, "bells")).with_tokens(tokens);
+    let transactions = PostgresTransactions::new(pool.clone());
+    let clock_events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
+        .with_tokens(tokens.clone())
+        .with_transactions(transactions.clone());
+    let bell_events = Events::new(PostgresEventStore::<BellEvent>::new(pool, "bells"))
+        .with_tokens(tokens)
+        .with_transactions(transactions);
     let (clock_seen, bell_seen) = (Arc::new(Recorder::default()), Arc::new(BellRecorder::default()));
     let clock_processor = clock_events.processor("clocks", Arc::clone(&clock_seen)).spawn();
     let bell_processor = bell_events.processor("bells", Arc::clone(&bell_seen)).spawn();
@@ -658,7 +678,9 @@ impl<Tx: Send> EventHandler<ClockEvent, Tx> for Poisoned {
 async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
-    let events = Events::new(store.clone()).with_tokens(PostgresTokenStore::new(pool.clone()));
+    let events = Events::new(store.clone())
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
     let clocks = cqrs::AggregateLoader::<Clock, _>::new(store.clone());
     let handler = Poisoned::new(&stream(1));
     let processor = events
@@ -696,7 +718,9 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
 
     // Fixed: the retry handles both, oldest first, and empties the queue.
     handler.heal();
-    let events = Events::new(store).with_tokens(PostgresTokenStore::new(pool));
+    let events = Events::new(store)
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool));
     let outcome = events
         .processor("parking", Arc::clone(&handler))
         .with_dead_letters(queue.clone(), 2)
@@ -719,7 +743,7 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
 async fn letters_are_parked_and_removed_with_their_unit_of_work() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
-    let tokens = PostgresTokenStore::new(pool.clone());
+    let transactions = PostgresTransactions::new(pool.clone());
     let queue = PostgresDeadLetters::new(store.clone());
     store
         .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 3), &Metadata::new())
@@ -733,22 +757,22 @@ async fn letters_are_parked_and_removed_with_their_unit_of_work() {
     };
     let sequence = stream(1).to_string();
 
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap();
     queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap();
     assert!(
         !queue.contains("p", &sequence).await.unwrap(),
         "invisible before the unit of work commits"
     );
-    tokens.commit(unit).await.unwrap();
+    transactions.commit(unit).await.unwrap();
     assert!(queue.contains("p", &sequence).await.unwrap());
 
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     queue.enqueue_in(&mut unit, "p", letter(1)).await.unwrap();
     drop(unit); // rolled back
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     queue.enqueue_in(&mut unit, "p", letter(0)).await.unwrap(); // again, after the first commit
-    tokens.commit(unit).await.unwrap();
+    transactions.commit(unit).await.unwrap();
 
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cqrs_dead_letters")
         .fetch_one(&pool)
@@ -759,21 +783,21 @@ async fn letters_are_parked_and_removed_with_their_unit_of_work() {
         "one letter: the duplicate and the rolled-back one left nothing"
     );
 
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     assert!(queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap());
     drop(unit); // rolled back: still parked
     assert!(queue.contains("p", &sequence).await.unwrap());
 
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     assert!(queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap());
     assert!(
         queue.contains("p", &sequence).await.unwrap(),
         "parked until the unit of work commits"
     );
-    tokens.commit(unit).await.unwrap();
+    transactions.commit(unit).await.unwrap();
     assert!(queue.sequences("p").await.unwrap().is_empty());
 
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     assert!(
         !queue.remove_in(&mut unit, "p", &letter(0)).await.unwrap(),
         "already removed: the caller rolls its unit of work back"
@@ -814,13 +838,13 @@ async fn racing_retries_apply_each_parked_event_once() {
         .await
         .unwrap();
     let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
-    let tokens = PostgresTokenStore::new(pool.clone());
+    let transactions = PostgresTransactions::new(pool.clone());
     let queue = PostgresDeadLetters::new(store.clone());
     store
         .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &Metadata::new())
         .await
         .unwrap();
-    let mut unit = tokens.begin().await.unwrap();
+    let mut unit = transactions.begin().await.unwrap();
     for event in store.read_all(0, 10).await.unwrap() {
         let letter = DeadLetter {
             sequence: stream(1).to_string(),
@@ -829,7 +853,7 @@ async fn racing_retries_apply_each_parked_event_once() {
         };
         queue.enqueue_in(&mut unit, "p", letter).await.unwrap();
     }
-    tokens.commit(unit).await.unwrap();
+    transactions.commit(unit).await.unwrap();
 
     let handler = Racing {
         totals: Totals::default(),
@@ -838,8 +862,8 @@ async fn racing_retries_apply_each_parked_event_once() {
     };
     let (one, other) = tokio::time::timeout(Duration::from_secs(20), async {
         tokio::join!(
-            retry_dead_letters(&queue, "p", &tokens, &handler),
-            retry_dead_letters(&queue, "p", &tokens, &handler),
+            retry_dead_letters(&queue, "p", &transactions, &handler),
+            retry_dead_letters(&queue, "p", &transactions, &handler),
         )
     })
     .await
@@ -859,7 +883,8 @@ async fn racing_retries_apply_each_parked_event_once() {
 async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
     let pool = database_or_skip!();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool));
     let (first, second) = (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
 
     let a = events
@@ -913,10 +938,10 @@ async fn a_crashed_instance_is_taken_over_from_its_stored_positions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_reset_waits_for_every_claim_and_marks_the_replay() {
     let pool = database_or_skip!();
-    let tokens = PostgresTokenStore::new(pool);
+    let tokens = PostgresTokenStore::new(pool.clone());
     tokens.initialize("p", 2).await.unwrap();
     tokens.claim("p", 0, "a", 0, 60_000).await.unwrap().unwrap();
-    assert!(tokens.store("p", 0, "a", &Cursor::at(7)).await.unwrap());
+    assert!(store_token(&pool, 0, "a", &Cursor::at(7)).await);
     assert_eq!(tokens.replay_until("p").await.unwrap(), 0);
 
     assert!(!tokens.reset("p", 0, 7).await.unwrap(), "segment 0 is claimed");
@@ -1247,7 +1272,8 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         .await
         .unwrap();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
     let mut last = 0;
     for id in 1..=2 {
         last = commit_new::<Clock, _>(&events, id, ticks(1, 5)).await;
@@ -1339,7 +1365,8 @@ async fn a_processing_group_commits_all_its_read_models_or_none() {
         sqlx::query(table).execute(&pool).await.unwrap();
     }
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
     let last = commit_new::<Clock, _>(&events, 1, ticks(1, 4)).await;
 
     // `Totals` writes event 2, then `Counts` fails on it: both roll back,
@@ -1490,7 +1517,8 @@ async fn a_failing_projection_interceptor_rolls_the_write_back() {
         .await
         .unwrap();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
     let last = events
         .store()
         .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 3), &Metadata::new())
@@ -1526,7 +1554,8 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         .await
         .unwrap();
     let events = Events::new(PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks"))
-        .with_tokens(PostgresTokenStore::new(pool.clone()));
+        .with_tokens(PostgresTokenStore::new(pool.clone()))
+        .with_transactions(PostgresTransactions::new(pool.clone()));
     let mut last = 0;
     for id in 1..=4 {
         last = commit_new::<Clock, _>(&events, id, ticks(1, 50)).await;
