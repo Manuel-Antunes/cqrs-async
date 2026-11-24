@@ -89,6 +89,66 @@
 //! }
 //! ```
 //!
+//! # Subscription queries
+//!
+//! `updates(..)` lists the queries the projection's changes are pushed to
+//! (Axon's subscription queries): it gets a channel per query, named
+//! `QueryUpdateEmitter<Self>`, and a namespace emits through them in its
+//! `updated`, on every instance, once it handled the event. The unit's
+//! queries subscribe to them (`app.queries().subscribe(FindPost { id })`),
+//! and `subscriptions = Name` names the trait of whatever does:
+//!
+//! ```text
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("summaries"),
+//!                    updates(FindPost, ListPublished), subscriptions = PostSubscriptions)]
+//! struct PostProjection<S> { summaries: Arc<S> }
+//!
+//! #[cqrs::event_handler(namespace = "summaries")]
+//! impl<S, Tx> EventHandler for PostProjection<S> {
+//!     async fn handle(..) { .. }
+//!
+//!     async fn updated(&self, event: &EventEnvelope<PostEvent>, updates: &QueryUpdateEmitter<Self>) {
+//!         updates.emit(|query: &FindPost| query.id == id, Some(summary));   // the channel of `FindPost`
+//!     }
+//! }
+//! ```
+//!
+//! Emitting a query the projection does not list does not compile:
+//!
+//! ```compile_fail,E0277
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext, QueryUpdateEmitter};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
+//! # #[cqrs::query(output = u64, error = ())] #[derive(Clone)] struct Count;
+//! # #[cqrs::query(output = u64, error = ())] #[derive(Clone)] struct Total;
+//! # #[cqrs::query(output = u64, error = ())] #[derive(Clone)] struct Max;
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"), updates(Count, Max))]
+//! struct PostProjection;
+//!
+//! #[cqrs::event_handler(namespace = "counts")]
+//! impl EventHandler for PostProjection {
+//!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
+//!
+//!     async fn updated(&self, _: &EventEnvelope<PostEvent>, updates: &QueryUpdateEmitter<Self>) {
+//!         updates.emit(|_: &Total| true, 1); // not in `updates(..)`
+//!     }
+//! }
+//! ```
+//!
+//! and neither does an `updated` on a handler of no namespace (it has no
+//! projection to emit through):
+//!
+//! ```compile_fail
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
+//! struct Counts;
+//!
+//! #[cqrs::event_handler]
+//! impl EventHandler for Counts {
+//!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
+//!     async fn updated(&self, _: &EventEnvelope<PostEvent>, _: &()) {}
+//! }
+//! ```
+//!
 //! The unit of work belongs to the processor's
 //! [`TransactionManager`](crate::TransactionManager), not to the
 //! projection: a handler writing SQL names the database's transaction in
@@ -102,7 +162,7 @@ use crate::{DomainEvent, EventEnvelope, EventHandler, HandlerError, ProcessingCo
 /// A projection: a name, the events it is built from, and its namespaces,
 /// each run by a processor of its own. Implemented by
 /// `#[cqrs::projection(name = "...", events = Event, namespaces(...))]`.
-pub trait Projection: Send + Sync + 'static {
+pub trait Projection: HasUpdates + Send + Sync + 'static {
     /// Its name: the prefix of its namespaces' processors and tokens, so two
     /// projections never share one.
     const NAME: &'static str;
@@ -155,6 +215,30 @@ pub trait Route<Tx: Send>: Projection {
     /// (`#[cqrs::event_handler(namespace = "...", batch = N)]`): it wins over
     /// the processors' options. `None`: theirs.
     fn batch_size(namespace: usize) -> Option<usize>;
+
+    /// Whether the handler of `namespace` emits query updates (it has an
+    /// `updated`): only those get an emitter on each instance.
+    fn emits(namespace: usize) -> bool;
+
+    /// The handler of `namespace`'s `updated`: on every instance, once the
+    /// namespace handled `event`, it emits through `updates`.
+    fn updated(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<Self::Event>,
+        updates: &<Self as HasUpdates>::Updates,
+    ) -> impl Future<Output = ()> + Send;
+}
+
+/// The channels of a projection's subscription queries
+/// ([`QueryUpdateEmitter<Self>`](crate::QueryUpdateEmitter)): written by
+/// `#[cqrs::projection(.., updates(FindPost, ..))]`, a channel per query;
+/// `()` without `updates`. Implemented without bounds, so the handlers of
+/// a generic projection can name it.
+#[doc(hidden)]
+pub trait HasUpdates {
+    /// The channels.
+    type Updates: Default + Send + Sync + 'static;
 }
 
 /// The handler of one namespace of a projection, the namespace named by
@@ -166,7 +250,9 @@ pub trait Route<Tx: Send>: Projection {
     message = "`{Self}` has no handler for one of the namespaces its projection lists",
     note = "add `#[cqrs::event_handler(namespace = \"...\")] impl EventHandler for {Self}` for it"
 )]
-pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>: HasNamespace<ID> + Send + Sync {
+pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>:
+    HasNamespace<ID> + HasUpdates + Send + Sync
+{
     /// As [`EventHandler::REPLAY`].
     const REPLAY: bool = true;
 
@@ -195,6 +281,25 @@ pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>: HasNam
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
         let _ = context;
         async { Ok(()) }
+    }
+
+    /// Whether it has an [`updated`](Self::updated) (set by the macro).
+    const EMITS: bool = false;
+
+    /// Emits the query updates `event` makes, through the projection's
+    /// channels (`updates.emit(|query: &FindPost| .., result)`): on
+    /// **every** instance, once this namespace handled the event, whichever
+    /// instance did, so a subscriber connected to any instance sees every
+    /// change. After the commit, outside the unit of work; not in replays
+    /// (it follows the events committed from the start of the instance).
+    /// Default: nothing.
+    fn updated(
+        &self,
+        event: &EventEnvelope<E>,
+        updates: &<Self as HasUpdates>::Updates,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (event, updates);
+        async {}
     }
 }
 
@@ -275,6 +380,10 @@ impl<P: Route<Tx>, Tx: Send> EventHandler<P::Event, Tx> for NamespaceOf<P> {
 }
 
 /// A shared projection is the projection.
+impl<P: HasUpdates> HasUpdates for Arc<P> {
+    type Updates = P::Updates;
+}
+
 impl<P: Projection> Projection for Arc<P> {
     const NAME: &'static str = P::NAME;
     type Event = P::Event;
@@ -310,5 +419,18 @@ impl<P: Route<Tx>, Tx: Send> Route<Tx> for Arc<P> {
 
     fn batch_size(namespace: usize) -> Option<usize> {
         P::batch_size(namespace)
+    }
+
+    fn emits(namespace: usize) -> bool {
+        P::emits(namespace)
+    }
+
+    fn updated(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<Self::Event>,
+        updates: &P::Updates,
+    ) -> impl Future<Output = ()> + Send {
+        (**self).updated(namespace, event, updates)
     }
 }

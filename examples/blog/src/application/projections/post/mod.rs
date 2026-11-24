@@ -9,15 +9,24 @@ mod summaries;
 
 use std::sync::Arc;
 
+use crate::{
+    application::queries::{FindPost, ListPublished},
+    domain::PostEvent,
+};
 pub use notifications::{NotificationError, Notifier};
-pub use summaries::PostSummaryUpdates;
-
-use crate::domain::PostEvent;
 
 /// Everything the posts' events are projected into: the summaries' read
 /// model (namespace `summaries`) and the notifications (namespace
-/// `notifications`).
-#[cqrs::projection(name = "post", events = PostEvent, namespaces("summaries", "notifications"))]
+/// `notifications`). The summaries' changes are pushed to the subscribers
+/// of [`FindPost`] and [`ListPublished`]; [`PostSubscriptions`] is the
+/// trait of whatever subscribes to both.
+#[cqrs::projection(
+    name = "post",
+    events = PostEvent,
+    namespaces("summaries", "notifications"),
+    updates(FindPost, ListPublished),
+    subscriptions = PostSubscriptions
+)]
 pub struct PostProjection<S, N> {
     /// Where the summaries are kept.
     summaries: Arc<S>,

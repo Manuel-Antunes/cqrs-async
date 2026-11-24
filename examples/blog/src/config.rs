@@ -16,7 +16,7 @@
 //! The application never knows which: the repository is a port
 //! ([`PostRepository`](crate::application::commands::PostRepository)),
 //! and each wiring picks its adapter. What the unit exposes is named by the
-//! traits the gateways generate ([`PostCommands`], [`PostQueries`],
+//! traits the gateways and the projection generate ([`PostCommands`], [`PostQueries`],
 //! [`PostSubscriptions`]).
 
 use std::sync::Arc;
@@ -29,8 +29,8 @@ use sea_orm_migration::MigratorTrait;
 use crate::{
     application::{
         commands::{PostCommandGateway, PostCommands},
-        projections::{PostProjection, PostSummaryUpdates},
-        queries::{PostQueries, PostQueryGateway, PostSubscriptions, PostUpdates},
+        projections::PostProjection,
+        queries::{PostQueries, PostQueryGateway, PostSubscriptions},
     },
     domain::{Post, PostEvent},
     infrastructure::{
@@ -142,21 +142,17 @@ impl<C, Q, R, E> Running<C, Q, R, E> {
 pub fn start_in_memory()
 -> Running<impl PostCommands, impl PostQueries + PostSubscriptions, InMemoryPostSummaryRepository, PostEvents> {
     let store = PostStore::default();
-    let updates = Arc::new(PostUpdates::default());
     let summaries = Arc::new(InMemoryPostSummaryRepository::default());
     let notifier = Arc::new(InMemoryNotifier::default());
     let audit = Arc::new(AuditLog::default());
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(Events::new(store.clone()))
         .commands(|events| PostCommandGateway::new(posts_over(&store), events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))
-        .emit(emitter)
-        .subscriptions(updates)
         .build();
 
     Running {
@@ -193,21 +189,17 @@ pub async fn start(
 {
     Migrator::up(&SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone()), None).await?;
     let events = cqrs_postgres::Postgres::new(pool.clone()).events::<PostEvent>("posts");
-    let updates = Arc::new(PostUpdates::default());
     let summaries = Arc::new(SeaOrmPostSummaries::new(pool.clone()));
     let notifier = Arc::new(InMemoryNotifier::default());
     let audit = Arc::new(AuditLog::default());
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(events)
         .commands(|events| PostCommandGateway::new(SeaOrmPostRepository, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))
-        .emit(emitter)
-        .subscriptions(updates)
         .build();
 
     Ok(Running {

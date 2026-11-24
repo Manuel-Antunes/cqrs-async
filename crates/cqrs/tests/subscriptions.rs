@@ -13,7 +13,7 @@ use std::{
 
 use cqrs::{
     Aggregate, EmitUpdates, EventEnvelope, EventHandler, EventPublisher, Events, HandlerError, InMemoryEventStore,
-    ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateEmitter, StoreError, SubscriptionQueries,
+    ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateChannel, StoreError, SubscriptionQueries,
     emit_updates, head_of,
 };
 use futures_util::{Stream, StreamExt};
@@ -84,7 +84,7 @@ impl cqrs::QueryHandler<TicksOf> for ClockQueries {
 /// Where the queries' new results go.
 #[derive(Default, cqrs::QueryUpdates)]
 struct ClockUpdates {
-    ticks: QueryUpdateEmitter<TicksOf>,
+    ticks: QueryUpdateChannel<TicksOf>,
 }
 
 /// Once an event is projected: the new count of its clock, to that clock's

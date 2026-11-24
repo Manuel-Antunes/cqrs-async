@@ -3,15 +3,23 @@
 //! projection emits for a query like its own.
 //!
 //! ```text
-//! // The projection, once its change is committed:
-//! self.updates.find.emit(|query: &FindPost| query.id == id, Some(summary));
+//! // The projection lists its subscription queries:
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("summaries"), updates(FindPost))]
+//!
+//! // A namespace emits, on every instance, once it handled the event:
+//! async fn updated(&self, event: &EventEnvelope<PostEvent>, updates: &QueryUpdateEmitter<Self>) {
+//!     updates.emit(|query: &FindPost| query.id == id, Some(summary));
+//! }
 //!
 //! // The API:
 //! let stream = queries.subscribe(FindPost { id });   // initial result, then updates
 //! ```
 //!
-//! Without `dyn`, there is one emitter per query type; a struct of them
-//! with `#[derive(QueryUpdates)]` says where each query's updates come from.
+//! Without `dyn`, there is one channel per query type
+//! ([`QueryUpdateChannel`]); the projection's macro makes them, one per
+//! query in `updates(..)`. By hand, a struct of channels with
+//! `#[derive(QueryUpdates)]` and an [`EmitUpdates`] run by [`emit_updates`]
+//! do the same.
 
 use std::{
     marker::PhantomData,
@@ -31,14 +39,20 @@ use crate::{Dispatch, DomainEvent, EventEnvelope, EventFeed, Message, Metadata, 
 /// ends; a client subscribes again).
 const BUFFER: usize = 256;
 
+/// The subscription queries' channels of projection `P`, one per query in
+/// its `updates(..)` (Axon's `QueryUpdateEmitter`): what its namespaces'
+/// `updated` emits through (`updates.emit(|query: &FindPost| .., result)`),
+/// and what the unit's subscriptions listen to.
+pub type QueryUpdateEmitter<P> = <P as crate::HasUpdates>::Updates;
+
 /// Pushes updates to the subscriptions of query `Q` matching a filter. `U`
 /// is what an update carries: by default the query's new result.
-pub struct QueryUpdateEmitter<Q, U = OutputOf<Q>> {
+pub struct QueryUpdateChannel<Q, U = OutputOf<Q>> {
     /// Each live subscription: its query and where its updates go.
     subscribers: Mutex<Vec<(Q, mpsc::Sender<U>)>>,
 }
 
-impl<Q, U> Default for QueryUpdateEmitter<Q, U> {
+impl<Q, U> Default for QueryUpdateChannel<Q, U> {
     fn default() -> Self {
         Self {
             subscribers: Mutex::new(Vec::new()),
@@ -46,8 +60,8 @@ impl<Q, U> Default for QueryUpdateEmitter<Q, U> {
     }
 }
 
-impl<Q, U: Clone> QueryUpdateEmitter<Q, U> {
-    /// An emitter with no subscriptions yet.
+impl<Q, U: Clone> QueryUpdateChannel<Q, U> {
+    /// A channel with no subscriptions yet.
     pub fn new() -> Self {
         Self::default()
     }
@@ -96,17 +110,22 @@ impl<Q, U: Clone> QueryUpdateEmitter<Q, U> {
     }
 }
 
-/// Where the updates of query `Q` are emitted: implemented by
-/// `#[derive(QueryUpdates)]` for each `QueryUpdateEmitter<Q>` field.
+/// Where the updates of query `Q` are emitted: implemented by a
+/// projection's channels for each query of its `updates(..)`, and by
+/// `#[derive(QueryUpdates)]` for each `QueryUpdateChannel<Q>` field.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no channel for `{Q}`",
+    note = "add `{Q}` to the projection's `updates(..)` (or a `QueryUpdateChannel<{Q}>` field to a `#[derive(QueryUpdates)]` struct)"
+)]
 pub trait UpdatesOf<Q: Query>: Send + Sync {
-    /// The emitter of `Q`'s updates.
-    fn updates(&self) -> &QueryUpdateEmitter<Q>;
+    /// The channel of `Q`'s updates.
+    fn updates(&self) -> &QueryUpdateChannel<Q>;
 }
 
 // Forwards every method, so an override of a provided one is never lost.
 #[deny(clippy::missing_trait_methods)]
 impl<Q: Query, T: UpdatesOf<Q>> UpdatesOf<Q> for Arc<T> {
-    fn updates(&self) -> &QueryUpdateEmitter<Q> {
+    fn updates(&self) -> &QueryUpdateChannel<Q> {
         (**self).updates()
     }
 }
@@ -170,9 +189,9 @@ where
 /// result from `G`, then the updates projections emit through `U` (Axon's
 /// subscription queries).
 ///
-/// Updates are local to the process: with several instances, use
-/// [`LiveQueries`](crate::LiveQueries), which re-queries after the
-/// projection's global progress.
+/// Updates are local to the process: every instance emits them for every
+/// event ([`emit_updates`]), so a subscriber connected to any instance sees
+/// every change.
 pub struct SubscriptionQueries<G, U, C = ()> {
     /// Answers the initial queries (and plain ones).
     queries: Arc<G>,
@@ -227,7 +246,7 @@ impl<G, U, F, P, E> SubscriptionQueries<G, U, Projected<F, P, E>> {
 }
 
 impl<G, U, C> SubscriptionQueries<G, U, C> {
-    /// The emitters, to hand to projections.
+    /// The channels, to hand to what emits.
     pub fn updates(&self) -> &Arc<U> {
         &self.updates
     }
@@ -288,12 +307,13 @@ fn distinct<T: Clone + PartialEq + Send, E: Send>(
 /// Pushes the new results of the queries an event changed, once the read
 /// models are up to date with it (Axon's `QueryUpdateEmitter` calls, kept
 /// out of the projection's unit of work): typically a query on the read
-/// model, then [`QueryUpdateEmitter::emit`].
+/// model, then [`QueryUpdateChannel::emit`]. What a projection namespace's
+/// `updated` is, for updates assembled by hand.
 ///
-/// It runs on **every** instance of the application ([`emit_updates`],
-/// `Cqrs`'s `emit`), for every committed event, once the projections
-/// handled it, whichever instance did: so a subscriber connected to any
-/// instance sees every change. That is why it is not a projection's
+/// It runs on **every** instance of the application ([`emit_updates`]),
+/// for every committed event, once the projections handled it, whichever
+/// instance did: so a subscriber connected to any instance sees every
+/// change. That is why it is not a projection's
 /// [`committed`](crate::EventHandler::committed), which runs only on the
 /// instance that handled the event.
 pub trait EmitUpdates<E: DomainEvent>: Send + Sync {
@@ -312,7 +332,8 @@ impl<E: DomainEvent, T: EmitUpdates<E>> EmitUpdates<E> for Arc<T> {
 /// Calls `emitter` for every event committed after position `after`, in
 /// order, each once `progress` reached it, until `shutdown` completes: what
 /// makes query updates reach the subscribers of every instance. Run it on
-/// each instance (`Cqrs`'s `emit` spawns it).
+/// each instance (`Cqrs`'s `projection` spawns one per namespace that has an
+/// `updated`).
 ///
 /// A subscriber misses the updates of the events between `after` and the
 /// position its subscription started at, so take `after` at the head

@@ -110,6 +110,26 @@ pub fn event_handler(arguments: HandlerArguments, mut item: ItemImpl) -> Result<
         }
     };
 
+    let updated = item
+        .items
+        .iter()
+        .find(|item| matches!(item, ImplItem::Fn(method) if method.sig.ident == "updated"));
+    match (updated, &arguments.namespace) {
+        (Some(updated), None) => {
+            return Err(Error::new(
+                updated.span(),
+                "`updated` is a projection namespace's: it emits through the projection's `updates(..)` channels",
+            ));
+        }
+        (Some(_), Some(_)) => item.items.insert(
+            0,
+            parse_quote!(
+                const EMITS: bool = true;
+            ),
+        ),
+        (None, _) => {}
+    }
+
     if let Some(batch) = &arguments.batch {
         item.items.insert(
             0,
@@ -146,11 +166,16 @@ pub struct ProjectionArguments {
     events: Type,
     /// `namespaces("...", ...)`.
     namespaces: Vec<LitStr>,
+    /// `updates(Query, ...)`: its subscription queries.
+    updates: Vec<Type>,
+    /// `subscriptions = Name`: the trait of whatever subscribes to them all.
+    subscriptions: Option<syn::Ident>,
 }
 
 impl syn::parse::Parse for ProjectionArguments {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
         let (mut name, mut events, mut namespaces) = (None, None, None);
+        let (mut updates, mut subscriptions) = (Vec::new(), None);
         let span = input.span();
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -169,10 +194,21 @@ impl syn::parse::Parse for ProjectionArguments {
                     let list = content.parse_terminated(|input| input.parse::<LitStr>(), syn::Token![,])?;
                     namespaces = Some(list.into_iter().collect::<Vec<_>>());
                 }
+                "updates" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    let list = content.parse_terminated(<Type as syn::parse::Parse>::parse, syn::Token![,])?;
+                    updates = list.into_iter().collect();
+                }
+                "subscriptions" => {
+                    input.parse::<syn::Token![=]>()?;
+                    subscriptions = Some(input.parse::<syn::Ident>()?);
+                }
                 _ => {
                     return Err(Error::new(
                         key.span(),
-                        "expected `name = \"...\"`, `events = Type` or `namespaces(\"...\", ...)`",
+                        "expected `name = \"...\"`, `events = Type`, `namespaces(\"...\", ...)`, \
+                         `updates(Query, ...)` or `subscriptions = TraitName`",
                     ));
                 }
             }
@@ -194,10 +230,24 @@ impl syn::parse::Parse for ProjectionArguments {
                 return Err(Error::new(namespace.span(), "this namespace is listed twice"));
             }
         }
+        for (index, query) in updates.iter().enumerate() {
+            let text = quote!(#query).to_string();
+            if updates[..index].iter().any(|other| quote!(#other).to_string() == text) {
+                return Err(Error::new(query.span(), "this query is listed twice"));
+            }
+        }
+        if let (Some(subscriptions), true) = (&subscriptions, updates.is_empty()) {
+            return Err(Error::new(
+                subscriptions.span(),
+                "`subscriptions` names the trait of the queries in `updates(..)`: list them",
+            ));
+        }
         Ok(Self {
             name,
             events,
             namespaces,
+            updates,
+            subscriptions,
         })
     }
 }
@@ -210,6 +260,8 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
         name,
         events,
         namespaces,
+        updates,
+        subscriptions,
     } = arguments;
     let ident = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
@@ -261,7 +313,11 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
     let resets = ids.iter().map(&handler);
     let replays = ids.iter().map(&handler);
     let batches = ids.iter().map(&handler);
+    let emits = ids.iter().map(&handler);
+    let updateds = ids.iter().map(&handler);
     let (i1, i2, i3, i4, i5) = (&indices, &indices, &indices, &indices, &indices);
+    let (i6, i7) = (&indices, &indices);
+    let channels = channels(&item, &updates, subscriptions.as_ref());
 
     Ok(quote! {
         #item
@@ -274,6 +330,8 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
         }
 
         #(#has)*
+
+        #channels
 
         #[automatically_derived]
         impl #route_impl #krate::Route<__CqrsTx> for #self_ty #route_where {
@@ -320,8 +378,104 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
                     _ => ::core::option::Option::None,
                 }
             }
+
+            fn emits(namespace: usize) -> bool {
+                match namespace {
+                    #(#i6 => #emits::EMITS,)*
+                    _ => false,
+                }
+            }
+
+            async fn updated(
+                &self,
+                namespace: usize,
+                event: &#krate::EventEnvelope<#events>,
+                updates: &<Self as #krate::HasUpdates>::Updates,
+            ) {
+                match namespace {
+                    #(#i7 => #updateds::updated(self, event, updates).await,)*
+                    _ => {}
+                }
+            }
         }
     })
+}
+
+/// The channels of the projection's subscription queries: a struct with a
+/// `QueryUpdateChannel` per query in `updates(..)`, `HasUpdates` naming it
+/// (`()` without), and the `subscriptions` trait if named.
+fn channels(item: &ItemStruct, updates: &[Type], subscriptions: Option<&syn::Ident>) -> TokenStream2 {
+    let krate = krate();
+    let ident = &item.ident;
+    let vis = &item.vis;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    if updates.is_empty() {
+        return quote! {
+            #[automatically_derived]
+            impl #impl_generics #krate::HasUpdates for #ident #ty_generics #where_clause {
+                type Updates = ();
+            }
+        };
+    }
+    let channels = syn::Ident::new(&format!("{ident}Updates"), ident.span());
+    let fields: Vec<_> = (0..updates.len())
+        .map(|index| syn::Ident::new(&format!("query_{index}"), ident.span()))
+        .collect();
+    let listed = updates
+        .iter()
+        .map(|query| format!("[`{}`]", quote!(#query).to_string().replace(' ', "")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let doc = format!(
+        "The subscription queries' channels of [`{ident}`] ({listed}): `QueryUpdateEmitter<{ident}>`, what its \
+         namespaces' `updated` emits through."
+    );
+    let subscriptions = subscriptions.map(|subscriptions| {
+        let doc =
+            format!("Subscribes to every query [`{ident}`] updates ({listed}): implemented by any gateway that does.");
+        quote! {
+            #[doc = #doc]
+            #vis trait #subscriptions: #(#krate::QuerySubscriptions<#updates>)+* {}
+            #[automatically_derived]
+            impl<T: ?::core::marker::Sized #(+ #krate::QuerySubscriptions<#updates>)*> #subscriptions for T {}
+        }
+    });
+    quote! {
+        #[doc = #doc]
+        #[derive(Default)]
+        #vis struct #channels {
+            #(#fields: #krate::QueryUpdateChannel<#updates>,)*
+        }
+
+        impl #channels {
+            /// Sends `update` to the subscriptions of query `Q` that
+            /// `filter` accepts (`|query: &FindPost| query.id == id`);
+            /// returns how many got it.
+            #vis fn emit<Q: #krate::Query>(&self, filter: impl Fn(&Q) -> bool, update: #krate::OutputOf<Q>) -> usize
+            where
+                Self: #krate::UpdatesOf<Q>,
+                #krate::OutputOf<Q>: ::core::clone::Clone,
+            {
+                <Self as #krate::UpdatesOf<Q>>::updates(self).emit(filter, update)
+            }
+        }
+
+        #(
+            #[automatically_derived]
+            impl #krate::UpdatesOf<#updates> for #channels {
+                fn updates(&self) -> &#krate::QueryUpdateChannel<#updates> {
+                    &self.#fields
+                }
+            }
+        )*
+
+        #[automatically_derived]
+        impl #impl_generics #krate::HasUpdates for #ident #ty_generics #where_clause {
+            type Updates = #channels;
+        }
+
+        #subscriptions
+    }
 }
 
 /// `E` in `&EventEnvelope<E>`.

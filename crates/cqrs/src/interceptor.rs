@@ -321,6 +321,10 @@ where
 }
 
 /// An intercepted projection is the projection.
+impl<P: crate::HasUpdates, I> crate::HasUpdates for Intercepted<P, I> {
+    type Updates = P::Updates;
+}
+
 impl<P: Projection, I: Send + Sync + 'static> Projection for Intercepted<P, I> {
     const NAME: &'static str = P::NAME;
     type Event = P::Event;
@@ -381,5 +385,19 @@ where
 
     fn batch_size(namespace: usize) -> Option<usize> {
         P::batch_size(namespace)
+    }
+
+    /// Emitting is not intercepted: it is not part of the unit of work.
+    fn emits(namespace: usize) -> bool {
+        P::emits(namespace)
+    }
+
+    fn updated(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<P::Event>,
+        updates: &P::Updates,
+    ) -> impl Future<Output = ()> + Send {
+        self.inner.updated(namespace, event, updates)
     }
 }

@@ -97,7 +97,7 @@ pub use message::{
     Query, QueryGateway, QueryHandler,
 };
 #[doc(hidden)]
-pub use projection::{HasNamespace, NamespaceHandler, namespace_id};
+pub use projection::{HasNamespace, HasUpdates, NamespaceHandler, namespace_id};
 pub use projection::{Projection, Route};
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
 pub use store::{
@@ -107,9 +107,9 @@ pub use store::{
 #[cfg(feature = "tokio")]
 pub use streaming::{
     CatchUp, EmitUpdates, Events, GlobalProgress, LiveEvents, ProcessorHandle, ProcessorProgress, ProcessorStatus,
-    Projected, ProjectionHandle, ProjectionProcessors, ProjectionProgress, QueryUpdateEmitter, ResetError,
-    SubscriptionOptions, SubscriptionQueries, TrackingOptions, TrackingProcessor, UpdatesOf, emit_updates, head_of,
-    subscribe,
+    Projected, ProjectionHandle, ProjectionProcessors, ProjectionProgress, QueryUpdateChannel, QueryUpdateEmitter,
+    ResetError, SubscriptionOptions, SubscriptionQueries, TrackingOptions, TrackingProcessor, UpdatesOf, emit_updates,
+    head_of, subscribe,
 };
 pub use token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
 pub use transaction::TransactionManager;

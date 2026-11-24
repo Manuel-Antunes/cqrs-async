@@ -62,8 +62,9 @@ pub fn command_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream
 
 /// The query counterpart of `#[command_gateway]`: `handles(Q, ...)`, each
 /// routed to the struct's `QueryHandler<Q>` impl. `queries = Name` generates
-/// the trait of every gateway answering them, and `subscriptions = Name` a
-/// trait bounded by `QuerySubscriptions` of every query listed.
+/// the trait of every gateway answering them. Subscribing is the
+/// projection's (`#[cqrs::projection(.., updates(..), subscriptions =
+/// Name)]`): it pushes the updates.
 #[proc_macro_attribute]
 pub fn query_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
     let parser = |input: syn::parse::ParseStream| gateway::GatewayArguments::parse(gateway::Kind::Queries, input);
@@ -75,16 +76,16 @@ pub fn query_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
     ))
 }
 
-/// A struct of `QueryUpdateEmitter<Q>` fields says where each query's
+/// A struct of `QueryUpdateChannel<Q>` fields says where each query's
 /// updates are emitted: it implements `UpdatesOf<Q>` per field, so
-/// `SubscriptionQueries` can subscribe to any of them. Projections share it
-/// (in an `Arc`) and emit through its fields.
+/// `SubscriptionQueries` can subscribe to any of them. For updates
+/// assembled by hand; a projection's `updates(..)` makes its own.
 ///
 /// ```ignore
 /// #[derive(Default, QueryUpdates)]
 /// pub struct PostUpdates {
-///     pub find: QueryUpdateEmitter<FindPost>,
-///     pub published: QueryUpdateEmitter<ListPublished>,
+///     pub find: QueryUpdateChannel<FindPost>,
+///     pub published: QueryUpdateChannel<ListPublished>,
 /// }
 /// ```
 #[proc_macro_derive(QueryUpdates)]
@@ -122,6 +123,13 @@ pub fn event_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
 /// namespace to its `#[cqrs::event_handler(namespace = ..)]` impl): a
 /// projection missing a handler does not run, and a handler for a namespace
 /// not listed does not compile. Put it before `#[derive]`.
+///
+/// `updates(FindPost, ..)` lists its subscription queries: it gets a channel
+/// for each (`QueryUpdateEmitter<Self>`), which a namespace's
+/// `async fn updated(&self, event, updates: &QueryUpdateEmitter<Self>)`
+/// emits through, and which the unit's subscriptions listen to.
+/// `subscriptions = Name` also generates the trait of whatever subscribes to
+/// them all.
 #[proc_macro_attribute]
 pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(projection::projection(

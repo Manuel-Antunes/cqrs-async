@@ -1277,7 +1277,7 @@ struct Totals {
     fail_once_at: Option<u64>,
     failed: std::sync::atomic::AtomicBool,
     /// Announces each applied position, once committed.
-    applied: Arc<cqrs::QueryUpdateEmitter<Applied, u64>>,
+    applied: Arc<cqrs::QueryUpdateChannel<Applied, u64>>,
 }
 
 /// Subscribed to by the test, to see what the projection announced.

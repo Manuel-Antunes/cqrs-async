@@ -11,7 +11,7 @@ use std::{
 
 use cqrs::{
     AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
-    ProcessingContext, QueryGateway, QuerySubscriptions, QueryUpdateEmitter, StreamId, SubscriptionQueries,
+    ProcessingContext, QueryGateway, QuerySubscriptions, QueryUpdateChannel, StreamId, SubscriptionQueries,
 };
 use futures_util::StreamExt;
 
@@ -31,8 +31,8 @@ struct GrandTotal;
 /// Where the updates of each query are emitted.
 #[derive(Default, cqrs::QueryUpdates)]
 struct Updates {
-    totals: QueryUpdateEmitter<TotalOf>,
-    grand: QueryUpdateEmitter<GrandTotal>,
+    totals: QueryUpdateChannel<TotalOf>,
+    grand: QueryUpdateChannel<GrandTotal>,
 }
 
 /// An in-memory read model: sums per clock, then pushes the new totals once
@@ -89,7 +89,7 @@ impl cqrs::QueryHandler<GrandTotal> for Queries {
 }
 
 /// Emits only, holds nothing; no namespace: it runs in a group.
-struct Ticks(Arc<QueryUpdateEmitter<GrandTotal, u64>>);
+struct Ticks(Arc<QueryUpdateChannel<GrandTotal, u64>>);
 
 #[cqrs::event_handler]
 impl EventHandler for Ticks {
@@ -171,7 +171,7 @@ async fn a_processing_group_of_projections_shares_one_token_and_one_unit_of_work
         sums: Mutex::default(),
         updates: Arc::clone(&updates),
     });
-    let positions = Arc::new(QueryUpdateEmitter::<GrandTotal, u64>::new());
+    let positions = Arc::new(QueryUpdateChannel::<GrandTotal, u64>::new());
     let mut seen = Box::pin(positions.subscribe(GrandTotal));
 
     let group = events

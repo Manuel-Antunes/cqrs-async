@@ -32,7 +32,8 @@ pub use progress::{GlobalProgress, ProcessorProgress, ProjectionProgress};
 pub use projection::{ProjectionHandle, ProjectionProcessors};
 pub use subscription::{SubscriptionOptions, subscribe};
 pub use updates::{
-    CatchUp, EmitUpdates, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf, emit_updates, head_of,
+    CatchUp, EmitUpdates, Projected, QueryUpdateChannel, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf,
+    emit_updates, head_of,
 };
 
 use crate::{

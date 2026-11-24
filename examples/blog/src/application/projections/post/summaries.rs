@@ -1,12 +1,10 @@
 //! The `summaries` namespace: the read model the queries answer from.
 
-use std::sync::Arc;
-
-use cqrs::{EmitUpdates, EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext, QueryUpdateEmitter};
 
 use super::PostProjection;
 use crate::{
-    application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore, PostUpdates},
+    application::queries::{FindPost, ListPublished, PostSummary, PostSummaryRepository, PostSummaryStore},
     domain::{PostEvent, PostId},
 };
 
@@ -71,35 +69,20 @@ where
         self.summaries.clear(context.transaction()).await?;
         Ok(())
     }
-}
 
-/// Pushes the summary queries' new results once the projection handled an
-/// event, whichever instance projected it: the post's new summary, and the
-/// new list of published posts if it changed.
-pub struct PostSummaryUpdates<S> {
-    /// Where the rows are read from.
-    summaries: Arc<S>,
-    /// Where the queries' new results go.
-    updates: Arc<PostUpdates>,
-}
-
-impl<S> PostSummaryUpdates<S> {
-    /// Updates read from `summaries`, pushed through `updates`.
-    pub fn new(summaries: Arc<S>, updates: Arc<PostUpdates>) -> Self {
-        Self { summaries, updates }
-    }
-}
-
-impl<S: PostSummaryRepository> EmitUpdates<PostEvent> for PostSummaryUpdates<S> {
-    async fn emit(&self, event: &EventEnvelope<PostEvent>) {
+    /// Pushes the summary queries' new results, on every instance, once
+    /// this namespace handled the event (whichever instance did): the
+    /// post's new summary, and the new list of published posts if it
+    /// changed.
+    async fn updated(&self, event: &EventEnvelope<PostEvent>, updates: &QueryUpdateEmitter<Self>) {
         let Ok(id) = post_of(event) else { return };
         if let Ok(Some(summary)) = self.summaries.find(id).await {
-            self.updates.find.emit(|query| query.id == id, Some(summary));
+            updates.emit(|query: &FindPost| query.id == id, Some(summary));
         }
         if matches!(event.payload, PostEvent::Published)
             && let Ok(published) = self.summaries.published().await
         {
-            self.updates.published.emit(|_| true, published);
+            updates.emit(|_: &ListPublished| true, published);
         }
     }
 }

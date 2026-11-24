@@ -10,4 +10,4 @@
 /// The posts' projection.
 mod post;
 
-pub use post::{NotificationError, Notifier, PostProjection, PostSummaryUpdates};
+pub use post::{NotificationError, Notifier, PostProjection, PostProjectionUpdates, PostSubscriptions};

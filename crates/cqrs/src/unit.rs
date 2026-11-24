@@ -10,10 +10,8 @@
 //!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher
 //!     .intercept(Audit(log))
 //!     .queries(PostQueryGateway::new(summaries.clone()))
-//!     .projection(PostProjection::new(summaries, notifier))  // every namespace
-//!     .emit(PostSummaryUpdates::new(summaries, updates.clone()))
-//!     .subscriptions(updates)                                 // queries wait for the projections
-//!     .build();
+//!     .projection(PostProjection::new(summaries, notifier))  // every namespace, its updates
+//!     .build();                                               // queries subscribable
 //!
 //! app.commands().send(CreatePost { .. }).await?;
 //! app.queries().subscribe(FindPost { id });
@@ -73,8 +71,8 @@ struct Processing {
     projections: Vec<ProcessorProgress>,
     /// The running processors, taken by [`Cqrs::stop`].
     handles: std::sync::Mutex<Vec<ProcessorHandle>>,
-    /// The running emitters ([`CqrsBuilder::emit`]): how to stop each, and
-    /// its task.
+    /// The running emitters (the projection namespaces' `updated`): how to
+    /// stop each, and its task.
     emitters: std::sync::Mutex<Vec<(tokio::sync::watch::Sender<bool>, tokio::task::JoinHandle<()>)>>,
     /// Each emitter's start: subscriptions wait for them.
     emitters_started: Vec<tokio::sync::watch::Receiver<bool>>,
@@ -135,8 +133,9 @@ impl<C, Q, E> Cqrs<C, Q, E> {
         &self.commands
     }
 
-    /// Where queries are asked, and subscribed to if the unit has
-    /// [`subscriptions`](CqrsBuilder::subscriptions).
+    /// Where queries are asked, and subscribed to if the unit has a
+    /// [`projection`](CqrsBuilder::projection) (to the queries of its
+    /// `updates(..)`).
     pub fn queries(&self) -> &Q {
         &self.queries
     }
@@ -259,7 +258,7 @@ tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
 
 /// Builds a [`Cqrs`] unit step by step; each step's type says what is
 /// set. `C` is the commands, `Q` the queries, `E` the events and `U` the
-/// query update emitters, `()` until set.
+/// projection's query update channels, `()` until set.
 ///
 /// A step that needs another one does not exist before it. The command
 /// gateway is set once:
@@ -405,85 +404,74 @@ where
         self.processing.options = options;
         self
     }
-
-    /// Starts `projection`: a processor per namespace, named
-    /// `"{projection}.{namespace}"`. The unit's subscriptions wait, before
-    /// their first result, for the namespaces that see replays (its read
-    /// models), not for the others (side effects, such as notifications).
-    ///
-    /// # Panics
-    ///
-    /// Outside a Tokio runtime.
-    #[must_use]
-    pub fn projection<H>(mut self, projection: H) -> Self
-    where
-        H: Route<M::Tx, Event = Ev> + 'static,
-    {
-        let running = self
-            .events
-            .projection(projection)
-            .with_options(self.processing.options)
-            .spawn();
-        self.processing.projections.extend(running.read_models());
-        self.processing.all.extend(running.progress());
-        self.processing
-            .handles
-            .get_mut()
-            .expect("processors poisoned")
-            .extend(running.into_handles());
-        self
-    }
-
-    /// Pushes query updates through `emitter` for every event committed from
-    /// now on, once every projection started so far handled it, in any
-    /// instance ([`emit_updates`](crate::emit_updates)): subscribers of
-    /// every instance see every change. Call it after the projections.
-    ///
-    /// # Panics
-    ///
-    /// Outside a Tokio runtime.
-    #[must_use]
-    pub fn emit<H>(mut self, emitter: H) -> Self
-    where
-        H: crate::EmitUpdates<Ev> + 'static,
-    {
-        let (stop, mut stopped) = tokio::sync::watch::channel(false);
-        let shutdown = async move {
-            let _ = stopped.changed().await;
-        };
-        let (started, started_rx) = tokio::sync::watch::channel(false);
-        let (feed, progress) = (self.events.clone(), self.processing.projections.clone());
-        let task = tokio::spawn(async move {
-            let head = crate::head_of(&feed).await;
-            let _ = started.send(true);
-            crate::emit_updates(head, feed, progress, emitter, shutdown).await;
-        });
-        self.processing.emitters_started.push(started_rx);
-        self.processing
-            .emitters
-            .lock()
-            .expect("emitters poisoned")
-            .push((stop, task));
-        self
-    }
 }
 
 #[cfg(feature = "tokio")]
-impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
-    /// Makes the queries subscribable: the current result once every
-    /// projection of the unit handled what was committed when the
-    /// subscription started (a client sees its own commands), then what
-    /// the projections emit through `updates` (Axon's subscription
-    /// queries).
-    pub fn subscriptions<U>(self, updates: Arc<U>) -> CqrsBuilder<P, C, Q, E, Arc<U>> {
+impl<P, C, Q, Ev, S, T, M> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, ()>
+where
+    Ev: DomainEvent + Clone,
+    S: ReadLog<Ev> + Clone + 'static,
+    T: TokenStore<Tx = M::Tx> + Clone + 'static,
+    M: TransactionManager + Clone + 'static,
+{
+    /// Starts `projection`: a processor per namespace, named
+    /// `"{projection}.{namespace}"`, and its subscription queries' channels
+    /// (its `updates(..)`). Each namespace with an `updated` gets an emitter
+    /// on this instance, which follows the events committed from now on and
+    /// emits once the namespace handled each one, whichever instance did.
+    ///
+    /// The unit's queries become subscribable to the projection's
+    /// `updates(..)`: the current result once the namespaces that see
+    /// replays (its read models) handled what was committed when the
+    /// subscription started (a client sees its own commands), then the
+    /// updates. A unit is one aggregate root: it has one projection.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime.
+    #[allow(clippy::type_complexity)]
+    pub fn projection<H>(
+        self,
+        projection: H,
+    ) -> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, Arc<<H as crate::HasUpdates>::Updates>>
+    where
+        H: Route<M::Tx, Event = Ev> + 'static,
+    {
         let CqrsBuilder {
             publisher,
             commands,
             queries,
             events,
-            processing,
+            mut processing,
             ..
         } = self;
+        let projection = Arc::new(projection);
+        let updates = Arc::new(<H as crate::HasUpdates>::Updates::default());
+        let running = events
+            .projection(Arc::clone(&projection))
+            .with_options(processing.options)
+            .spawn();
+        for (index, namespace) in H::NAMESPACES.iter().enumerate() {
+            if !H::emits(index) {
+                continue;
+            }
+            let progress = running.namespace(namespace).map(ProcessorProgress::of);
+            let progress = progress.expect("a processor per namespace");
+            let emitter = NamespaceUpdates {
+                projection: Arc::clone(&projection),
+                updates: Arc::clone(&updates),
+                namespace: index,
+                transaction: std::marker::PhantomData,
+            };
+            processing.spawn_emitter(events.clone(), progress, emitter);
+        }
+        processing.projections.extend(running.read_models());
+        processing.all.extend(running.progress());
+        processing
+            .handles
+            .get_mut()
+            .expect("processors poisoned")
+            .extend(running.into_handles());
         CqrsBuilder {
             publisher,
             commands,
@@ -492,6 +480,52 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
             updates,
             processing,
         }
+    }
+}
+
+/// A projection namespace's `updated`, as an emitter run on each instance.
+#[cfg(feature = "tokio")]
+struct NamespaceUpdates<H: crate::HasUpdates, Tx> {
+    /// The projection, shared with its processors.
+    projection: Arc<H>,
+    /// Its channels, shared with the subscriptions.
+    updates: Arc<H::Updates>,
+    /// Which namespace.
+    namespace: usize,
+    /// The units of work its handlers run in.
+    transaction: std::marker::PhantomData<fn() -> Tx>,
+}
+
+#[cfg(feature = "tokio")]
+impl<H: Route<Tx>, Tx: Send> crate::EmitUpdates<H::Event> for NamespaceUpdates<H, Tx> {
+    fn emit(&self, event: &crate::EventEnvelope<H::Event>) -> impl std::future::Future<Output = ()> + Send {
+        self.projection.updated(self.namespace, event, &self.updates)
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl Processing {
+    /// Spawns `emitter` over `feed`, from its head, each event once
+    /// `progress` reached it; subscriptions wait until it took its head.
+    fn spawn_emitter<E, F, G, H>(&mut self, feed: F, progress: G, emitter: H)
+    where
+        E: DomainEvent,
+        F: crate::EventFeed<E> + Send + Sync + 'static,
+        G: crate::ProjectionProgress + 'static,
+        H: crate::EmitUpdates<E> + 'static,
+    {
+        let (stop, mut stopped) = tokio::sync::watch::channel(false);
+        let shutdown = async move {
+            let _ = stopped.changed().await;
+        };
+        let (started, started_rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            let head = crate::head_of(&feed).await;
+            let _ = started.send(true);
+            crate::emit_updates(head, feed, progress, emitter, shutdown).await;
+        });
+        self.emitters_started.push(started_rx);
+        self.emitters.get_mut().expect("emitters poisoned").push((stop, task));
     }
 }
 

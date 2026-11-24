@@ -24,9 +24,6 @@ pub struct GatewayArguments {
     /// `commands = Name` / `queries = Name`: the trait of every gateway
     /// routing them.
     port: Option<Ident>,
-    /// `subscriptions = Name` (queries): the trait of every gateway
-    /// subscribing to them.
-    subscriptions: Option<Ident>,
 }
 
 impl GatewayArguments {
@@ -38,10 +35,13 @@ impl GatewayArguments {
         };
         let expected = match kind {
             Kind::Commands => "expected `handles(Command, ...)` or `commands = TraitName`",
-            Kind::Queries => "expected `handles(Query, ...)`, `queries = TraitName` or `subscriptions = TraitName`",
+            Kind::Queries => {
+                "expected `handles(Query, ...)` or `queries = TraitName` (subscriptions are the projection's: \
+                              `#[cqrs::projection(.., updates(..), subscriptions = TraitName)]`)"
+            }
         };
         let span = input.span();
-        let (mut handles, mut port, mut subscriptions) = (None, None, None);
+        let (mut handles, mut port) = (None, None);
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             match key.to_string().as_str() {
@@ -54,10 +54,6 @@ impl GatewayArguments {
                 key_name if key_name == port_key => {
                     input.parse::<syn::Token![=]>()?;
                     port = Some(input.parse()?);
-                }
-                "subscriptions" if kind == Kind::Queries => {
-                    input.parse::<syn::Token![=]>()?;
-                    subscriptions = Some(input.parse()?);
                 }
                 _ => return Err(Error::new(key.span(), expected)),
             }
@@ -87,11 +83,7 @@ impl GatewayArguments {
                 return Err(Error::new(message.span(), "this message is listed twice"));
             }
         }
-        Ok(Self {
-            handles,
-            port,
-            subscriptions,
-        })
+        Ok(Self { handles, port })
     }
 }
 
@@ -113,11 +105,7 @@ pub fn gateway(kind: Kind, arguments: GatewayArguments, mut item: ItemStruct) ->
     let name = &item.ident;
     let vis = &item.vis;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let GatewayArguments {
-        handles,
-        port,
-        subscriptions,
-    } = arguments;
+    let GatewayArguments { handles, port } = arguments;
 
     let unit = match (kind, unit) {
         (Kind::Commands, Some(unit)) => Some(unit),
@@ -206,23 +194,11 @@ pub fn gateway(kind: Kind, arguments: GatewayArguments, mut item: ItemStruct) ->
             impl<T: ?::core::marker::Sized #(+ #krate::#gateway_trait<#handles>)*> #port for T {}
         }
     });
-    let subscriptions = subscriptions.map(|subscriptions| {
-        let doc =
-            format!("Subscribes to every query [`{name}`] handles ({listed}): implemented by any gateway that does.");
-        quote! {
-            #[doc = #doc]
-            #vis trait #subscriptions: #(#krate::QuerySubscriptions<#handles>)+* {}
-            #[automatically_derived]
-            impl<T: ?::core::marker::Sized #(+ #krate::QuerySubscriptions<#handles>)*> #subscriptions for T {}
-        }
-    });
-
     Ok(quote! {
         #item
         #check
         #(#dispatches)*
         #port
-        #subscriptions
     })
 }
 

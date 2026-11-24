@@ -1,4 +1,4 @@
-//! `#[derive(QueryUpdates)]`: a struct of `QueryUpdateEmitter<Q>` fields
+//! `#[derive(QueryUpdates)]`: a struct of `QueryUpdateChannel<Q>` fields
 //! becomes where each `Q`'s updates are emitted (`UpdatesOf<Q>`).
 
 use proc_macro2::TokenStream as TokenStream2;
@@ -30,7 +30,7 @@ pub fn query_updates(input: DeriveInput) -> Result<TokenStream2> {
         impls.push(quote! {
             #[automatically_derived]
             impl #impl_generics #krate::UpdatesOf<#query> for #name #ty_generics #where_clause {
-                fn updates(&self) -> &#krate::QueryUpdateEmitter<#query> {
+                fn updates(&self) -> &#krate::QueryUpdateChannel<#query> {
                     &self.#ident
                 }
             }
@@ -39,15 +39,15 @@ pub fn query_updates(input: DeriveInput) -> Result<TokenStream2> {
     if impls.is_empty() {
         return Err(Error::new_spanned(
             name,
-            "no emitter: add `QueryUpdateEmitter<Query>` fields",
+            "no channel: add `QueryUpdateChannel<Query>` fields",
         ));
     }
     Ok(quote!(#(#impls)*))
 }
 
-/// `Q` in a field of type `QueryUpdateEmitter<Q>`.
+/// `Q` in a field of type `QueryUpdateChannel<Q>`.
 fn emitted_query(ty: &Type) -> Result<&Type> {
-    let error = || Error::new_spanned(ty, "expected `QueryUpdateEmitter<Query>`");
+    let error = || Error::new_spanned(ty, "expected `QueryUpdateChannel<Query>`");
     let Type::Path(path) = ty else {
         return Err(error());
     };
@@ -55,7 +55,7 @@ fn emitted_query(ty: &Type) -> Result<&Type> {
         .path
         .segments
         .last()
-        .filter(|segment| segment.ident == "QueryUpdateEmitter")
+        .filter(|segment| segment.ident == "QueryUpdateChannel")
         .ok_or_else(error)?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(error());
