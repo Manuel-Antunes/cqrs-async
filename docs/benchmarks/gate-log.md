@@ -198,3 +198,38 @@ of work (D17). `unit/command_gateway` is 29.4 ns against 14.3 ns at
 difference is the command's unit of work (7b.1b: begin, append, commit,
 announce, the retry loop), not D17 or D18. 15 ns per command against a
 command of about 1 ms on PostgreSQL; the versus does not see it.
+
+## 2026-11-24, PostgreSQL path optimizations (A/B against `263f8cd`)
+
+Four changes, none of them to the semantics: a conflict found by the
+version check returns the stream's version in the append's own statement
+(before, every conflict read it again); the batch and the metadata are
+serialized straight to JSON text (no `serde_json::Value`); an aggregate is
+rebuilt through `LoadStream::replay`, which reads and decodes only the
+sequence, type, version and payload, row by row (no metadata, no stream
+ids, no list of envelopes); a page read probes the index only for the
+positions the page does not hold.
+
+Both release binaries alternately, three rounds of one run each, load
+average 6.7-12.5 (the "after" rounds started under slightly more load).
+Absolute values, ours:
+
+| Measure | before r1 | r2 | r3 | **before** | after r1 | r2 | r3 | **after** | change | ratio before -> after |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| open account, cmd/s | 4151 | 4542 | 4286 | **4286** | 4335 | 4522 | 4675 | **4522** | +6% | 1.14 -> 1.31 |
+| mixed load, cmd/s | 3993 | 3874 | 4027 | **3993** | 3979 | 4160 | 4273 | **4160** | +4% | 1.31 -> 1.40 |
+| mixed load, p99 ms | 18.6 | 18.8 | 17.7 | **18.6** | 15.8 | 15.1 | 14.5 | **15.1** | -19% | 0.81 -> 0.67 |
+| mixed load, all done ms | 5100 | 5282 | 5075 | **5100** | 5125 | 4900 | 4734 | **4900** | -4% | 0.78 -> 0.72 |
+| hot account, cmd/s | 147 | 131 | 128 | **131** | 157 | 158 | 170 | **158** | +21% | 1.38 -> 1.42 |
+| hot account, p99 ms | 1067 | 1209 | 1187 | **1187** | 927 | 938 | 863 | **927** | -22% | 0.60 -> 0.53 |
+| read model rebuild, events/s | 40393 | 37283 | 40890 | **40393** | 42248 | 43405 | 48423 | **43405** | +7% | 21.8 -> 24.9 |
+| 5000-event replay, p50 ms | 4.23 | 4.26 | 4.07 | **4.23** | 2.47 | 2.54 | 2.47 | **2.47** | -42% | 0.80 -> 0.49 |
+| 5000-event replay, p99 ms | 6.26 | 6.13 | 6.07 | **6.13** | 4.27 | 5.13 | 4.03 | **4.27** | -30% | 1.03 -> 0.67 |
+| snapshot every 100, p50 ms | 1.27 | 1.23 | 1.08 | **1.23** | 1.07 | 1.10 | 1.07 | **1.07** | -13% | 0.62 -> 0.61 |
+| events or money lost | 0 | 0 | 0 | **0** | 0 | 0 | 0 | **0** | | |
+
+The replay, the mixed p99 and the hot account do not overlap between the
+two sets of rounds. Every gate measure passes, mixed p99 (0.67 <= 0.76)
+included, for the first time on this machine. Conflicts per 1000 mixed
+commands are unchanged (23.3 / 23.6): they come from the transfer policy
+running asynchronously against the clients' accounts, not from the store.

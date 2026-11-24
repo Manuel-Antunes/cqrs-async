@@ -8,6 +8,7 @@ use cqrs::{
     AppendCondition, AppendEvents, Cursor, DomainEvent, EventCriteria, EventEnvelope, ExpectedVersion, Gap, Horizon,
     LoadStream, LogPage, Metadata, ReadLog, Recorded, SourceEvents, StoreError, StreamId, TaggedEvent,
 };
+use futures_util::TryStreamExt;
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::{Connection, PgConnection, PgExecutor, PgPool, Postgres, Transaction};
 
@@ -125,6 +126,33 @@ where
         .map_err(backend)?;
         rows.into_iter().map(|row| envelope(row, &*self.upcaster)).collect()
     }
+
+    /// Reads only what rebuilding an aggregate uses (sequence, type,
+    /// version, payload) and decodes each row as it arrives: no metadata,
+    /// no stream ids, no list of envelopes.
+    async fn replay<F>(&self, stream: &StreamId, after: u64, mut apply: F) -> Result<u64, StoreError>
+    where
+        E: Send,
+        F: FnMut(u64, E) + Send,
+    {
+        let mut rows = sqlx::query!(
+            r#"SELECT sequence, event_type, event_version, payload::text AS "payload!" FROM cqrs_events
+               WHERE log = $1 AND stream_type = $2 AND stream_id = $3 AND sequence > $4 ORDER BY sequence"#,
+            &*self.log,
+            stream.aggregate_type(),
+            stream.id(),
+            to_i64(after),
+        )
+        .fetch(&self.pool);
+        let mut count = 0;
+        while let Some(row) = rows.try_next().await.map_err(backend)? {
+            let (event, _, _) =
+                StoredEvent::decode_text(row.event_type, row.event_version as u32, &row.payload, &*self.upcaster)?;
+            apply(row.sequence as u64, event);
+            count += 1;
+        }
+        Ok(count)
+    }
 }
 
 /// Appends on its own: one statement on the pool (an implicit transaction)
@@ -155,15 +183,12 @@ where
                     rows => break rows,
                 }
             };
-            return self.recorded(rows, stream, expected).await;
+            return recorded(rows);
         };
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let rows = append_conditional(&mut tx, &self.log, stream, expected, events, metadata, condition).await;
-        if let Err(StoreError::Conflict { .. }) = rows {
-            drop(tx); // roll back and unlock before reading the version
-            return Err(self.conflict(stream, expected).await);
-        }
-        let committed = self.recorded(rows, stream, expected).await?;
+        // An error drops `tx`: rolled back, the locks released.
+        let committed =
+            recorded(append_conditional(&mut tx, &self.log, stream, expected, events, metadata, condition).await)?;
         tx.commit().await.map_err(backend)?;
         Ok(committed)
     }
@@ -213,7 +238,7 @@ where
             }
             None => append_rows(&mut **tx, &self.log, stream, expected, events, metadata).await,
         };
-        self.recorded(rows, stream, expected).await
+        recorded(rows)
     }
 }
 
@@ -331,8 +356,13 @@ where
             ),
             missing AS (
                 SELECT array(
-                    SELECT p FROM generate_series($1::bigint + 1, (SELECT coalesce(max(position), $1) FROM page)) AS p
+                    SELECT p FROM (
+                        SELECT generate_series($1::bigint + 1, (SELECT coalesce(max(position), $1) FROM page)) AS p
+                        EXCEPT
+                        SELECT position FROM page
+                    ) AS absent
                     WHERE NOT EXISTS (SELECT 1 FROM cqrs_events WHERE position = p)
+                    ORDER BY p
                 ) AS positions
             )
             SELECT s.xmin AS "xmin!", s.xmax AS "xmax!", m.positions AS "missing!",
@@ -518,17 +548,11 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
         ExpectedVersion::Exact(version) => Some(to_i64(version)),
         ExpectedVersion::Any => None,
     };
-    let batch = events
-        .iter()
-        .map(|TaggedEvent { event, .. }| {
-            let stored = StoredEvent::encode(event)?;
-            Ok(serde_json::json!({ "type": stored.event_type, "version": stored.version, "payload": stored.payload }))
-        })
-        .collect::<Result<Vec<_>, StoreError>>()?;
+    let batch = serde_json::to_string(&Batch(events)).map_err(backend)?;
+    let metadata = serde_json::to_string(metadata).map_err(backend)?;
     let keys = write_keys(log, events);
     let tags = EventTags::of(events);
-    let result = sqlx::query_as!(
-        Appended,
+    let result = sqlx::query!(
         r#"
         WITH current AS (
             SELECT coalesce(max(sequence), 0) AS version FROM cqrs_events
@@ -546,20 +570,27 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
             INSERT INTO cqrs_event_tags (log, tag, position)
             SELECT $10, t.tag, positions.position
             FROM unnest($7::text[], $8::bigint[]) AS t(tag, n) JOIN positions ON positions.n = t.n
+        ),
+        inserted AS (
+            INSERT INTO cqrs_events
+                (log, position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)
+            SELECT $10, positions.position, $1, $2, allowed.version + batch.n,
+                   batch.item->>'type', (batch.item->>'version')::integer, batch.item->'payload', $6::text::json
+            FROM allowed, positions, json_array_elements($5::text::json) WITH ORDINALITY AS batch(item, n)
+            WHERE positions.n = batch.n
+            RETURNING position, sequence, recorded_at
         )
-        INSERT INTO cqrs_events
-            (log, position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata)
-        SELECT $10, positions.position, $1, $2, allowed.version + batch.n,
-               batch.item->>'type', (batch.item->>'version')::integer, batch.item->'payload', $6
-        FROM allowed, positions, json_array_elements($5::json) WITH ORDINALITY AS batch(item, n)
-        WHERE positions.n = batch.n
-        RETURNING position AS "position!", sequence AS "sequence!", (extract(epoch FROM recorded_at) * 1000000)::bigint AS "recorded_us!""#,
+        SELECT position AS "position?", sequence AS "sequence?",
+               (extract(epoch FROM recorded_at) * 1000000)::bigint AS "recorded_us?", NULL::bigint AS "actual?"
+        FROM inserted
+        UNION ALL
+        SELECT NULL, NULL, NULL, version FROM current WHERE NOT EXISTS (SELECT 1 FROM allowed)"#,
         stream.aggregate_type(),
         stream.id(),
         expected_version,
         i32::try_from(events.len()).unwrap_or(i32::MAX),
-        serde_json::Value::Array(batch),
-        serde_json::to_value(metadata).map_err(backend)?,
+        batch,
+        metadata,
         &tags.tags,
         &tags.events,
         &keys,
@@ -567,21 +598,54 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
     )
     .fetch_all(executor)
     .await;
+    let conflict = |actual: Option<i64>| StoreError::Conflict {
+        stream: stream.clone(),
+        expected,
+        // An empty stream has no version.
+        actual: actual.filter(|&version| version > 0).map(|version| version as u64),
+    };
     match result {
-        // Nothing inserted: the version check refused the append.
-        Ok(rows) if rows.is_empty() => Err(StoreError::Conflict {
-            stream: stream.clone(),
-            expected,
-            actual: None,
-        }),
-        Ok(rows) => Ok(rows),
-        // A concurrent append to this stream won (see above).
-        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => Err(StoreError::Conflict {
-            stream: stream.clone(),
-            expected,
-            actual: None,
-        }),
+        // The version check refused the append: the row says what the
+        // stream is at.
+        Ok(rows) if rows.first().is_some_and(|row| row.actual.is_some()) => Err(conflict(rows[0].actual)),
+        Ok(rows) if rows.is_empty() => Err(conflict(None)),
+        Ok(rows) => Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                Some(Appended {
+                    position: row.position?,
+                    sequence: row.sequence?,
+                    recorded_us: row.recorded_us?,
+                })
+            })
+            .collect()),
+        // A concurrent append to this stream won (see above): its version
+        // is not known without another read, and only informative.
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => Err(conflict(None)),
         Err(error) => Err(backend(error)),
+    }
+}
+
+/// A batch as the append binds it (`$5`): a JSON array of
+/// `{"type", "version", "payload"}`, written straight from the events, with
+/// no intermediate `serde_json::Value`.
+struct Batch<'a, E>(&'a [TaggedEvent<E>]);
+
+impl<E: DomainEvent + Serialize> Serialize for Batch<'_, E> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        /// One event of the batch.
+        #[derive(Serialize)]
+        struct Item<'a, E> {
+            #[serde(rename = "type")]
+            event_type: &'a str,
+            version: u32,
+            payload: &'a E,
+        }
+        serializer.collect_seq(self.0.iter().map(|TaggedEvent { event, .. }| Item {
+            event_type: event.event_type(),
+            version: event.event_version(),
+            payload: event,
+        }))
     }
 }
 
@@ -722,49 +786,18 @@ where
     }
 }
 
-impl<E, U> PostgresEventStore<E, U> {
-    /// What the rows an append returned record, in event order, or its
-    /// error (a conflict completed with the stream's actual version).
-    async fn recorded(
-        &self,
-        rows: Result<Vec<Appended>, StoreError>,
-        stream: &StreamId,
-        expected: ExpectedVersion,
-    ) -> Result<Vec<Recorded>, StoreError> {
-        let mut rows = match rows {
-            Ok(rows) => rows,
-            Err(StoreError::Conflict { .. }) => return Err(self.conflict(stream, expected).await),
-            Err(error) => return Err(error),
-        };
-        rows.sort_by_key(|row| row.position);
-        Ok(rows
-            .into_iter()
-            .map(|row| Recorded {
-                position: row.position as u64,
-                sequence: row.sequence as u64,
-                recorded_at: from_micros(row.recorded_us),
-            })
-            .collect())
-    }
-
-    /// The conflict error for a refused append, with the stream's current
-    /// version (read after the fact: informative only).
-    async fn conflict(&self, stream: &StreamId, expected: ExpectedVersion) -> StoreError {
-        let actual = sqlx::query_scalar!(
-            "SELECT max(sequence) FROM cqrs_events WHERE log = $1 AND stream_type = $2 AND stream_id = $3",
-            &*self.log,
-            stream.aggregate_type(),
-            stream.id(),
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(None);
-        StoreError::Conflict {
-            stream: stream.clone(),
-            expected,
-            actual: actual.map(|sequence| sequence as u64),
-        }
-    }
+/// What the rows an append returned record, in event order.
+fn recorded(rows: Result<Vec<Appended>, StoreError>) -> Result<Vec<Recorded>, StoreError> {
+    let mut rows = rows?;
+    rows.sort_by_key(|row| row.position);
+    Ok(rows
+        .into_iter()
+        .map(|row| Recorded {
+            position: row.position as u64,
+            sequence: row.sequence as u64,
+            recorded_at: from_micros(row.recorded_us),
+        })
+        .collect())
 }
 
 /// Positions and sequences are stored as `bigint`.

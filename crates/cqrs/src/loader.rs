@@ -328,15 +328,17 @@ where
             None
         });
         let (mut aggregate, mut version) = snapshot.unwrap_or_else(|| (A::initial(id), 0));
-        let tail = self.store.load(&StreamId::of::<A>(id), version).await?;
-        if version == 0 && tail.is_empty() {
+        let replayed = self
+            .store
+            .replay(&StreamId::of::<A>(id), version, |sequence, event| {
+                aggregate.evolve(&event);
+                version = sequence;
+            })
+            .await?;
+        if version == 0 && replayed == 0 {
             return Ok(None);
         }
-        for event in &tail {
-            aggregate.evolve(&event.payload);
-            version = event.sequence;
-        }
-        if self.snapshot_every > 0 && tail.len() as u64 >= self.snapshot_every {
+        if self.snapshot_every > 0 && replayed >= self.snapshot_every {
             // A failed snapshot only means a longer replay next time.
             if let Err(error) = self.snapshots.save(&aggregate, version).await {
                 tracing::warn!(aggregate = A::TYPE, version, %error, "cannot keep the snapshot");

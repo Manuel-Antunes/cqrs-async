@@ -130,6 +130,31 @@ pub trait LoadStream<E>: Send + Sync {
         stream: &StreamId,
         after: u64,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send;
+
+    /// Hands `apply` each event of `stream` with `sequence > after`, oldest
+    /// first, with its sequence; returns how many there were. What
+    /// rebuilding an aggregate needs, and all it needs: a store can read and
+    /// decode less than [`load`](Self::load) (no metadata, no envelope, no
+    /// list of them). By default, through `load`.
+    fn replay<F>(
+        &self,
+        stream: &StreamId,
+        after: u64,
+        mut apply: F,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send
+    where
+        E: Send,
+        F: FnMut(u64, E) + Send,
+    {
+        async move {
+            let events = self.load(stream, after).await?;
+            let count = events.len() as u64;
+            for event in events {
+                apply(event.sequence, event.payload);
+            }
+            Ok(count)
+        }
+    }
 }
 
 /// Appends to streams, atomically per stream, with optimistic concurrency
