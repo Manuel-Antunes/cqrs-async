@@ -81,7 +81,6 @@ impl<A: Aggregate> Loaded<A> {
 /// to `New`, which expects the stream not to exist:
 ///
 /// ```
-/// # use std::sync::Arc;
 /// # use cqrs::{Appender, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, testing::block_on};
 /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 /// # enum DoorEvent { Installed { id: u32 } }
@@ -97,7 +96,7 @@ impl<A: Aggregate> Loaded<A> {
 /// }
 ///
 /// # block_on(async {
-/// let publisher = InlinePublisher::new(Arc::new(InMemoryEventStore::new()));
+/// let publisher = InlinePublisher::new(InMemoryEventStore::new());
 /// let mut events = Appender::new();
 /// Door::install(1, &mut events);
 /// events.commit(New::<Door>(1), &publisher).await?;

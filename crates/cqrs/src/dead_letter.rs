@@ -113,16 +113,24 @@ impl<E: Send + Sync, Tx: Send> DeadLetterQueue<E, Tx> for () {
 /// Parked events by (processor, sequence), oldest first.
 type Queues<E> = BTreeMap<(String, String), Vec<DeadLetter<E>>>;
 
-/// Dead letters kept in memory.
+/// Dead letters kept in memory. A handle: clones share the same letters.
 pub struct InMemoryDeadLetters<E> {
     /// Per processor, per sequence, oldest first.
-    letters: Mutex<Queues<E>>,
+    letters: Arc<Mutex<Queues<E>>>,
 }
 
 impl<E> Default for InMemoryDeadLetters<E> {
     fn default() -> Self {
         Self {
-            letters: Mutex::new(BTreeMap::new()),
+            letters: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl<E> Clone for InMemoryDeadLetters<E> {
+    fn clone(&self) -> Self {
+        Self {
+            letters: Arc::clone(&self.letters),
         }
     }
 }
@@ -197,45 +205,6 @@ impl<E: Send + Sync> DeadLetterQueue<E> for InMemoryDeadLetters<E> {
             letters.remove(&key);
         }
         Ok(removed)
-    }
-}
-
-/// A shared dead-letter queue is a dead-letter queue.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<E, Tx, Q: DeadLetterQueue<E, Tx>> DeadLetterQueue<E, Tx> for Arc<Q> {
-    fn contains(&self, processor: &str, sequence: &str) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        (**self).contains(processor, sequence)
-    }
-
-    fn sequences(&self, processor: &str) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
-        (**self).sequences(processor)
-    }
-
-    fn first(
-        &self,
-        processor: &str,
-        sequence: &str,
-    ) -> impl Future<Output = Result<Option<DeadLetter<E>>, StoreError>> + Send {
-        (**self).first(processor, sequence)
-    }
-
-    fn enqueue_in(
-        &self,
-        tx: &mut Tx,
-        processor: &str,
-        letter: DeadLetter<E>,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send {
-        (**self).enqueue_in(tx, processor, letter)
-    }
-
-    fn remove_in(
-        &self,
-        tx: &mut Tx,
-        processor: &str,
-        letter: &DeadLetter<E>,
-    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        (**self).remove_in(tx, processor, letter)
     }
 }
 

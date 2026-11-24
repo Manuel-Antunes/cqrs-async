@@ -386,7 +386,7 @@ async fn processors(report: &mut Report, scale: &Scale) {
     let events = scale.processor_events;
     for (name, projection) in [("no-op handler", false), ("post summaries projection", true)] {
         let live = Live::new();
-        seed_posts(&*live.store, events, 1).await;
+        seed_posts(&live.store, events, 1).await;
         let started = Instant::now();
         let handle = if projection {
             live.track(
@@ -413,7 +413,7 @@ async fn processors(report: &mut Report, scale: &Scale) {
 async fn segments(report: &mut Report, scale: &Scale) {
     let events = scale.processor_events / 2;
     let live = Live::new();
-    seed_posts(&*live.store, events, 1).await; // one event per aggregate: spread evenly
+    seed_posts(&live.store, events, 1).await; // one event per aggregate: spread evenly
     let last = live.last_position().await;
     for segments in [1_u32, 4, 14] {
         let options = cqrs::TrackingOptions {
@@ -442,7 +442,7 @@ async fn segments(report: &mut Report, scale: &Scale) {
 async fn catch_up(report: &mut Report, scale: &Scale) {
     let events = scale.catch_up_events;
     let live = Live::new();
-    seed_posts(&*live.store, events / 10, 10).await;
+    seed_posts(&live.store, events / 10, 10).await;
     let started = Instant::now();
     let mut stream = Box::pin(live.subscribe(0));
     for _ in 0..events {

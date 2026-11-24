@@ -82,7 +82,7 @@ struct Add {
     n: u64,
 }
 
-type Store = Arc<InMemoryEventStore<CounterEvent>>;
+type Store = InMemoryEventStore<CounterEvent>;
 
 /// What the application has over the store: a loader for its repository and
 /// the publisher its handlers commit through.
@@ -185,9 +185,9 @@ struct Gateway {
 }
 
 fn counters() -> Counters {
-    let store: Store = Arc::new(InMemoryEventStore::new());
+    let store: Store = InMemoryEventStore::new();
     Arc::new(Engine {
-        loader: AggregateLoader::new(Arc::clone(&store)),
+        loader: AggregateLoader::new(store.clone()),
         publisher: InlinePublisher::new(store),
     })
 }

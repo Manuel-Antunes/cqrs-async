@@ -1,7 +1,7 @@
 //! Domain tests: no store, no async. Given past events, when a decision
 //! runs, then expect the events it appended or the error.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
 
 use blog::domain::{Post, PostError, PostEvent, PostId};
 use cqrs::{
@@ -133,8 +133,8 @@ impl<Unit: Send + Sync + 'static> Aggregate for Counter<Unit> {
 #[test]
 fn framework_free_decisions_work_with_the_repository() {
     struct Clicks;
-    let store = Arc::new(InMemoryEventStore::new());
-    let loader = AggregateLoader::<Counter<Clicks>, _>::new(Arc::clone(&store));
+    let store = InMemoryEventStore::new();
+    let loader = AggregateLoader::<Counter<Clicks>, _>::new(store.clone());
     let publisher = InlinePublisher::new(store);
     // Load (or start), decide with a plain `Vec`, commit.
     let click = || async {

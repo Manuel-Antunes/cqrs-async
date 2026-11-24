@@ -125,10 +125,10 @@ impl Subscriber for Captured {
 
 #[test]
 fn a_failing_inline_handler_is_logged_by_default_and_the_event_is_committed() {
-    let store = Arc::new(InMemoryEventStore::new());
+    let store = InMemoryEventStore::new();
     let commands = Commands {
         tick: TickHandler {
-            events: InlinePublisher::new(Arc::clone(&store)).with_processor((notifier(true),)),
+            events: InlinePublisher::new(store.clone()).with_processor((notifier(true),)),
         },
     };
 
@@ -149,10 +149,10 @@ fn a_failing_inline_handler_is_logged_by_default_and_the_event_is_committed() {
 
 #[test]
 fn on_failure_hands_the_failure_to_the_application() {
-    let store = Arc::new(InMemoryEventStore::new());
+    let store = InMemoryEventStore::new();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
-    let events = InlinePublisher::new(Arc::clone(&store))
+    let events = InlinePublisher::new(store.clone())
         .with_processor((notifier(true),))
         .on_failure(move |failure: &ProcessingFailure| sink.lock().unwrap().push(failure.failures.len()));
     let commands = Commands {
@@ -167,10 +167,10 @@ fn on_failure_hands_the_failure_to_the_application() {
 
 #[test]
 fn a_healthy_handler_reports_nothing() {
-    let store = Arc::new(InMemoryEventStore::new());
+    let store = InMemoryEventStore::new();
     let seen = Arc::new(Mutex::new(0));
     let sink = Arc::clone(&seen);
-    let events = InlinePublisher::new(Arc::clone(&store))
+    let events = InlinePublisher::new(store.clone())
         .with_processor((notifier(false),))
         .on_failure(move |_: &ProcessingFailure| *sink.lock().unwrap() += 1);
     let commands = Commands {

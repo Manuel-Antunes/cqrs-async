@@ -4,7 +4,7 @@
 use std::{
     collections::HashMap,
     future::{Future, ready},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use crate::{Aggregate, StoreError, StreamId};
@@ -33,16 +33,25 @@ impl<A: Aggregate> SnapshotStore<A> for () {
     }
 }
 
-/// Snapshots kept in memory, as clones of the aggregate.
+/// Snapshots kept in memory, as clones of the aggregate. A handle: clones
+/// share the same snapshots.
 pub struct InMemorySnapshots<A> {
     /// The newest snapshot per stream, with its version.
-    snapshots: Mutex<HashMap<StreamId, (A, u64)>>,
+    snapshots: Arc<Mutex<HashMap<StreamId, (A, u64)>>>,
 }
 
 impl<A> Default for InMemorySnapshots<A> {
     fn default() -> Self {
         Self {
-            snapshots: Mutex::new(HashMap::new()),
+            snapshots: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl<A> Clone for InMemorySnapshots<A> {
+    fn clone(&self) -> Self {
+        Self {
+            snapshots: Arc::clone(&self.snapshots),
         }
     }
 }

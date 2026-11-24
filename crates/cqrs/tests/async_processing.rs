@@ -48,7 +48,7 @@ impl Aggregate for Clock {
     }
 }
 
-type Store = Arc<InMemoryEventStore<Ticked>>;
+type Store = InMemoryEventStore<Ticked>;
 
 struct World {
     store: Store,
@@ -59,10 +59,10 @@ struct World {
 
 impl World {
     fn new(capacity: usize) -> Self {
-        let store = Arc::new(InMemoryEventStore::new());
+        let store = InMemoryEventStore::new();
         let live = broadcast::channel(capacity).0;
-        let clocks = AggregateLoader::new(Arc::clone(&store));
-        let publisher = InlinePublisher::new(Arc::clone(&store)).with_processor((live.clone(),));
+        let clocks = AggregateLoader::new(store.clone());
+        let publisher = InlinePublisher::new(store.clone()).with_processor((live.clone(),));
         Self {
             store,
             live,
@@ -102,7 +102,7 @@ impl World {
     }
 
     fn subscribe(&self, after: u64) -> impl futures_core::Stream<Item = u64> + use<> {
-        subscribe(Arc::clone(&self.store), &self.live, after, options()).map(|event| event.unwrap().position)
+        subscribe(self.store.clone(), &self.live, after, options()).map(|event| event.unwrap().position)
     }
 }
 
@@ -199,13 +199,13 @@ impl EventHandler<Ticked> for Recorder {
 async fn a_tracking_processor_retries_in_order_until_it_succeeds() {
     let world = World::new(16);
     let recorder = Arc::new(Recorder::failing(3));
-    let checkpoints = Arc::new(InMemoryTokenStore::default());
+    let checkpoints = InMemoryTokenStore::default();
     let processor = TrackingProcessor::new(
         "recorder",
-        Arc::clone(&world.store),
+        world.store.clone(),
         &world.live,
         Arc::clone(&recorder),
-        Arc::clone(&checkpoints),
+        checkpoints.clone(),
     )
     .spawn();
 
@@ -222,14 +222,14 @@ async fn a_tracking_processor_retries_in_order_until_it_succeeds() {
 #[tokio::test(start_paused = true)]
 async fn a_restarted_processor_resumes_from_its_checkpoint() {
     let world = World::new(16);
-    let checkpoints = Arc::new(InMemoryTokenStore::default());
+    let checkpoints = InMemoryTokenStore::default();
     let first = Arc::new(Recorder::default());
     let processor = TrackingProcessor::new(
         "recorder",
-        Arc::clone(&world.store),
+        world.store.clone(),
         &world.live,
         Arc::clone(&first),
-        Arc::clone(&checkpoints),
+        checkpoints.clone(),
     )
     .spawn();
     world.tick(2).await;
@@ -241,10 +241,10 @@ async fn a_restarted_processor_resumes_from_its_checkpoint() {
     let second = Arc::new(Recorder::default());
     let processor = TrackingProcessor::new(
         "recorder",
-        Arc::clone(&world.store),
+        world.store.clone(),
         &world.live,
         Arc::clone(&second),
-        Arc::clone(&checkpoints),
+        checkpoints.clone(),
     )
     .spawn();
     processor.caught_up(4).await;
@@ -259,21 +259,21 @@ async fn a_failing_processor_reports_it_and_does_not_block_others() {
     let world = World::new(16);
     let stuck = Arc::new(Recorder::failing(u32::MAX));
     let healthy = Arc::new(Recorder::default());
-    let checkpoints = Arc::new(InMemoryTokenStore::default());
+    let checkpoints = InMemoryTokenStore::default();
     let stuck_processor = TrackingProcessor::new(
         "stuck",
-        Arc::clone(&world.store),
+        world.store.clone(),
         &world.live,
         Arc::clone(&stuck),
-        Arc::clone(&checkpoints),
+        checkpoints.clone(),
     )
     .spawn();
     let healthy_processor = TrackingProcessor::new(
         "healthy",
-        Arc::clone(&world.store),
+        world.store.clone(),
         &world.live,
         Arc::clone(&healthy),
-        Arc::clone(&checkpoints),
+        checkpoints.clone(),
     )
     .spawn();
 

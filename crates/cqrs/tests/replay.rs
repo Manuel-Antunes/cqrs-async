@@ -16,7 +16,7 @@ use cqrs::{
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 struct Ticked(u64);
 
-type Store = Arc<InMemoryEventStore<Ticked>>;
+type Store = InMemoryEventStore<Ticked>;
 
 /// Rebuildable: what it saw, cleared on reset.
 #[derive(Default)]
@@ -53,7 +53,7 @@ impl EventHandler<Ticked> for Mailer {
     const REPLAY: bool = false;
 }
 
-async fn tick(events: &Events<Ticked, Store, Arc<InMemoryTokenStore>>, n: u64) {
+async fn tick(events: &Events<Ticked, Store, InMemoryTokenStore>, n: u64) {
     let stream = StreamId::new("clock", n.to_string());
     events
         .store()
@@ -74,7 +74,7 @@ async fn eventually(check: impl Fn() -> bool) {
 
 #[tokio::test]
 async fn a_reset_replays_into_a_cleared_projection_and_skips_side_effects() {
-    let events = Events::new(Arc::new(InMemoryEventStore::new()));
+    let events = Events::new(InMemoryEventStore::new());
     let projection = Arc::new(Projection::default());
     let mailer = Arc::new(Mailer::default());
     for n in 1..=3 {
@@ -116,7 +116,7 @@ async fn a_reset_replays_into_a_cleared_projection_and_skips_side_effects() {
 
 #[tokio::test]
 async fn a_processing_group_replays_its_projection_but_not_its_side_effects() {
-    let events = Events::new(Arc::new(InMemoryEventStore::new()));
+    let events = Events::new(InMemoryEventStore::new());
     let projection = Arc::new(Projection::default());
     let mailer = Arc::new(Mailer::default());
     let group = || (Arc::clone(&projection), Arc::clone(&mailer));

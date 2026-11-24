@@ -104,7 +104,7 @@ impl EventHandler for Sum {
     }
 }
 
-type Store = Arc<InMemoryEventStore<Ticked>>;
+type Store = InMemoryEventStore<Ticked>;
 
 async fn tick(events: &Events<Ticked, Store>, ticks: impl IntoIterator<Item = u64>) -> u64 {
     let ticks: Vec<Ticked> = ticks.into_iter().map(Ticked).collect();

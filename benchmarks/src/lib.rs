@@ -8,7 +8,6 @@
 //! that API changes one module and the scenarios stay identical.
 
 use blog::domain::{Post, PostEvent, PostId};
-use std::sync::Arc;
 
 use cqrs::{
     AggregateLoader, EventPublisher, EventStore, ExpectedVersion, InMemoryEventStore, InlinePublisher, Loaded,
@@ -128,7 +127,7 @@ pub async fn seed_posts<S: EventStore<PostEvent>>(store: &S, posts: u64, events_
 }
 
 /// The shared in-memory store of the posts.
-pub type PostsStore = Arc<InMemoryEventStore<PostEvent>>;
+pub type PostsStore = InMemoryEventStore<PostEvent>;
 
 /// What an application has around the in-memory store with no processing: a
 /// loader (its repository's adapter) and an inline publisher (what command
@@ -145,10 +144,10 @@ pub struct PlainPosts<N = ()> {
 impl PlainPosts {
     /// An empty store, loading without snapshots.
     pub fn new() -> Self {
-        let store: PostsStore = Arc::new(InMemoryEventStore::new());
+        let store: PostsStore = InMemoryEventStore::new();
         Self {
-            loader: AggregateLoader::new(Arc::clone(&store)),
-            publisher: InlinePublisher::new(Arc::clone(&store)),
+            loader: AggregateLoader::new(store.clone()),
+            publisher: InlinePublisher::new(store.clone()),
             store,
         }
     }

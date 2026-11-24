@@ -3,8 +3,8 @@
 //! one place by a typed builder.
 //!
 //! ```text
-//! let store = Arc::new(InMemoryEventStore::new());
-//! let posts = Arc::new(EventSourcedPostRepository::new(Arc::clone(&store)));  // yours, over the store
+//! let store = InMemoryEventStore::new();
+//! let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));  // yours, over the store
 //!
 //! let app = Cqrs::new(store, InMemoryTokenStore::default())   // the stores; the unit makes its events
 //!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher

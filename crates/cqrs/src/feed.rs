@@ -34,22 +34,6 @@ pub trait EventFeed<E: DomainEvent>: Send + Sync {
     fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send;
 }
 
-/// A shared feed is a feed.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<E: DomainEvent, F: EventFeed<E>> EventFeed<E> for Arc<F> {
-    fn subscribe(
-        &self,
-        after: u64,
-    ) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<F, E> {
-        (**self).subscribe(after)
-    }
-
-    fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send {
-        (**self).last_position()
-    }
-}
-
 /// A query whose result may change when an event of type `E` is projected:
 /// what lets it be subscribed to ([`QuerySubscriptions`]).
 pub trait RefreshedBy<E: DomainEvent>: Query + Clone {

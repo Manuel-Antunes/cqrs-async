@@ -2,10 +2,7 @@
 //! replay, a load that replayed enough keeps one, and a broken snapshot
 //! store only costs a full replay.
 
-use std::{
-    future::{Future, ready},
-    sync::Arc,
-};
+use std::future::{Future, ready};
 
 use cqrs::{
     Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Loaded,
@@ -39,7 +36,7 @@ impl Aggregate for Sum {
     }
 }
 
-type Store = Arc<InMemoryEventStore<Added>>;
+type Store = InMemoryEventStore<Added>;
 
 /// What the recommended path is made of: a publisher that command handlers
 /// commit through, and a loader in the repository's adapter. The test body
@@ -52,7 +49,7 @@ struct App<N = ()> {
 fn app() -> App {
     let store = Store::default();
     App {
-        loader: AggregateLoader::new(Arc::clone(&store)),
+        loader: AggregateLoader::new(store.clone()),
         publisher: InlinePublisher::new(store),
     }
 }
@@ -86,8 +83,8 @@ impl App {
 
 #[test]
 fn loading_from_a_snapshot_equals_a_full_replay() {
-    let snapshots = Arc::new(InMemorySnapshots::default());
-    let with = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    let snapshots = InMemorySnapshots::default();
+    let with = app().with_snapshots(Shared(snapshots.clone()), 10);
     with.add_n(25);
 
     // Each command loaded before committing, so the 21st load replayed 10
@@ -110,8 +107,8 @@ fn loading_from_a_snapshot_equals_a_full_replay() {
 
 #[test]
 fn a_load_starts_from_the_snapshot_and_replays_only_the_tail() {
-    let snapshots = Arc::new(InMemorySnapshots::default());
-    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    let snapshots = InMemorySnapshots::default();
+    let app = app().with_snapshots(Shared(snapshots.clone()), 10);
     app.add_n(25);
     // A newer snapshot (version 21; the one taken while adding is at 20) that
     // no replay could have produced: only a load that starts from it sees the
@@ -132,8 +129,8 @@ fn a_load_starts_from_the_snapshot_and_replays_only_the_tail() {
 
 #[test]
 fn a_snapshot_is_kept_when_a_load_replayed_enough_and_only_then() {
-    let snapshots = Arc::new(InMemorySnapshots::default());
-    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 10);
+    let snapshots = InMemorySnapshots::default();
+    let app = app().with_snapshots(Shared(snapshots.clone()), 10);
     app.add_n(9);
     app.load();
     assert!(
@@ -156,7 +153,7 @@ fn a_snapshot_is_kept_when_a_load_replayed_enough_and_only_then() {
 }
 
 /// Lends a snapshot store to a loader for the test.
-struct Shared(Arc<InMemorySnapshots<Sum>>);
+struct Shared(InMemorySnapshots<Sum>);
 
 impl SnapshotStore<Sum> for Shared {
     fn load(&self, id: &u32) -> impl Future<Output = Result<Option<(Sum, u64)>, StoreError>> + Send {
@@ -209,8 +206,8 @@ fn optimistic_concurrency_still_holds_with_snapshots() {
 /// kept one.
 #[test]
 fn commits_through_the_publisher_leave_snapshots_for_the_repository_to_load_from() {
-    let snapshots = Arc::new(InMemorySnapshots::default());
-    let app = app().with_snapshots(Shared(Arc::clone(&snapshots)), 2);
+    let snapshots = InMemorySnapshots::default();
+    let app = app().with_snapshots(Shared(snapshots.clone()), 2);
     app.add_n(3);
 
     let (snapshot, version) = block_on(snapshots.load(&1)).unwrap().expect("a snapshot was taken");

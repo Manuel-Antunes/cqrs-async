@@ -8,7 +8,7 @@
 //! the signature of `handle`:
 //!
 //! ```
-//! use std::{future::Future, sync::Arc};
+//! use std::future::Future;
 //! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, EventPublisher, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -32,7 +32,7 @@
 //! }
 //!
 //! /// Its adapter, rebuilding counters from the store.
-//! struct StoredCounters(AggregateLoader<Counter, Arc<InMemoryEventStore<CounterEvent>>>);
+//! struct StoredCounters(AggregateLoader<Counter, InMemoryEventStore<CounterEvent>>);
 //!
 //! impl Counters for StoredCounters {
 //!     async fn find(&self, id: u32) -> Result<Option<Loaded<Counter>>, StoreError> {
@@ -59,10 +59,10 @@
 //! #[gateway(commands)]
 //! struct Commands<R, P> { add: AddHandler<R, P> }
 //!
-//! let store = Arc::new(InMemoryEventStore::new());
+//! let store = InMemoryEventStore::new();
 //! let commands = Commands {
 //!     add: AddHandler {
-//!         counters: StoredCounters(AggregateLoader::new(Arc::clone(&store))),
+//!         counters: StoredCounters(AggregateLoader::new(store.clone())),
 //!         events: InlinePublisher::new(store),
 //!     },
 //! };

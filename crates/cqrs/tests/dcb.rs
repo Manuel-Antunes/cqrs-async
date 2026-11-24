@@ -108,7 +108,7 @@ struct Subscribe {
     courses: Vec<u32>,
 }
 
-type Store = Arc<InMemoryEventStore<SchoolEvent>>;
+type Store = InMemoryEventStore<SchoolEvent>;
 type Publisher = Arc<InlinePublisher<SchoolEvent, Store>>;
 
 /// Subscribes to each course in turn. On its first run it can let another
@@ -175,7 +175,7 @@ impl std::ops::Deref for Wired {
 }
 
 fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
-    let store: Store = Arc::new(InMemoryEventStore::new());
+    let store: Store = InMemoryEventStore::new();
     for (course, capacity) in [(1, 1), (2, 5), (3, 5)] {
         let opened = SchoolEvent::CourseOpened { course, capacity };
         block_on(store.append(
@@ -186,11 +186,11 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
         ))
         .unwrap();
     }
-    let publisher: Publisher = Arc::new(InlinePublisher::new(Arc::clone(&store)));
+    let publisher: Publisher = Arc::new(InlinePublisher::new(store.clone()));
     let handler = SubscribeHandler {
         events: Arc::clone(&publisher),
-        courses: Arc::new(AggregateLoader::new(Arc::clone(&store))),
-        students: Arc::new(AggregateLoader::new(Arc::clone(&store))),
+        courses: Arc::new(AggregateLoader::new(store.clone())),
+        students: Arc::new(AggregateLoader::new(store.clone())),
         runs: AtomicU32::new(0),
         sneak_in,
     };

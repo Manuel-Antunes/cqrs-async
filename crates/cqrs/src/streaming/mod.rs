@@ -64,7 +64,7 @@ impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
 /// them, in one value.
 ///
 /// ```text
-/// let events = Events::new(Arc::new(InMemoryEventStore::new()));
+/// let events = Events::new(InMemoryEventStore::new());
 /// let commands = PostGateway::new(posts, events.clone()); // handlers commit through it
 /// let handle = events.track("post-view", post_view); // tracking processor
 /// let stream = events.subscribe(0);                  // EventFeed
@@ -74,7 +74,7 @@ impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
 ///
 /// Cloning is cheap and shares everything (the store, the live feed and the
 /// tokens): give a clone to each part of the application.
-pub struct Events<E, S, C = Arc<InMemoryTokenStore>> {
+pub struct Events<E, S, C = InMemoryTokenStore> {
     /// The source of truth, shared with the repositories (`Arc` or a pool).
     store: S,
     /// The live feed the repositories publish to after each commit.
@@ -92,7 +92,7 @@ impl<E, S> Events<E, S> {
         Self {
             store,
             live: broadcast::channel(1024).0,
-            tokens: Arc::default(),
+            tokens: InMemoryTokenStore::default(),
             options: SubscriptionOptions::default(),
         }
     }

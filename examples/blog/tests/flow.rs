@@ -79,7 +79,7 @@ fn the_dispatch_futures_are_send() {
 fn domain_errors_reach_the_caller_and_nothing_is_stored() {
     block_on(async {
         let store = PostStore::default();
-        let (blog, summaries, _) = in_memory_with(Arc::clone(&store));
+        let (blog, summaries, _) = in_memory_with(store.clone());
         let error = blog.commands().send(CreatePost { title: " ".into() }).await;
         assert_eq!(error, Err(BlogError::Domain(PostError::EmptyTitle)));
         assert!(store.all().is_empty());
@@ -100,10 +100,10 @@ fn unknown_aggregates_are_reported() {
 fn concurrent_writers_cannot_overwrite_each_other() {
     block_on(async {
         let store = PostStore::default();
-        let (blog, _, _) = in_memory_with(Arc::clone(&store));
+        let (blog, _, _) = in_memory_with(store.clone());
         let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
         // Two writers of their own, over the blog's store.
-        let events = InlinePublisher::new(Arc::clone(&store));
+        let events = InlinePublisher::new(store.clone());
         let posts = EventSourcedPostRepository::new(store);
 
         // Two writers load the same version and decide...
@@ -148,7 +148,7 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
     use std::sync::Arc;
     block_on(async {
         let store = PostStore::default();
-        let (blog, summaries, _) = in_memory_with(Arc::clone(&store));
+        let (blog, summaries, _) = in_memory_with(store.clone());
         let id = blog.commands().send(CreatePost { title: "a".into() }).await.unwrap();
         blog.commands()
             .send(RetitlePost { id, title: "b".into() })
@@ -233,11 +233,14 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
     }
 
     block_on(async {
-        let store = Arc::new(InMemoryEventStore::new());
+        let store = InMemoryEventStore::new();
         let summaries = Arc::new(InMemoryPostSummaryRepository::default());
-        let publisher = Arc::new(InlinePublisher::new(Arc::clone(&store)).with_processor((
-            PostSummaryProjection::new(summaries.clone(), Arc::new(PostUpdates::default())),
-        )));
+        let publisher = Arc::new(
+            InlinePublisher::new(store.clone()).with_processor((PostSummaryProjection::new(
+                summaries.clone(),
+                Arc::new(PostUpdates::default()),
+            ),)),
+        );
         let posts = Arc::new(EventSourcedPostRepository::new(store));
         let gateway = ByHand {
             create: CreatePostHandler::new(Arc::clone(&publisher)),

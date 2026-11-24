@@ -109,7 +109,7 @@ impl EventHandler for Ticks {
     }
 }
 
-async fn tick(events: &Events<Ticked, Arc<InMemoryEventStore<Ticked>>>, clock: &str, n: u64) {
+async fn tick(events: &Events<Ticked, InMemoryEventStore<Ticked>>, clock: &str, n: u64) {
     let stream = StreamId::new("clock", clock.to_owned());
     events
         .store()
@@ -126,7 +126,7 @@ async fn within<T>(future: impl Future<Output = T>) -> T {
 
 #[tokio::test]
 async fn subscriptions_get_the_current_result_then_the_updates_for_their_query() {
-    let events = Events::new(Arc::new(InMemoryEventStore::new()));
+    let events = Events::new(InMemoryEventStore::new());
     let updates = Arc::new(Updates::default());
     let totals = Arc::new(Totals {
         sums: Mutex::default(),
@@ -172,7 +172,7 @@ async fn subscriptions_get_the_current_result_then_the_updates_for_their_query()
 
 #[tokio::test]
 async fn a_processing_group_of_projections_shares_one_token_and_one_unit_of_work() {
-    let events = Events::new(Arc::new(InMemoryEventStore::new()));
+    let events = Events::new(InMemoryEventStore::new());
     let updates = Arc::new(Updates::default());
     let totals = Arc::new(Totals {
         sums: Mutex::default(),

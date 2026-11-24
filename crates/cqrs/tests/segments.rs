@@ -44,19 +44,19 @@ impl Aggregate for Clock {
     }
 }
 
-type Store = Arc<InMemoryEventStore<Ticked>>;
+type Store = InMemoryEventStore<Ticked>;
 
 struct World {
-    events: Events<Ticked, Store, Arc<InMemoryTokenStore>>,
+    events: Events<Ticked, Store, InMemoryTokenStore>,
     clocks: AggregateLoader<Clock, Store>,
-    tokens: Arc<InMemoryTokenStore>,
+    tokens: InMemoryTokenStore,
 }
 
 impl World {
     fn new() -> Self {
-        let tokens = Arc::new(InMemoryTokenStore::default());
-        let store = Arc::new(InMemoryEventStore::new());
-        let events = Events::new(Arc::clone(&store)).with_tokens(Arc::clone(&tokens));
+        let tokens = InMemoryTokenStore::default();
+        let store = InMemoryEventStore::new();
+        let events = Events::new(store.clone()).with_tokens(tokens.clone());
         Self {
             clocks: AggregateLoader::new(store),
             events,
@@ -291,12 +291,12 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     let world = World::new();
     let (poison, other) = (1, 2);
     let recorder = Arc::new(Recorder::poisoned(stream(poison)));
-    let queue = Arc::new(InMemoryDeadLetters::default());
+    let queue = InMemoryDeadLetters::default();
     let processor = world
         .events
         .processor("parking", Arc::clone(&recorder))
         .with_options(World::options(1, u32::MAX))
-        .with_dead_letters(Arc::clone(&queue), 2)
+        .with_dead_letters(queue.clone(), 2)
         .spawn();
 
     world.tick(poison).await; // 1: fails, parked
@@ -320,7 +320,7 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     );
 
     // Still broken: the retry stops at the first event, keeping the order.
-    let outcome = retry_dead_letters(&*queue, "parking", &*world.tokens, &*recorder)
+    let outcome = retry_dead_letters(&queue, "parking", &world.tokens, &*recorder)
         .await
         .unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (0, 1));
@@ -331,7 +331,7 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     let retrying = world
         .events
         .processor("parking", Arc::clone(&recorder))
-        .with_dead_letters(Arc::clone(&queue), 2);
+        .with_dead_letters(queue.clone(), 2);
     let outcome = retrying.retry_dead_letters().await.unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (2, 0));
     assert!(queue.letters("parking").is_empty());
@@ -369,7 +369,7 @@ struct FlakyQueue {
     failures_served: AtomicU32,
 }
 
-impl DeadLetterQueue<Ticked> for FlakyQueue {
+impl DeadLetterQueue<Ticked> for Arc<FlakyQueue> {
     async fn contains(&self, processor: &str, sequence: &str) -> Result<bool, StoreError> {
         let failing = {
             // A plain lock, not a compare-and-swap loop: `AtomicU32::try_update`

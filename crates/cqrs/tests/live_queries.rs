@@ -85,7 +85,7 @@ struct ClockQueries {
     ticks: TicksOfHandler,
 }
 
-type Store = Arc<InMemoryEventStore<ClockEvent>>;
+type Store = InMemoryEventStore<ClockEvent>;
 
 struct World {
     clocks: cqrs::AggregateLoader<Clock, Store>,
@@ -96,7 +96,7 @@ struct World {
 
 impl World {
     fn new() -> Self {
-        let events = Events::new(Arc::new(InMemoryEventStore::new()));
+        let events = Events::new(InMemoryEventStore::new());
         let ticks = Arc::new(Ticks::default());
         let projection = events.track("ticks", Arc::clone(&ticks));
         let queries = LiveQueries::new(
@@ -107,7 +107,7 @@ impl World {
             &projection,
         );
         Self {
-            clocks: cqrs::AggregateLoader::new(Arc::clone(events.store())),
+            clocks: cqrs::AggregateLoader::new((*events.store()).clone()),
             events,
             queries,
             projection,
@@ -219,11 +219,11 @@ async fn plain_queries_still_work_through_the_same_gateway() {
 #[tokio::test(start_paused = true)]
 async fn global_progress_waits_for_every_segment_of_every_instance() {
     use cqrs::{GlobalProgress, InMemoryTokenStore, ProjectionProgress, TokenStore};
-    let tokens = Arc::new(InMemoryTokenStore::default());
+    let tokens = InMemoryTokenStore::default();
     tokens.initialize("p", 2).await.unwrap();
     tokens.claim("p", 0, "a", 0, u64::MAX).await.unwrap();
     tokens.claim("p", 1, "b", 0, u64::MAX).await.unwrap();
-    let progress = GlobalProgress::new(Arc::clone(&tokens), "p");
+    let progress = GlobalProgress::new(tokens.clone(), "p");
 
     tokens.store("p", 0, "a", &cqrs::Cursor::at(5)).await.unwrap(); // only one instance got there
     let waiting = tokio::spawn({
@@ -243,7 +243,7 @@ async fn global_progress_waits_for_every_segment_of_every_instance() {
 #[tokio::test(start_paused = true)]
 async fn live_queries_follow_a_projection_split_across_instances() {
     use cqrs::{QueryGateway, StreamId, TrackingOptions, segment_of};
-    let events: Events<ClockEvent, Store> = Events::new(Arc::new(InMemoryEventStore::new()));
+    let events: Events<ClockEvent, Store> = Events::new(InMemoryEventStore::new());
     let ticks = Arc::new(Ticks::default());
     let options = TrackingOptions {
         segments: 2,
@@ -266,7 +266,7 @@ async fn live_queries_follow_a_projection_split_across_instances() {
         events.clone(),
         events.global_progress("ticks"),
     );
-    let clocks = cqrs::AggregateLoader::<Clock, _>::new(Arc::clone(events.store()));
+    let clocks = cqrs::AggregateLoader::<Clock, _>::new((*events.store()).clone());
     let in_segment = |segment| {
         (1..)
             .find(|id| segment_of(&StreamId::of::<Clock>(id), 2) == segment)

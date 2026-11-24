@@ -5,7 +5,11 @@
 //! [`Cursor`]: how far the segment got, and the positions it skipped because
 //! they were still being written.
 
-use std::{collections::HashMap, future::Future, sync::Mutex};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
 use crate::{Cursor, StoreError};
 
@@ -118,11 +122,12 @@ struct Token {
     replay_until: u64,
 }
 
-/// Tokens kept in memory: shared by the processors of one process.
-#[derive(Default)]
+/// Tokens kept in memory: shared by the processors of one process. A
+/// handle: clones share the same tokens.
+#[derive(Clone, Default)]
 pub struct InMemoryTokenStore {
     /// Segments per processor name.
-    processors: Mutex<HashMap<String, Vec<Token>>>,
+    processors: Arc<Mutex<HashMap<String, Vec<Token>>>>,
 }
 
 impl InMemoryTokenStore {
@@ -228,62 +233,6 @@ impl TokenStore for InMemoryTokenStore {
     }
 }
 
-/// A shared token store is a token store.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<T: TokenStore> TokenStore for std::sync::Arc<T> {
-    fn initialize(&self, processor: &str, segments: u32) -> impl Future<Output = Result<u32, StoreError>> + Send {
-        (**self).initialize(processor, segments)
-    }
-
-    fn claim(
-        &self,
-        processor: &str,
-        segment: u32,
-        owner: &str,
-        now: u64,
-        until: u64,
-    ) -> impl Future<Output = Result<Option<Cursor>, StoreError>> + Send {
-        (**self).claim(processor, segment, owner, now, until)
-    }
-
-    fn store(
-        &self,
-        processor: &str,
-        segment: u32,
-        owner: &str,
-        cursor: &Cursor,
-    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        (**self).store(processor, segment, owner, cursor)
-    }
-
-    fn release(
-        &self,
-        processor: &str,
-        segment: u32,
-        owner: &str,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send {
-        (**self).release(processor, segment, owner)
-    }
-
-    fn cursors(&self, processor: &str) -> impl Future<Output = Result<Vec<Cursor>, StoreError>> + Send {
-        (**self).cursors(processor)
-    }
-
-    fn reset(
-        &self,
-        processor: &str,
-        now: u64,
-        replay_until: u64,
-    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        (**self).reset(processor, now, replay_until)
-    }
-
-    fn replay_until(&self, processor: &str) -> impl Future<Output = Result<u64, StoreError>> + Send {
-        (**self).replay_until(processor)
-    }
-}
-
 /// The segment an aggregate stream belongs to, out of `segments`: FNV-1a of
 /// the stream id, stable across processes and releases (unlike std's
 /// `DefaultHasher`), so every instance agrees.
@@ -318,28 +267,5 @@ impl crate::TransactionalTokenStore for InMemoryTokenStore {
 
     async fn commit(&self, (): ()) -> Result<(), StoreError> {
         Ok(())
-    }
-}
-
-/// A shared transactional token store is one.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<T: crate::TransactionalTokenStore> crate::TransactionalTokenStore for std::sync::Arc<T> {
-    type Transaction = T::Transaction;
-
-    fn begin(&self) -> impl Future<Output = Result<T::Transaction, StoreError>> + Send {
-        (**self).begin()
-    }
-
-    fn store_in(
-        &self,
-        tx: &mut T::Transaction,
-        token: TrackingToken<'_>,
-    ) -> impl Future<Output = Result<TokenUpdate, StoreError>> + Send {
-        (**self).store_in(tx, token)
-    }
-
-    fn commit(&self, tx: T::Transaction) -> impl Future<Output = Result<(), StoreError>> + Send {
-        (**self).commit(tx)
     }
 }

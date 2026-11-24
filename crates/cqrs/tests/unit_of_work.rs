@@ -36,12 +36,12 @@ fn log(phases: &Phases, entry: impl Into<String>) {
 }
 
 /// A token store whose unit of work is a journal of rows: committed into
-/// `database`, lost if dropped.
-#[derive(Default)]
+/// `database`, lost if dropped. A handle, as token stores are.
+#[derive(Clone, Default)]
 struct Journal {
     tokens: InMemoryTokenStore,
     phases: Phases,
-    database: Mutex<Vec<String>>,
+    database: Arc<Mutex<Vec<String>>>,
 }
 
 impl TokenStore for Journal {
@@ -178,8 +178,8 @@ async fn tick(store: &InMemoryEventStore<Ticked>, ticks: impl IntoIterator<Item 
 
 #[tokio::test(start_paused = true)]
 async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
-    let journal = Arc::new(Journal::default());
-    let events = Events::new(Arc::new(InMemoryEventStore::new())).with_tokens(Arc::clone(&journal));
+    let journal = Journal::default();
+    let events = Events::new(InMemoryEventStore::new()).with_tokens(journal.clone());
     let projection = Intercepted::new(rows(&journal, 1), Stamp(Arc::clone(&journal.phases)));
     let running = events.projection(projection).spawn();
     let last = tick(events.store(), [1, 2]).await.last().unwrap().position;
@@ -221,8 +221,8 @@ async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
 /// Runs `rows` (failing tick `fail_on` once) with batches of 10 over ticks
 /// 1..=3 stored before it starts, so they wait in its queue together.
 async fn batched(fail_on: u64) -> Journal {
-    let journal = Arc::new(Journal::default());
-    let events = Events::new(Arc::new(InMemoryEventStore::new())).with_tokens(Arc::clone(&journal));
+    let journal = Journal::default();
+    let events = Events::new(InMemoryEventStore::new()).with_tokens(journal.clone());
     let last = tick(events.store(), [1, 2, 3]).await.last().unwrap().position;
     let options = TrackingOptions {
         batch_size: 10,
@@ -233,8 +233,7 @@ async fn batched(fail_on: u64) -> Journal {
         .await
         .expect("caught up");
     running.stop().await;
-    drop(events);
-    Arc::into_inner(journal).expect("the processor stopped")
+    journal
 }
 
 #[tokio::test(start_paused = true)]

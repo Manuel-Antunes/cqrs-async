@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
-    ProcessingContext, StoreError, TokenStore, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
+    ProcessingContext, StoreError, TokenUpdate, TrackingToken, TransactionalTokenStore, segment_of,
 };
 
 /// How a [`TrackingProcessor`] splits, claims, reads and retries.

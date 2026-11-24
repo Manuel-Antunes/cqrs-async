@@ -35,7 +35,7 @@ use crate::{
 
 /// The in-memory event store, shared by the repository (reads) and the unit
 /// (commits, processors, subscriptions).
-pub type PostStore = Arc<InMemoryEventStore<PostEvent>>;
+pub type PostStore = InMemoryEventStore<PostEvent>;
 
 /// How many events of a post a find replays before it keeps a snapshot.
 const SNAPSHOT_EVERY: u64 = 50;
@@ -43,7 +43,7 @@ const SNAPSHOT_EVERY: u64 = 50;
 /// The posts' repository over `store`: it rebuilds posts from their events,
 /// keeping a snapshot of the long-lived ones.
 fn posts_over(store: &PostStore) -> EventSourcedPostRepository<PostStore, InMemorySnapshots<Post>> {
-    EventSourcedPostRepository::new(Arc::clone(store)).with_snapshots(InMemorySnapshots::default(), SNAPSHOT_EVERY)
+    EventSourcedPostRepository::new((*store).clone()).with_snapshots(InMemorySnapshots::default(), SNAPSHOT_EVERY)
 }
 
 /// The blog, wired in memory and synchronously: the projection and the
@@ -88,7 +88,7 @@ pub fn in_memory_with(
 /// The post events of the asynchronous wiring, as the unit makes them from
 /// its stores: the publisher, the processors' source and the subscriptions'
 /// feed.
-pub type PostEvents = Events<PostEvent, PostStore, Arc<InMemoryTokenStore>>;
+pub type PostEvents = Events<PostEvent, PostStore, InMemoryTokenStore>;
 
 /// The running application: what [`start`] returns.
 pub struct Running<C, Q> {
@@ -136,7 +136,7 @@ pub fn start() -> Running<impl PostCommands, impl PostQueries + PostSubscription
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
-    let app = Cqrs::new(store, Arc::new(InMemoryTokenStore::default()))
+    let app = Cqrs::new(store, InMemoryTokenStore::default())
         .commands(|events| PostCommandGateway::new(posts, events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))

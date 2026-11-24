@@ -49,7 +49,7 @@ impl Sum {
 #[derive(Debug, PartialEq)]
 struct Refused;
 
-type Store = std::sync::Arc<InMemoryEventStore<Added>>;
+type Store = InMemoryEventStore<Added>;
 
 struct Sums {
     loader: AggregateLoader<Sum, Store>,

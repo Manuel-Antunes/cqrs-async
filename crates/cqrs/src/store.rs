@@ -231,89 +231,23 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
     }
 }
 
-/// A shared store is a store: the engine and the readers of the global
-/// log (processors, subscriptions) can hold the same one.
-// Forwards every method, so an override of a provided one is never lost.
-#[deny(clippy::missing_trait_methods)]
-impl<E: DomainEvent, S: EventStore<E>> EventStore<E> for Arc<S> {
-    fn load(
-        &self,
-        stream: &StreamId,
-        after: u64,
-    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        (**self).load(stream, after)
-    }
-
-    fn append(
-        &self,
-        stream: &StreamId,
-        expected: ExpectedVersion,
-        events: Vec<E>,
-        metadata: &Metadata,
-    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        (**self).append(stream, expected, events, metadata)
-    }
-
-    fn append_if(
-        &self,
-        stream: &StreamId,
-        expected: ExpectedVersion,
-        events: Vec<E>,
-        metadata: &Metadata,
-        condition: Option<&AppendCondition>,
-    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        (**self).append_if(stream, expected, events, metadata, condition)
-    }
-
-    fn append_tagged(
-        &self,
-        stream: &StreamId,
-        expected: ExpectedVersion,
-        events: &[TaggedEvent<E>],
-        metadata: &Metadata,
-        condition: Option<&AppendCondition>,
-    ) -> impl Future<Output = Result<Vec<Recorded>, StoreError>> + Send {
-        (**self).append_tagged(stream, expected, events, metadata, condition)
-    }
-
-    fn source(
-        &self,
-        criteria: &EventCriteria,
-    ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, u64), StoreError>> + Send {
-        (**self).source(criteria)
-    }
-
-    fn read_all(
-        &self,
-        after: u64,
-        limit: usize,
-    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        (**self).read_all(after, limit)
-    }
-
-    fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send {
-        (**self).last_position()
-    }
-
-    fn read(
-        &self,
-        cursor: &Cursor,
-        limit: usize,
-    ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, Horizon), StoreError>> + Send {
-        (**self).read(cursor, limit)
-    }
-
-    fn cursor_at(&self, position: u64) -> impl Future<Output = Result<Cursor, StoreError>> + Send {
-        (**self).cursor_at(position)
-    }
-}
-
-/// Event store for tests and examples. `Clone` is required here (loading
+/// Event store for tests and examples. `E: Clone` is required here (loading
 /// hands out copies), not by the [`EventStore`] contract.
+///
+/// A handle: cloning it shares the same events, so the publisher, the
+/// repositories and the processors each hold a clone.
 pub struct InMemoryEventStore<E> {
     /// Everything behind one lock, so an append checks the version and writes
     /// atomically.
-    inner: Mutex<Inner<E>>,
+    inner: Arc<Mutex<Inner<E>>>,
+}
+
+impl<E> Clone for InMemoryEventStore<E> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 /// The store's contents.
@@ -365,12 +299,12 @@ impl<E> InMemoryEventStore<E> {
     /// An empty store.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner {
+            inner: Arc::new(Mutex::new(Inner {
                 log: Vec::new(),
                 streams: HashMap::new(),
                 tags: Vec::new(),
                 tagged: HashMap::new(),
-            }),
+            })),
         }
     }
 

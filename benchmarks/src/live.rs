@@ -17,7 +17,7 @@ use cqrs::{
 use futures_util::Stream;
 
 /// The shared store.
-pub type Store = Arc<InMemoryEventStore<PostEvent>>;
+pub type Store = InMemoryEventStore<PostEvent>;
 
 /// A store, its events service, and a repository that broadcasts after
 /// commit.
@@ -33,9 +33,9 @@ pub struct Live {
 impl Live {
     /// Fresh, empty.
     pub fn new() -> Self {
-        let store: Store = Arc::new(InMemoryEventStore::new());
-        let events = Events::new(Arc::clone(&store));
-        let posts = AggregateLoader::new(Arc::clone(&store));
+        let store: Store = InMemoryEventStore::new();
+        let events = Events::new(store.clone());
+        let posts = AggregateLoader::new(store.clone());
         Self { store, events, posts }
     }
 

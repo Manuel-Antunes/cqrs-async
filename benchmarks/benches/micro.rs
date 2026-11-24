@@ -68,7 +68,7 @@ mod persistence {
     #[divan::bench(args = [10, 1_000, 100_000])]
     fn load_and_replay(bencher: divan::Bencher, events: usize) {
         let posts = PlainPosts::new();
-        now(seed_post(&*posts.store, PostId(1), events));
+        now(seed_post(&posts.store, PostId(1), events));
         bencher.bench_local(|| now(posts.find(black_box(PostId(1)))).unwrap());
     }
 
@@ -77,7 +77,7 @@ mod persistence {
     #[divan::bench]
     fn load_with_snapshot_100k_events(bencher: divan::Bencher) {
         let posts = PlainPosts::new().with_snapshots(InMemorySnapshots::default(), 100);
-        now(seed_post(&*posts.store, PostId(1), 100_000));
+        now(seed_post(&posts.store, PostId(1), 100_000));
         // The first load replays everything and keeps the snapshot.
         now(posts.find(PostId(1))).unwrap();
         bencher.bench_local(|| now(posts.find(black_box(PostId(1)))).unwrap());
@@ -106,7 +106,7 @@ mod persistence {
         bencher
             .with_inputs(|| {
                 let id = PostId(next.fetch_add(1, Ordering::Relaxed));
-                now(seed_post(&*posts.store, id, 10));
+                now(seed_post(&posts.store, id, 10));
                 id
             })
             .bench_local_values(|id| {
