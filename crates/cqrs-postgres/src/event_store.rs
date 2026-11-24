@@ -502,7 +502,7 @@ fn envelope<E: DeserializeOwned>(row: EventRow, upcaster: &impl Upcaster) -> Res
         recorded_at: from_micros(row.recorded_us),
         metadata: serde_json::from_str(&row.metadata).map_err(backend)?,
         payload,
-        event_type,
+        event_type: event_type.into(),
         event_version,
     })
 }

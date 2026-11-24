@@ -4,6 +4,7 @@
 
 use crate::sync::Locked;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt,
     future::{Future, ready},
@@ -222,7 +223,7 @@ pub trait AppendEvents<E: DomainEvent, Tx: Send = ()>: Send + Sync {
                     position: recorded.position,
                     stream: stream.clone(),
                     sequence: recorded.sequence,
-                    event_type: event.event_type().to_owned(),
+                    event_type: Cow::Borrowed(event.event_type()),
                     event_version: event.event_version(),
                     recorded_at: recorded.recorded_at,
                     metadata: metadata.clone(),
@@ -375,7 +376,7 @@ impl<E> Inner<E> {
         for criterion in &criteria.criteria {
             let accepts = |index: &usize| {
                 let event = &self.log[*index];
-                (criterion.types.is_empty() || criterion.types.contains(&event.event_type.as_str()))
+                (criterion.types.is_empty() || criterion.types.contains(&&*event.event_type))
                     && criterion.tags.iter().all(|tag| self.tags[*index].contains(tag))
             };
             let shortest = criterion
@@ -564,7 +565,7 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
                 position,
                 stream: stream.clone(),
                 sequence,
-                event_type: payload.event_type().to_owned(),
+                event_type: Cow::Borrowed(payload.event_type()),
                 event_version: payload.event_version(),
                 recorded_at,
                 metadata: metadata.clone(),
