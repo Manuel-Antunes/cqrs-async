@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["crates/cqrs", "crates/cqrs-derive", "crates/cqrs-postgres", "examples/blog", "benchmarks", "benchmarks/versus"]
+members = [
+    "crates/cqrs",
+    "crates/cqrs-derive",
+    "crates/cqrs-postgres",
+    "crates/cqrs-sea-orm",
+    "examples/blog",
+    "benchmarks",
+    "benchmarks/versus",
+]
 
 [workspace.package]
 version = "0.0.0"
@@ -13,6 +21,7 @@ publish = false
 cqrs = { path = "crates/cqrs" }
 cqrs-derive = { path = "crates/cqrs-derive" }
 cqrs-postgres = { path = "crates/cqrs-postgres" }
+cqrs-sea-orm = { path = "crates/cqrs-sea-orm" }
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false }

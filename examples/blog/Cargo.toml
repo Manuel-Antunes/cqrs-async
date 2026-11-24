@@ -15,8 +15,8 @@ cqrs.workspace = true
 cqrs-postgres.workspace = true
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio"] }
-# Binds SeaORM's statements to sqlx queries on the borrowed transaction.
-sea-query-sqlx = { version = "0.9", default-features = false, features = ["sqlx-postgres"] }
+# SeaORM in the library's transactions.
+cqrs-sea-orm.workspace = true
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 futures-core.workspace = true

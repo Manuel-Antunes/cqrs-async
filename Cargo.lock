@@ -557,11 +557,11 @@ dependencies = [
  "axum",
  "cqrs",
  "cqrs-postgres",
+ "cqrs-sea-orm",
  "futures-core",
  "futures-util",
  "sea-orm",
  "sea-orm-migration",
- "sea-query-sqlx",
  "serde",
  "serde_json",
  "tokio",
@@ -821,6 +821,17 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx 0.9.1",
+ "tokio",
+]
+
+[[package]]
+name = "cqrs-sea-orm"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "cqrs-postgres",
+ "sea-orm",
+ "sea-query-sqlx",
  "tokio",
 ]
 

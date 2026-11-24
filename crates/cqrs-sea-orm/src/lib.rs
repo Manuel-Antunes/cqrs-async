@@ -1,3 +1,20 @@
+//! SeaORM in the transactions of `cqrs-postgres`: [`SeaOrm`], a borrowed
+//! view of a [`PgTransaction`] that SeaORM's query builders run on.
+//!
+//! The transaction the library hands out (a processor's unit of work, a
+//! command's) is sqlx's, the one its stores append and move tokens in, with
+//! their statements checked at compile time. SeaORM runs on top of it:
+//!
+//! ```text
+//! // in a command handler taking the unit's transaction, or a projection's handler
+//! post::Entity::insert(row).exec(&SeaOrm::new(tx)).await?;
+//! ```
+//!
+//! SeaORM's own `DatabaseTransaction` cannot be the common type: it keeps
+//! its connection private and does not lend it.
+
+#![warn(missing_docs)]
+
 use cqrs_postgres::{
     PgTransaction,
     sqlx::{self, PgConnection, Postgres},
@@ -6,9 +23,10 @@ use sea_orm::{ConnectionTrait, DbBackend, DbErr, ExecResult, QueryResult, Runtim
 use sea_query_sqlx::SqlxValues;
 use tokio::sync::Mutex;
 
-/// SeaORM over a borrowed sqlx transaction: what lets the blog write with
-/// SeaORM in a transaction it does not own (a processor's unit of work) or
-/// next to the library's appends (its own, in a repository).
+/// SeaORM over a borrowed sqlx transaction: what lets an application write
+/// with SeaORM in the library's units of work (a processor's, where a read
+/// model commits with its token; a command's, where an entity's state
+/// commits with its events).
 ///
 /// It implements SeaORM's `ConnectionTrait`, so every query builder runs on
 /// it (`Entity::insert(..).exec(&SeaOrm::new(tx))`). It borrows the
@@ -17,8 +35,6 @@ use tokio::sync::Mutex;
 /// `DatabaseTransaction` does not lend its sqlx connection, and the
 /// library's statements are sqlx's, checked at compile time.
 ///
-/// A candidate for a crate of its own (`cqrs-async-sea-orm`) once its API
-/// settles; nothing in it is specific to the blog.
 pub struct SeaOrm<'a> {
     /// The transaction's connection. SeaORM queries through `&self`, so it
     /// is lent to one statement at a time.
