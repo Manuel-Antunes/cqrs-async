@@ -332,7 +332,16 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
         )
         .await
         .unwrap();
-    assert_eq!(next[0].position, 3, "no gap left by the losers");
+    // A loser refused by the version check takes no position; one that
+    // passed it with the winner and was refused by the unique constraint
+    // took one, now a permanent gap that readers give up once its
+    // transaction ended. Either way the next event comes after both.
+    assert!(next[0].position >= 3, "after the winner");
+    assert_eq!(
+        store.read_all(0, 10).await.unwrap().len(),
+        3,
+        "every committed event, none from a loser"
+    );
 }
 
 /// Appends commit out of order and racing ones leave gaps (positions taken
