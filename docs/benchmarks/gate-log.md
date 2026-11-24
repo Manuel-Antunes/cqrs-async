@@ -114,3 +114,26 @@ Median ratio, base then head: open account 1.15 / 1.20, mixed 1.30 / 1.32, mixed
 all done 0.78 / 0.77, hot account 1.25 / 1.18. The same binary moves between 2700 and 4500 cmd/s on
 open account with the machine's load, and cqrs-es moves with it. No difference between the Phase 0
 code and the current one stands out of that spread.
+
+## 2026-11-24, after Phases 5, 6 and 7 (`926476c`)
+
+One versus run (median of 3), load average 11-15 while it ran.
+
+| Measure | Passes if | Result |
+|---|---|---:|
+| open account, cmd/s | >= 1.10 | 1.05 (3840) |
+| mixed load, cmd/s | >= 1.25 | 1.35 (3888) |
+| mixed load, p99 | <= 0.76 | 0.76 |
+| mixed load, all done | <= 0.77 | 0.75 |
+| hot account, cmd/s | >= 1.00 | 1.35 |
+| read model rebuild | >= 16 | 21.8 |
+| 5000-event replay, p50 | <= 0.95 | 0.82 |
+| with snapshot every 100, p50 | <= 0.61 | 0.53 |
+| events or money lost | 0 | 0 (cqrs-es: 197 events, 1174 units) |
+
+Eight of nine pass; open account misses by 0.05. On this machine that
+ratio has ranged from 0.71 to 1.38 for the same code (the runs above), and
+our 3840 cmd/s is among the highest absolute values recorded: cqrs-es was
+fast in this run, not ours slow. Open account p99 was 38 ms against 14 ms.
+Not decided: needs the A/B against `5437e6e` on a quiet machine (the
+append path changed in 7.4: AppendEvents with a transaction argument).
