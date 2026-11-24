@@ -1,6 +1,7 @@
 //! Loading aggregates: [`AggregateLoader`] rebuilds them from their events
 //! (from a snapshot, if the application keeps any), and [`Loaded`] is what it
-//! returns: the aggregate with the version it was read at.
+//! returns: the aggregate with the version it was read at. [`New`] is the
+//! other target of a commit: an aggregate whose stream does not exist yet.
 //!
 //! It is the only way to load. Repositories belong to the application (a port
 //! with the finders it needs), and their adapters hold an `AggregateLoader`;
@@ -31,15 +32,6 @@ pub struct Loaded<A> {
 }
 
 impl<A: Aggregate> Loaded<A> {
-    /// A brand-new aggregate whose stream must not exist yet.
-    pub fn new(aggregate: A) -> Self {
-        Self {
-            aggregate,
-            version: None,
-            condition: None,
-        }
-    }
-
     /// `id` built from the events matching its criteria (`None` if there
     /// were none), consistent through `condition`.
     pub(crate) fn sourced(id: &A::Id, events: &[EventEnvelope<A::Event>], condition: AppendCondition) -> Option<Self> {
@@ -79,6 +71,75 @@ impl<A: Aggregate> Loaded<A> {
     /// saved.
     pub fn into_inner(self) -> A {
         self.aggregate
+    }
+}
+
+/// The aggregate `id`, not stored yet: what a creation commits to.
+///
+/// A creation is decided without an instance, by an associated function of
+/// the aggregate (Axon 5's static creational command handler), and committed
+/// to `New`, which expects the stream not to exist:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use cqrs::{Appender, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, testing::block_on};
+/// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
+/// # enum DoorEvent { Installed { id: u32 } }
+/// # #[derive(cqrs::AggregateRoot)]
+/// # #[aggregate(event = DoorEvent)]
+/// # struct Door { id: u32 }
+/// # impl Door { fn apply(&mut self, _: &DoorEvent) {} }
+/// impl Door {
+///     /// Decided on nothing: there is no door yet.
+///     fn install(id: u32, events: &mut impl EventAppender<DoorEvent>) {
+///         events.append(DoorEvent::Installed { id });
+///     }
+/// }
+///
+/// # block_on(async {
+/// let publisher = InlinePublisher::new(Arc::new(InMemoryEventStore::new()));
+/// let mut events = Appender::new();
+/// Door::install(1, &mut events);
+/// events.commit(New::<Door>(1), &publisher).await?;
+///
+/// // Once more: the stream exists now.
+/// Door::install(1, &mut events);
+/// let again = events.commit(New::<Door>(1), &publisher).await;
+/// assert!(matches!(again, Err(StoreError::Conflict { .. })));
+/// # Ok::<(), StoreError>(())
+/// # }).unwrap();
+/// ```
+///
+/// A decision that creates the aggregate if it is missing (a counter that
+/// starts at zero) runs on its state before any event, which `New` converts
+/// into: `repository.find(id).await?.unwrap_or_else(|| New(id).into())`. The
+/// commit then expects the stream not to exist when it was not found.
+pub struct New<A: Aggregate>(pub A::Id);
+
+impl<A: Aggregate> From<New<A>> for Loaded<A> {
+    /// The aggregate in its state before any event ([`Aggregate::initial`]),
+    /// expecting its stream not to exist.
+    fn from(New(id): New<A>) -> Self {
+        Self {
+            aggregate: A::initial(&id),
+            version: None,
+            condition: None,
+        }
+    }
+}
+
+impl<A: Aggregate> Clone for New<A> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<A: Aggregate> fmt::Debug for New<A>
+where
+    A::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("New").field(&self.0).finish()
     }
 }
 

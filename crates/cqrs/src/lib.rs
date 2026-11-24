@@ -69,7 +69,7 @@ pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
 pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
-pub use loader::{AggregateLoader, Loaded, NotFound};
+pub use loader::{AggregateLoader, Loaded, New, NotFound};
 pub use message::{
     Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
     ProcessingContext, Query, QueryGateway,

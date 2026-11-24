@@ -103,7 +103,7 @@ where
     P: EventPublisher<A::Event>,
 {
     publisher
-        .commit(cqrs::Loaded::new(A::initial(&id)), Pending::new(events))
+        .commit(cqrs::New::<A>(id).into(), Pending::new(events))
         .await
         .unwrap()
         .expect("events were committed")
@@ -974,7 +974,7 @@ async fn snapshots_are_kept_per_aggregate_and_revision() {
     for n in 1..=3 {
         let tally = match tallies.load(&1).await.unwrap() {
             Some(tally) => tally,
-            None => cqrs::Loaded::new(Tally::initial(&1)),
+            None => cqrs::New(1).into(),
         };
         publisher
             .commit(tally, Pending::new(vec![ClockEvent::Ticked { n }]))

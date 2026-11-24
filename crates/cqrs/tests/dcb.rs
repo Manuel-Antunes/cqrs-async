@@ -11,7 +11,7 @@ use std::sync::{
 
 use cqrs::{
     Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventStore, ExpectedVersion,
-    InMemoryEventStore, InlinePublisher, Loaded, Metadata, StoreError, StreamId, TagResolver, testing::block_on,
+    InMemoryEventStore, InlinePublisher, Metadata, StoreError, StreamId, TagResolver, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -337,7 +337,7 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
 #[test]
 fn a_new_aggregate_root_is_created_in_its_own_stream() {
     let (store, gateway) = gateway(None);
-    let course = Loaded::new(Course::initial(&9));
+    let course = cqrs::New::<Course>(9);
     let mut events = Appender::with_metadata(Metadata::new());
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
     block_on(events.commit(course, gateway.publisher())).unwrap();

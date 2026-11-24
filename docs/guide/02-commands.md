@@ -168,7 +168,9 @@ What each piece does:
 - **The command is borrowed** (`&RetitlePost`), because the handler may
   run more than once.
 
-Creating is the same, from the initial state, and needs no service at all:
+Creating needs no repository: there is nothing to find. The domain decides
+without a post (`Post::create` is an associated function), and the commit
+targets `New::<Post>(id)`, which expects the post's stream not to exist:
 
 ```rust
 // src/application/commands/create_post.rs
@@ -187,15 +189,18 @@ pub struct CreatePostHandler<P> {
 impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
     async fn handle(&self, command: &CreatePost, events: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
         let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let post = Loaded::new(Post::initial(&id));   // expects no stream yet
-        post.create(command.title.as_str(), events)?;
-        events.commit(post, &self.events).await?;
+        Post::create(id, command.title.as_str(), events)?;
+        events.commit(New::<Post>(id), &self.events).await?;   // expects no stream yet
         Ok(id)
     }
 }
 ```
 
 `PublishPost` follows `RetitlePost` with `post.publish(events)`.
+
+A command that creates the aggregate when it is missing (a counter that
+starts at zero) decides on the state before any event instead, and commits
+to whichever it got: `self.counters.find(id).await?.unwrap_or_else(|| New(id).into())`.
 
 ## The command gateway
 

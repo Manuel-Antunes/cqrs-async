@@ -62,7 +62,7 @@ impl<N: SnapshotStore<Sum>> App<N> {
     fn add(&self, n: u64) {
         let sum = block_on(self.loader.load(&1))
             .unwrap()
-            .unwrap_or_else(|| Loaded::new(Sum::initial(&1)));
+            .unwrap_or_else(|| cqrs::New(1).into());
         block_on(self.publisher.commit(sum, Pending::new(vec![Added(n)]))).unwrap();
     }
 

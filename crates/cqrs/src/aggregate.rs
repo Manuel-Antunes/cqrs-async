@@ -38,6 +38,26 @@ use crate::DomainEvent;
 /// `&self` makes the rule "state only changes through events" a compile
 /// error to break: a decision cannot assign a field, only `evolve` can. The
 /// aggregate holds no buffer of pending events either: it is plain state.
+///
+/// Creating one is the exception: there is no instance to decide on yet, so
+/// the creation is an associated function, committed to
+/// [`New`](crate::New) (Axon 5's static creational command handler):
+///
+/// ```
+/// # use cqrs::EventAppender;
+/// # #[derive(cqrs::DomainEvent, cqrs::TagResolver)] enum PostEvent { Created { id: u64, title: String } }
+/// # struct Post;
+/// # #[derive(Debug)] enum PostError { EmptyTitle }
+/// impl Post {
+///     pub fn create(id: u64, title: &str, events: &mut impl EventAppender<PostEvent>) -> Result<(), PostError> {
+///         if title.trim().is_empty() {
+///             return Err(PostError::EmptyTitle);
+///         }
+///         events.append(PostEvent::Created { id, title: title.trim().to_owned() });
+///         Ok(())
+///     }
+/// }
+/// ```
 pub trait Aggregate: Send + Sync + Sized + 'static {
     /// Stable name of the aggregate kind, used as the prefix of its stream ids
     /// (`"post"` → stream `post-42`). Changing it orphans the stored streams.
@@ -51,8 +71,10 @@ pub trait Aggregate: Send + Sync + Sized + 'static {
     /// kind of change.
     type Event: DomainEvent;
 
-    /// The state before any event: what replay starts from, and what a
-    /// factory method starts from before recording the creation event.
+    /// The state before any event: what replay starts from (Axon 5's entity
+    /// creator, from the identifier). A creation is not decided on it: it is
+    /// an associated function of the aggregate, committed to
+    /// [`New`](crate::New).
     fn initial(id: &Self::Id) -> Self;
 
     /// The identity of this instance, used to find its stream when saving.

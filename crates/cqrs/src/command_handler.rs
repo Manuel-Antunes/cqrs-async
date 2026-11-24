@@ -9,7 +9,7 @@
 //!
 //! ```
 //! use std::{future::Future, sync::Arc};
-//! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, EventPublisher, InlinePublisher, InMemoryEventStore, Loaded, StoreError, testing::block_on};
+//! use cqrs::{Appender, AggregateLoader, CommandGateway, CommandHandler, EventAppender, EventPublisher, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
 //! enum CounterEvent { Added(u64) }
@@ -46,10 +46,8 @@
 //! #[cqrs::command_handler]
 //! impl<R: Counters, P: EventPublisher<CounterEvent>> CommandHandler for AddHandler<R, P> {
 //!     async fn handle(&self, command: &Add, events: &mut Appender<CounterEvent>) -> Result<u64, StoreError> {
-//!         let counter = match self.counters.find(command.id).await? {
-//!             Some(counter) => counter,
-//!             None => Loaded::new(cqrs::Aggregate::initial(&command.id)),
-//!         };
+//!         // A counter starts at zero: adding to a missing one creates it.
+//!         let counter = self.counters.find(command.id).await?.unwrap_or_else(|| New(command.id).into());
 //!         events.append(CounterEvent::Added(command.n));
 //!         let total = counter.total + command.n;
 //!         events.commit(counter, &self.events).await?;
@@ -76,7 +74,7 @@
 //! is refused where the handler is written:
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{Appender, CommandHandler, Loaded, StoreError};
+//! # use cqrs::{Appender, CommandHandler, New, StoreError};
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)] enum Ticked { Once }
 //! # #[derive(cqrs::AggregateRoot)] #[aggregate(event = Ticked)] struct Clock { id: u32 }
 //! # impl Clock { fn apply(&mut self, _: &Ticked) {} }
@@ -86,7 +84,7 @@
 //! #[cqrs::command_handler]
 //! impl CommandHandler for TickHandler {
 //!     async fn handle(&self, _: &Tick, events: &mut Appender<Ticked>) -> Result<(), StoreError> {
-//!         events.commit(Loaded::new(<Clock as cqrs::Aggregate>::initial(&1)), &NotAPublisher).await
+//!         events.commit(New::<Clock>(1), &NotAPublisher).await
 //!     }
 //! }
 //! ```
@@ -228,24 +226,25 @@ impl<E> Appender<E> {
     }
 
     /// Commits the pending events to `entity`'s stream through `publisher`
-    /// (NestJS's `aggregate.commit()`): expecting the version it was loaded
-    /// at, with the command's metadata and the conditions of what this run
-    /// read.
+    /// (NestJS's `aggregate.commit()`), with the command's metadata and the
+    /// conditions of what this run read. `entity` is a [`Loaded`] aggregate,
+    /// whose stream must still be at the version it was loaded at, or a
+    /// [`New`](crate::New) one, whose stream must not exist.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Conflict`] if the entity changed since it was loaded,
-    /// [`StoreError::ConditionFailed`] if what the run read changed: the
-    /// gateway then runs the handler again, if nothing was committed before
-    /// in this run.
-    pub async fn commit<A, P>(&mut self, entity: Loaded<A>, publisher: &P) -> Result<(), StoreError>
+    /// [`StoreError::Conflict`] if the entity changed since it was loaded (or
+    /// exists already, for a new one), [`StoreError::ConditionFailed`] if
+    /// what the run read changed: the gateway then runs the handler again,
+    /// if nothing was committed before in this run.
+    pub async fn commit<A, P>(&mut self, entity: impl Into<Loaded<A>>, publisher: &P) -> Result<(), StoreError>
     where
         E: DomainEvent,
         A: Aggregate<Event = E>,
         P: EventPublisher<E>,
     {
         let pending = self.take();
-        let outcome = publisher.commit(entity, pending).await;
+        let outcome = publisher.commit(entity.into(), pending).await;
         self.record(outcome)
     }
 

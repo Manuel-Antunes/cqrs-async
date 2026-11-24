@@ -115,10 +115,11 @@ impl Post {
         }
     }
 
-    /// Drafts this post: decided on its initial state.
-    pub fn create(&self, title: impl Into<String>, events: &mut impl EventAppender<PostEvent>) -> Result<(), PostError> {
+    /// Drafts the post `id`. There is no post yet, so there is no `self`
+    /// (Axon 5's static creational command handler).
+    pub fn create(id: PostId, title: impl Into<String>, events: &mut impl EventAppender<PostEvent>) -> Result<(), PostError> {
         let title = valid_title(title.into())?;
-        events.append(PostEvent::Created { id: self.id, title });
+        events.append(PostEvent::Created { id, title });
         Ok(())
     }
 
@@ -159,7 +160,7 @@ impl cqrs::Aggregate for Post {
     const TYPE: &'static str = "post";             // stream prefix: post-42
     type Id = PostId;                              // the `id` field
     type Event = PostEvent;
-    fn initial(id: &PostId) -> Self {              // other fields at Default
+    fn initial(id: &PostId) -> Self {              // where replay starts: other fields at Default
         Self { id: *id, title: String::new(), published: false }
     }
     fn id(&self) -> &PostId { &self.id }
@@ -171,6 +172,10 @@ The rules this shape enforces:
 
 - **State changes only through events.** Decisions take `&self`;
   assigning `self.published = true` in `publish` does not compile.
+- **Creating takes no post.** `create` is an associated function: there is
+  no post to decide on yet, and none can be created twice by calling it on
+  one that exists. `initial` is only where replay starts; the commit of a
+  creation targets `cqrs::New`, which expects the stream not to exist.
 - **No buffer in the aggregate.** Decisions append to the appender they
   are given (Axon 5's `EventAppender`); the struct stays plain data, so
   derives and serde work as usual.
@@ -199,8 +204,7 @@ fn created() -> PostEvent {
 
 #[test]
 fn creating_a_post_appends_created() {
-    AggregateFixture::<Post>::new(ID)
-        .when(|post, events| post.create("  Hello ", events))
+    AggregateFixture::<Post>::creating(ID, |events| Post::create(ID, "  Hello ", events))
         .expect_events([created()])
         .expect_state(|post| assert_eq!(post.title(), "Hello"));
 }

@@ -117,7 +117,7 @@ impl World {
     async fn record(&self, id: u32, event: ClockEvent) {
         let clock = match self.clocks.load(&id).await.unwrap() {
             Some(clock) => clock,
-            None => cqrs::Loaded::new(Clock::initial(&id)),
+            None => cqrs::New(id).into(),
         };
         self.events
             .commit(clock, cqrs::Pending::new(vec![event]))
@@ -281,7 +281,7 @@ async fn live_queries_follow_a_projection_split_across_instances() {
     for id in [first, second, second] {
         let clock = match clocks.load(&id).await.unwrap() {
             Some(clock) => clock,
-            None => cqrs::Loaded::new(Clock::initial(&id)),
+            None => cqrs::New(id).into(),
         };
         events
             .commit(clock, cqrs::Pending::new(vec![ClockEvent::Ticked]))

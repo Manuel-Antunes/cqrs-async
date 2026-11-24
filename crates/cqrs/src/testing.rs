@@ -68,8 +68,15 @@ pub struct AggregateFixture<A> {
 }
 
 impl<A: Aggregate> AggregateFixture<A> {
-    /// Starts from [`Aggregate::initial`], with no history: what a creation
-    /// decision runs on.
+    /// Runs a creation (an associated function of the aggregate: there is no
+    /// instance yet). Its events are applied to the state before any event
+    /// of `id` only if it succeeds, so `expect_state` checks what it created.
+    pub fn creating<T, Er>(id: A::Id, create: impl FnOnce(&mut Vec<A::Event>) -> Result<T, Er>) -> Then<A, T, Er> {
+        Self::new(id).when(|_, events| create(events))
+    }
+
+    /// Starts from [`Aggregate::initial`], with no history: replay `given`
+    /// events onto it before a decision.
     pub fn new(id: A::Id) -> Self {
         Self {
             aggregate: A::initial(&id),

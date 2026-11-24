@@ -16,10 +16,12 @@ pub use event::PostEvent;
 pub use id::PostId;
 
 /// A blog post: plain state. It is only ever changed by its events (see
-/// its private `apply`); the public methods are decisions: they take
-/// `&self`, check the business rules and append the events to the appender
-/// they are given (Axon 5's `EventAppender`). The struct holds no buffer, so
-/// derives, literals and serialization work as for any struct.
+/// its private `apply`); the public methods are decisions: they check the
+/// business rules and append the events to the appender they are given
+/// (Axon 5's `EventAppender`). [`create`](Self::create) has no post to decide
+/// on yet, so it is an associated function; the others take `&self`. The
+/// struct holds no buffer, so derives, literals and serialization work as for
+/// any struct.
 ///
 /// The derive writes the [`Aggregate`](cqrs::Aggregate) impl: stream `post`,
 /// id from the `id` field, initial state with the other fields at their
@@ -47,19 +49,20 @@ impl Post {
         }
     }
 
-    /// Drafts this post, unpublished: decided on its initial state. The
-    /// title is trimmed.
+    /// Drafts the post `id`, unpublished. The title is trimmed. There is no
+    /// post yet, so this takes none: commit it to `cqrs::New`, which expects
+    /// the post's stream not to exist.
     ///
     /// # Errors
     ///
     /// [`PostError::EmptyTitle`] if the title is blank.
     pub fn create(
-        &self,
+        id: PostId,
         title: impl Into<String>,
         events: &mut impl EventAppender<PostEvent>,
     ) -> Result<(), PostError> {
         let title = valid_title(title.into())?;
-        events.append(PostEvent::Created { id: self.id, title });
+        events.append(PostEvent::Created { id, title });
         Ok(())
     }
 

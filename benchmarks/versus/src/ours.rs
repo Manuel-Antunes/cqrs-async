@@ -8,8 +8,8 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
-    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, ProcessingContext,
+    AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
+    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext,
     ProcessorHandle, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
 use cqrs_postgres::{PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore};
@@ -74,10 +74,9 @@ pub struct ExecuteHandler<R, P> {
 #[cqrs::command_handler]
 impl<R: Accounts, P: EventPublisher<AccountEvent>> CommandHandler for ExecuteHandler<R, P> {
     async fn handle(&self, command: &Execute, events: &mut Appender<AccountEvent>) -> Result<(), BankError> {
-        let account = match self.accounts.find(&command.account).await? {
-            Some(account) => account,
-            None => Loaded::new(OurAccount::initial(&command.account)),
-        };
+        // An account starts empty: `Open` is decided on that state.
+        let account =
+            (self.accounts.find(&command.account).await?).unwrap_or_else(|| New(command.account.clone()).into());
         for event in account.state.decide(&command.command)? {
             events.append(event);
         }

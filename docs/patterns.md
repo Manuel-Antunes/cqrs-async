@@ -400,13 +400,16 @@ data; putting it in the domain struct mixes concerns, and reusing a stale
 aggregate after a failed commit is a classic bug.
 
 **Shape.** `Loaded<A>` wraps the state with the version it was read at. It
-derefs to `&A` only (no `&mut`, E0596), and `commit` consumes it:
+derefs to `&A` only (no `&mut`, E0596), and `commit` consumes it. A
+creation has no state to load: it commits to `New<A>`, which expects the
+stream not to exist:
 
 ```rust
 let post = posts.find(id).await?.ok_or(NotFound(id))?;    // Loaded<Post>, from your repository
 post.retitle("New", events)?;                              // &Post
 events.commit(post, &self.events).await?;                  // moved: cannot be reused
-let new = Loaded::new(Post::initial(&id));                 // expects no stream yet
+Post::create(id, "Title", events)?;                         // no post yet: an associated function
+events.commit(New::<Post>(id), &self.events).await?;       // expects no stream yet
 ```
 
 Repositories return it (they get it from an `AggregateLoader`), so the

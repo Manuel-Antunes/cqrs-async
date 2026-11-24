@@ -126,7 +126,7 @@ impl CommandHandler for OpenHandler {
 
     async fn handle(&self, Open(id): &Open, events: &mut Appender<CounterEvent>) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
-        events.commit(Loaded::new(Counter::initial(id)), &self.0).await?;
+        events.commit(cqrs::New::<Counter>(*id), &self.0).await?;
         Ok(*id)
     }
 }

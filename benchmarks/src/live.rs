@@ -45,8 +45,12 @@ impl Live {
     /// # Errors
     ///
     /// The store's.
-    pub async fn commit(&self, post: Loaded<Post>, events: Vec<PostEvent>) -> Result<Option<u64>, StoreError> {
-        self.events.commit(post, Pending::new(events)).await
+    pub async fn commit(
+        &self,
+        post: impl Into<Loaded<Post>>,
+        events: Vec<PostEvent>,
+    ) -> Result<Option<u64>, StoreError> {
+        self.events.commit(post.into(), Pending::new(events)).await
     }
 
     /// A catch-up subscription from `after`.

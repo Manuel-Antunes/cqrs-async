@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use blog::domain::{Post, PostError, PostEvent, PostId};
 use cqrs::{
-    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InlinePublisher, Loaded, Pending,
+    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InlinePublisher, Pending,
     testing::{AggregateFixture, block_on},
 };
 
@@ -20,16 +20,14 @@ fn created() -> PostEvent {
 
 #[test]
 fn creating_a_post_appends_created() {
-    AggregateFixture::<Post>::new(ID)
-        .when(|post, events| post.create("  Hello ", events))
+    AggregateFixture::<Post>::creating(ID, |events| Post::create(ID, "  Hello ", events))
         .expect_events([created()])
         .expect_state(|post| assert_eq!(post.title(), "Hello"));
 }
 
 #[test]
 fn a_post_needs_a_title() {
-    AggregateFixture::<Post>::new(ID)
-        .when(|post, events| post.create("   ", events))
+    AggregateFixture::<Post>::creating(ID, |events| Post::create(ID, "   ", events))
         .expect_error(PostError::EmptyTitle)
         .expect_no_events();
 }
@@ -142,7 +140,7 @@ fn framework_free_decisions_work_with_the_repository() {
     let click = || async {
         let counter = match loader.load(&1).await.unwrap() {
             Some(counter) => counter,
-            None => Loaded::new(Counter::initial(&1)),
+            None => cqrs::New(1).into(),
         };
         let mut events = Vec::new();
         counter.increment(2, &mut events)?;

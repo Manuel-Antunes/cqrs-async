@@ -383,7 +383,7 @@ pequeno.
 | `Appender` (struct) e `EventAppender` (trait) | Dois nomes quase iguais para coisas diferentes: o contexto do handler e onde o domínio grava. | Renomear a struct (`Decision`, `CommandContext`). |
 | `Projection`, `#[cqrs::projection]` | O blog anota uma policy de notificação como "projection". | Nome neutro para "handler com nome de processor"; `projection` e `policy` como apelidos, se fizer falta. |
 | `Handler` + `#[query_handler]` | Comandos têm `CommandHandler`, queries usam o genérico. | `QueryHandler` simétrico. |
-| `Loaded::new(Post::initial(&id))` | Criar um agregado novo pede duas chamadas e um trait importado. | `Loaded::fresh(&id)`. |
+| `Loaded::new(Post::initial(&id))` | Criar um agregado novo pede duas chamadas e um trait importado, e a criação era decidida num `Post` vazio (dava para gravar um segundo `Created` num post existente). | **Feito:** criação é função associada (`Post::create(id, ..)`, como o handler estático do Axon 5) e o commit vai para `New::<Post>(id)`, que exige stream inexistente. `Loaded::new` saiu da API pública. |
 | `EventSourced` | Deixa de existir como está na Fase 2. | Nomear os dois tipos pelo papel. |
 | `P` | É processor em `EventSourced` e publisher em `Appender` e `Cqrs`. | Uma letra por papel. |
 

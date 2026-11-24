@@ -76,7 +76,7 @@ impl World {
     async fn tick(&self, n: u32) {
         let clock = match self.clocks.load(&1).await.unwrap() {
             Some(clock) => clock,
-            None => cqrs::Loaded::new(Clock::initial(&1)),
+            None => cqrs::New(1).into(),
         };
         let ticks: Vec<_> = (1..=n).map(|i| Ticked(clock.ticks + i)).collect();
         self.publisher.commit(clock, Pending::new(ticks)).await.unwrap();

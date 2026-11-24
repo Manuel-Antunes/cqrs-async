@@ -20,7 +20,7 @@ use std::{
 use cqrs::{
     Aggregate, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
     EventInterceptor, EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters,
-    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, Intercepted, Loaded, Metadata, Pending, ProcessingContext,
+    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, Intercepted, Metadata, Pending, ProcessingContext,
     StoreError, StreamId, TokenStore, TokenUpdate, TrackingOptions, TrackingToken, TransactionalTokenStore,
     retry_dead_letters,
 };
@@ -427,7 +427,7 @@ async fn inline_handlers_get_their_committed_step() {
     let phases = Phases::default();
     let clocks = InlinePublisher::new(InMemoryEventStore::new()).with_processor((Inline(Arc::clone(&phases)),));
     clocks
-        .commit(Loaded::new(Clock(1)), Pending::new(vec![Ticked(1), Ticked(2)]))
+        .commit(cqrs::New::<Clock>(1).into(), Pending::new(vec![Ticked(1), Ticked(2)]))
         .await
         .unwrap();
     assert_eq!(

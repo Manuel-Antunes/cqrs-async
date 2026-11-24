@@ -9,7 +9,7 @@ use std::{
 
 use blog::domain::{Post, PostId};
 use cqrs::Aggregate;
-use cqrs::{CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots, Loaded};
+use cqrs::{CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots};
 use cqrs_benchmarks::{
     PlainPosts, now,
     ping::{Ping, PingGateway, PingHandler},
@@ -49,7 +49,7 @@ mod aggregate {
         bencher.bench_local(|| {
             let mut post = Post::initial(&PostId(1));
             let mut events = Vec::with_capacity(n + 1);
-            post.create("title", &mut events).unwrap();
+            Post::create(PostId(1), "title", &mut events).unwrap();
             post.evolve(events.last().unwrap());
             for i in 0..n {
                 post.retitle(if i % 2 == 0 { "a" } else { "b" }, &mut events).unwrap();
@@ -91,10 +91,9 @@ mod persistence {
         bencher
             .with_inputs(|| PostId(next.fetch_add(1, Ordering::Relaxed)))
             .bench_local_values(|id| {
-                let post = Loaded::new(Post::initial(&id));
                 let mut events = Vec::new();
-                post.create("title", &mut events).unwrap();
-                now(posts.commit(post, events)).unwrap();
+                Post::create(id, "title", &mut events).unwrap();
+                now(posts.commit(cqrs::New::<Post>(id), events)).unwrap();
             });
     }
 

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cqrs::{Aggregate, Appender, CommandHandler, EventPublisher, Loaded};
+use cqrs::{Appender, CommandHandler, EventPublisher, New};
 
 use crate::{
     application::BlogError,
@@ -40,9 +40,8 @@ impl<P> CreatePostHandler<P> {
 impl<P: EventPublisher<PostEvent>> CommandHandler for CreatePostHandler<P> {
     async fn handle(&self, command: &CreatePost, appender: &mut Appender<PostEvent>) -> Result<PostId, BlogError> {
         let id = PostId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let post = Loaded::new(Post::initial(&id));
-        post.create(command.title.as_str(), appender)?;
-        appender.commit(post, &self.events).await?;
+        Post::create(id, command.title.as_str(), appender)?;
+        appender.commit(New::<Post>(id), &self.events).await?;
         Ok(id)
     }
 }
