@@ -264,3 +264,32 @@ where
     }
     Ok(committed.last().map(|event| event.position))
 }
+
+/// Appends `pending` to `entity`'s stream in `store`, within `tx`, expecting
+/// the version it was loaded at and the conditions of what was read: what
+/// every [`PublishIn`](crate::PublishIn) does.
+pub(crate) async fn append_in<E, A, S, Tx>(
+    store: &S,
+    tx: &mut Tx,
+    entity: &Loaded<A>,
+    pending: Pending<E>,
+) -> Result<Vec<EventEnvelope<E>>, StoreError>
+where
+    E: DomainEvent,
+    A: Aggregate<Event = E>,
+    S: AppendEvents<E, Tx>,
+    Tx: Send,
+{
+    let (stream, expected) = entity.target();
+    let condition = crate::AppendCondition::both(entity.condition().cloned(), pending.condition);
+    store
+        .append_if(
+            tx,
+            &stream,
+            expected,
+            pending.events,
+            &pending.metadata,
+            condition.as_ref(),
+        )
+        .await
+}

@@ -62,7 +62,9 @@ mod unit;
 mod upcast;
 
 pub use aggregate::{Aggregate, EventAppender};
-pub use command_handler::{Appender, CommandHandler, EventPublisher, Pending, dispatch_command};
+pub use command_handler::{
+    Announce, Appender, CommandHandler, Committed, EventPublisher, Pending, PublishIn, dispatch_command,
+};
 pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
 pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};

@@ -249,6 +249,57 @@ impl<E> Appender<E> {
         self.record(outcome)
     }
 
+    /// Commits the pending events like [`commit`](Self::commit), but in
+    /// `tx`, a transaction the caller owns: the application's own writes in
+    /// it (an aggregate's state, a row of its own) and the events commit
+    /// together, or roll back together. The library borrows `tx` and can
+    /// neither commit it nor keep it.
+    ///
+    /// ```text
+    /// let mut tx = pool.begin().await?;                                    // the transaction is yours
+    /// let committed = appender.commit_in(&mut tx, post, &self.events).await?;
+    /// save_state(&mut tx, committed.entity()).await?;                      // your repository, your ORM
+    /// tx.commit().await?;                                                  // the commit is yours
+    /// committed.announce();                                                // processors, subscriptions
+    /// ```
+    ///
+    /// Nothing is announced before the caller's commit, which the publisher
+    /// cannot see: the returned [`Committed`] carries the events, and
+    /// [`announce`](Committed::announce) hands them to processors and
+    /// subscriptions. Forgetting it only costs latency (they also poll the
+    /// log); dropping it is right when the transaction rolled back.
+    ///
+    /// # Errors
+    ///
+    /// As [`commit`](Self::commit). A lost race fails the statement, which
+    /// aborts a PostgreSQL transaction: drop it, and the gateway runs the
+    /// handler again, which opens a new one.
+    pub async fn commit_in<'p, A, P, Tx>(
+        &mut self,
+        tx: &mut Tx,
+        entity: impl Into<Loaded<A>>,
+        publisher: &'p P,
+    ) -> Result<Committed<'p, A, P>, StoreError>
+    where
+        E: DomainEvent,
+        A: Aggregate<Event = E>,
+        P: PublishIn<E, Tx>,
+        Tx: Send,
+    {
+        let entity = entity.into();
+        let pending = self.take();
+        let events = match publisher.append_in(tx, &entity, pending).await {
+            Ok(events) => events,
+            Err(error) => return Err(self.lost(error)),
+        };
+        self.saved(events.last().map(|event| event.position));
+        Ok(Committed {
+            entity: entity.after(&events),
+            events,
+            publisher,
+        })
+    }
+
     /// The pending events, with a copy of the metadata and the condition.
     fn take(&mut self) -> Pending<E> {
         Pending {
@@ -263,28 +314,37 @@ impl<E> Appender<E> {
     fn record(&mut self, outcome: Result<Option<u64>, StoreError>) -> Result<(), StoreError> {
         match outcome {
             Ok(last) => {
-                self.saved = true;
-                // Our own events match what we read: later commits check
-                // only what others append after them.
-                if let (Some(condition), Some(last)) = (&mut self.condition, last) {
-                    condition.after = last;
-                }
+                self.saved(last);
                 Ok(())
             }
-            Err(error) => {
-                if matches!(
-                    error,
-                    StoreError::ConditionFailed
-                        | StoreError::Conflict {
-                            expected: ExpectedVersion::Exact(_),
-                            ..
-                        }
-                ) {
-                    self.lost_race = true;
-                }
-                Err(error)
-            }
+            Err(error) => Err(self.lost(error)),
         }
+    }
+
+    /// A commit succeeded, its last event at `last`.
+    fn saved(&mut self, last: Option<u64>) {
+        self.saved = true;
+        // Our own events match what we read: later commits check only what
+        // others append after them.
+        if let (Some(condition), Some(last)) = (&mut self.condition, last) {
+            condition.after = last;
+        }
+    }
+
+    /// A commit failed with `error`, returned; a lost race makes a re-run
+    /// safe if nothing was committed before.
+    fn lost(&mut self, error: StoreError) -> StoreError {
+        if matches!(
+            error,
+            StoreError::ConditionFailed
+                | StoreError::Conflict {
+                    expected: ExpectedVersion::Exact(_),
+                    ..
+                }
+        ) {
+            self.lost_race = true;
+        }
+        error
     }
 
     /// A commit lost a race and nothing was committed before: running the
@@ -354,6 +414,116 @@ impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for std::sync::Arc<
         pending: Pending<E>,
     ) -> impl Future<Output = Result<Option<u64>, StoreError>> + Send {
         (**self).commit(entity, pending)
+    }
+}
+
+/// Appends in a transaction its caller owns, for
+/// [`Appender::commit_in`]: the [`EventPublisher`] counterpart for
+/// applications that write their own state with the events.
+///
+/// [`Events`](crate::Events) is one, for every transaction its store can
+/// append in ([`AppendEvents<E, Tx>`](crate::AppendEvents)).
+/// [`InlinePublisher`](crate::InlinePublisher) is not: its handlers run
+/// right after the commit, which it cannot see, and a forgotten
+/// [`announce`](Committed::announce) would silently skip them.
+pub trait PublishIn<E: DomainEvent, Tx: Send>: Announce<E> {
+    /// Appends `pending` to `entity`'s stream in `tx`, expecting the
+    /// version it was loaded at (or the condition it was built from);
+    /// returns the envelopes, invisible to others until `tx` commits.
+    ///
+    /// # Errors
+    ///
+    /// As [`EventPublisher::commit`].
+    fn append_in<A: Aggregate<Event = E>>(
+        &self,
+        tx: &mut Tx,
+        entity: &Loaded<A>,
+        pending: Pending<E>,
+    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send;
+}
+
+/// Hands events committed in a caller's transaction to whatever follows
+/// them (processors, subscriptions): the after-commit half of
+/// [`PublishIn`], whatever the transaction was.
+pub trait Announce<E>: Send + Sync {
+    /// `events` were committed: tell those following the log.
+    fn announce(&self, events: Vec<EventEnvelope<E>>);
+}
+
+/// A shared publisher announces too.
+impl<E, T: Announce<E>> Announce<E> for std::sync::Arc<T> {
+    fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        (**self).announce(events);
+    }
+}
+
+/// A shared publisher appends in transactions too.
+// Forwards every method, so an override of a provided one is never lost.
+#[deny(clippy::missing_trait_methods)]
+impl<E: DomainEvent, Tx: Send, T: PublishIn<E, Tx>> PublishIn<E, Tx> for std::sync::Arc<T> {
+    fn append_in<A: Aggregate<Event = E>>(
+        &self,
+        tx: &mut Tx,
+        entity: &Loaded<A>,
+        pending: Pending<E>,
+    ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
+        (**self).append_in(tx, entity, pending)
+    }
+}
+
+/// What [`Appender::commit_in`] appended in the caller's transaction: the
+/// entity as it is after the events (for a repository keeping its state),
+/// and the events, to [`announce`](Self::announce) once the caller
+/// committed. Drop it if the transaction rolled back.
+#[must_use = "announce() it once your transaction committed (or drop it if it rolled back)"]
+pub struct Committed<'p, A: Aggregate, P> {
+    /// The entity after the events, at its new version.
+    entity: Loaded<A>,
+    /// What was appended.
+    events: Vec<EventEnvelope<A::Event>>,
+    /// Who announces them.
+    publisher: &'p P,
+}
+
+impl<A: Aggregate, P> Committed<'_, A, P> {
+    /// The entity after the events ([`Aggregate::evolve`]), at the version
+    /// they took it to: what a repository keeping state saves in the same
+    /// transaction, with that version.
+    pub fn entity(&self) -> &Loaded<A> {
+        &self.entity
+    }
+
+    /// The events appended, in order.
+    pub fn events(&self) -> &[EventEnvelope<A::Event>] {
+        &self.events
+    }
+
+    /// The position of the last event appended (`None` if there was
+    /// nothing to append).
+    pub fn last_position(&self) -> Option<u64> {
+        self.events.last().map(|event| event.position)
+    }
+
+    /// Tells processors and subscriptions about the events, once the
+    /// transaction they were appended in committed; returns the entity.
+    pub fn announce(self) -> Loaded<A>
+    where
+        P: Announce<A::Event>,
+    {
+        self.publisher.announce(self.events);
+        self.entity
+    }
+}
+
+impl<A: Aggregate, P> std::fmt::Debug for Committed<'_, A, P>
+where
+    A::Event: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Committed")
+            .field("version", &self.entity.version())
+            .field("events", &self.events)
+            .finish_non_exhaustive()
     }
 }
 

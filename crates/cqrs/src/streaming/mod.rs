@@ -264,6 +264,44 @@ where
     }
 }
 
+/// The events service appends in the caller's transaction too, for every
+/// transaction its store can append in, and broadcasts once told the
+/// caller committed ([`Appender::commit_in`](crate::Appender::commit_in)).
+impl<E, S, C, M, Tx> crate::PublishIn<E, Tx> for Events<E, S, C, M>
+where
+    E: DomainEvent + Clone,
+    S: AppendEvents<E, Tx>,
+    C: Send + Sync,
+    M: Send + Sync,
+    Tx: Send,
+{
+    fn append_in<A: Aggregate<Event = E>>(
+        &self,
+        tx: &mut Tx,
+        entity: &crate::Loaded<A>,
+        pending: crate::Pending<E>,
+    ) -> impl std::future::Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
+        crate::inline::append_in(&self.store, tx, entity, pending)
+    }
+}
+
+/// Broadcasts what was committed: processors and subscriptions following the
+/// live feed see it at once (they also poll, so a missed announcement only
+/// costs latency).
+impl<E, S, C, M> crate::Announce<E> for Events<E, S, C, M>
+where
+    E: DomainEvent,
+    S: Send + Sync,
+    C: Send + Sync,
+    M: Send + Sync,
+{
+    fn announce(&self, events: Vec<EventEnvelope<E>>) {
+        for event in events {
+            let _ = self.live.send(Arc::new(event)); // no receiver is fine
+        }
+    }
+}
+
 /// As the [`EventFeed`] port: catch-up subscriptions over the store, followed
 /// live.
 impl<E, S, C, M> EventFeed<E> for Events<E, S, C, M>

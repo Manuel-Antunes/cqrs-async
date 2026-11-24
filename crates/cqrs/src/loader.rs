@@ -49,17 +49,60 @@ impl<A: Aggregate> Loaded<A> {
         })
     }
 
+    /// `aggregate` as stored at `version`, its stream's last sequence: what a
+    /// repository that keeps the aggregate's state (rather than rebuilding
+    /// it from events) hands a commit, so the append still expects the
+    /// stream at that version (optimistic concurrency). Version 0 is a
+    /// stream with no events: the commit then expects it not to exist.
+    pub fn at(aggregate: A, version: u64) -> Self {
+        Self {
+            aggregate,
+            version: (version > 0).then_some(version),
+            condition: None,
+        }
+    }
+
     /// What a commit of this aggregate's events needs: its stream, what it
     /// expects of it (built from criteria, its condition guards it, not a
     /// stream version, as other streams hold its events too), and that
     /// condition.
     pub(crate) fn into_commit(self) -> (StreamId, ExpectedVersion, Option<AppendCondition>) {
+        let (stream, expected) = self.target();
+        (stream, expected, self.condition)
+    }
+
+    /// The stream a commit appends to and what it expects of it (see
+    /// [`into_commit`](Self::into_commit)).
+    pub(crate) fn target(&self) -> (StreamId, ExpectedVersion) {
         let expected = match (&self.condition, self.version) {
             (Some(_), _) => ExpectedVersion::Any,
             (None, None) => ExpectedVersion::NoStream,
             (None, Some(version)) => ExpectedVersion::Exact(version),
         };
-        (StreamId::of::<A>(self.aggregate.id()), expected, self.condition)
+        (StreamId::of::<A>(self.aggregate.id()), expected)
+    }
+
+    /// The condition its commits are guarded by, if it was built from
+    /// criteria.
+    pub(crate) fn condition(&self) -> Option<&AppendCondition> {
+        self.condition.as_ref()
+    }
+
+    /// This aggregate once `events` (just appended to its stream) are
+    /// applied, at the version they took it to.
+    pub(crate) fn after(mut self, events: &[EventEnvelope<A::Event>]) -> Self {
+        for event in events {
+            self.aggregate.evolve(&event.payload);
+        }
+        if let Some(last) = events.last() {
+            match &mut self.condition {
+                // Its own events match its criteria: the next commit checks
+                // only what others append after them.
+                Some(condition) => condition.after = last.position,
+                None => self.version = Some(last.sequence),
+            }
+        }
+        self
     }
 
     /// The stream version this aggregate was loaded at (`None` when new).

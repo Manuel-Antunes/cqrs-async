@@ -1645,3 +1645,147 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         "every tick applied exactly once"
     );
 }
+
+/// A clock whose state is kept in a table of the application (`clock_state`)
+/// instead of being rebuilt from its events.
+#[derive(Clone)]
+struct KeptClock {
+    id: u32,
+    ticks: u64,
+}
+
+impl Aggregate for KeptClock {
+    const TYPE: &'static str = "kept-clock";
+    type Id = u32;
+    type Event = ClockEvent;
+
+    fn initial(id: &u32) -> Self {
+        Self { id: *id, ticks: 0 }
+    }
+
+    fn id(&self) -> &u32 {
+        &self.id
+    }
+
+    fn evolve(&mut self, _: &ClockEvent) {
+        self.ticks += 1;
+    }
+}
+
+/// The application's repository: loads the state it kept, with its version.
+async fn find_kept(pool: &PgPool, id: u32) -> Option<cqrs::Loaded<KeptClock>> {
+    let row: Option<(i64, i64)> = sqlx::query_as("SELECT ticks, version FROM clock_state WHERE id = $1")
+        .bind(i64::from(id))
+        .fetch_optional(pool)
+        .await
+        .unwrap();
+    row.map(|(ticks, version)| {
+        cqrs::Loaded::at(
+            KeptClock {
+                id,
+                ticks: ticks as u64,
+            },
+            version as u64,
+        )
+    })
+}
+
+/// Saves the state `committed` left, in the caller's transaction.
+async fn save_kept(tx: &mut PgTransaction, clock: &cqrs::Loaded<KeptClock>) {
+    sqlx::query(
+        "INSERT INTO clock_state (id, ticks, version) VALUES ($1, $2, $3) \
+         ON CONFLICT (id) DO UPDATE SET ticks = $2, version = $3",
+    )
+    .bind(i64::from(clock.id))
+    .bind(clock.ticks as i64)
+    .bind(clock.version().unwrap() as i64)
+    .execute(&mut **tx)
+    .await
+    .unwrap();
+}
+
+/// A repository keeping state commits it with the events, in a transaction
+/// it owns: rolled back, neither is there; committed, both are, and the
+/// announcement reaches processors. A stale version still conflicts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn state_and_events_commit_and_roll_back_together() {
+    let pool = database_or_skip!();
+    sqlx::query("CREATE TABLE clock_state (id bigint PRIMARY KEY, ticks bigint NOT NULL, version bigint NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let events = Events::new(store.clone());
+    let mut feed = std::pin::pin!(events.subscribe(0));
+    let stream = StreamId::of::<KeptClock>(&1);
+
+    // Rolled back: no state, no events.
+    let mut appender = cqrs::Appender::new();
+    appender.extend(ticks(1, 2));
+    let mut tx = pool.begin().await.unwrap();
+    let committed = appender
+        .commit_in(&mut tx, cqrs::New::<KeptClock>(1), &events)
+        .await
+        .unwrap();
+    save_kept(&mut tx, committed.entity()).await;
+    drop(committed);
+    drop(tx);
+    assert!(find_kept(&pool, 1).await.is_none());
+    assert!(store.load(&stream, 0).await.unwrap().is_empty());
+
+    // Committed: both, and the state is the events applied.
+    let mut appender = cqrs::Appender::new();
+    appender.extend(ticks(1, 2));
+    let mut tx = pool.begin().await.unwrap();
+    let committed = appender
+        .commit_in(&mut tx, cqrs::New::<KeptClock>(1), &events)
+        .await
+        .unwrap();
+    assert_eq!((committed.entity().ticks, committed.entity().version()), (2, Some(2)));
+    save_kept(&mut tx, committed.entity()).await;
+    tx.commit().await.unwrap();
+    let last = committed.last_position().unwrap();
+    committed.announce();
+    let kept = find_kept(&pool, 1).await.unwrap();
+    assert_eq!((kept.ticks, kept.version()), (2, Some(2)));
+    assert_eq!(store.load(&stream, 0).await.unwrap().len(), 2);
+    let seen = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut seen = 0;
+        while seen < last {
+            seen = futures_util::StreamExt::next(&mut feed)
+                .await
+                .unwrap()
+                .unwrap()
+                .position;
+        }
+        seen
+    })
+    .await
+    .expect("announced");
+    assert_eq!(seen, last);
+
+    // From the kept state: the next commit expects its version.
+    let mut appender = cqrs::Appender::new();
+    appender.extend(ticks(3, 1));
+    let mut tx = pool.begin().await.unwrap();
+    let committed = appender.commit_in(&mut tx, kept, &events).await.unwrap();
+    save_kept(&mut tx, committed.entity()).await;
+    tx.commit().await.unwrap();
+    committed.announce();
+    assert_eq!(find_kept(&pool, 1).await.unwrap().version(), Some(3));
+
+    // A stale copy (version 2) conflicts, and its transaction is undone.
+    let stale = cqrs::Loaded::at(KeptClock { id: 1, ticks: 2 }, 2);
+    let mut appender = cqrs::Appender::new();
+    appender.extend(ticks(4, 1));
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE clock_state SET ticks = 99 WHERE id = 1")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let refused = appender.commit_in(&mut tx, stale, &events).await;
+    assert!(matches!(refused, Err(StoreError::Conflict { .. })), "{refused:?}");
+    drop(tx);
+    let kept = find_kept(&pool, 1).await.unwrap();
+    assert_eq!((kept.ticks, kept.version()), (3, Some(3)));
+}
