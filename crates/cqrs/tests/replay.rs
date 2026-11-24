@@ -9,7 +9,7 @@ use std::{
 };
 
 use cqrs::{
-    EventEnvelope, EventHandler, EventStore, Events, ExpectedVersion, HandlerError, InMemoryEventStore,
+    AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore,
     InMemoryTokenStore, Metadata, ProcessingContext, ResetError, StreamId,
 };
 
@@ -57,7 +57,13 @@ async fn tick(events: &Events<Ticked, Store, InMemoryTokenStore>, n: u64) {
     let stream = StreamId::new("clock", n.to_string());
     events
         .store()
-        .append(&stream, ExpectedVersion::NoStream, vec![Ticked(n)], &Metadata::new())
+        .append(
+            &mut (),
+            &stream,
+            ExpectedVersion::NoStream,
+            vec![Ticked(n)],
+            &Metadata::new(),
+        )
         .await
         .unwrap();
 }

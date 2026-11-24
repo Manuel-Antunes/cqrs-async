@@ -121,39 +121,44 @@ impl std::error::Error for StoreError {
     }
 }
 
-/// Append-only storage of event streams.
-///
-/// `append` is atomic per stream: either every event is stored with
-/// consecutive sequences, or none is and [`StoreError::Conflict`] /
-/// [`StoreError::Backend`] is returned.
-///
-/// # Global order
-///
-/// Every event also gets a [`position`](EventEnvelope::position) in the
-/// whole store, increasing in the order positions are taken. A store whose
-/// appends run one at a time (this crate's in-memory one) has no gaps, and a
-/// position is visible only once every lower one is. One whose appends run
-/// in parallel (a SQL sequence) commits them out of order: readers of the
-/// global log (tracking processors, subscriptions) read through a [`Cursor`]
-/// that remembers the positions skipped ([`read`](Self::read)), as Axon's
-/// gap-aware tracking tokens do.
-pub trait EventStore<E: DomainEvent>: Send + Sync {
+/// Reads one stream: what an aggregate is rebuilt from
+/// ([`AggregateLoader`](crate::AggregateLoader)).
+pub trait LoadStream<E>: Send + Sync {
     /// Events of `stream` with `sequence > after`, oldest first.
     fn load(
         &self,
         stream: &StreamId,
         after: u64,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send;
+}
 
+/// Appends to streams, atomically per stream, with optimistic concurrency
+/// ([`ExpectedVersion`]) and, for stores that index tags, a condition on
+/// what a decision read ([`AppendCondition`], Axon 5's DCB): what a
+/// publisher needs.
+///
+/// `Tx` is the transaction the append joins. `()`, the default, means none:
+/// the store appends on its own, in a transaction it opens and commits. A
+/// database store also appends in a transaction its caller owns (a
+/// PostgreSQL store implements it for `sqlx::Transaction`), so an
+/// application's own writes and the events commit together; then nothing is
+/// visible, nor announced, before the caller commits
+/// ([`Appender::commit_in`](crate::Appender::commit_in)).
+///
+/// Either every event is stored with consecutive sequences, or none is and
+/// [`StoreError::Conflict`] / [`StoreError::ConditionFailed`] /
+/// [`StoreError::Backend`] is returned.
+pub trait AppendEvents<E: DomainEvent, Tx: Send = ()>: Send + Sync {
     /// Appends `events`, returning their committed envelopes.
     fn append(
         &self,
+        tx: &mut Tx,
         stream: &StreamId,
         expected: ExpectedVersion,
         events: Vec<E>,
         metadata: &Metadata,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        self.append_if(stream, expected, events, metadata, None)
+        self.append_if(tx, stream, expected, events, metadata, None)
     }
 
     /// [`append`](Self::append), and only if `condition` holds: no event
@@ -168,6 +173,7 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
     /// envelopes are built from what it [`Recorded`].
     fn append_if(
         &self,
+        tx: &mut Tx,
         stream: &StreamId,
         expected: ExpectedVersion,
         events: Vec<E>,
@@ -180,7 +186,7 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
             }
             let events: Vec<TaggedEvent<E>> = events.into_iter().map(TaggedEvent::new).collect();
             let recorded = self
-                .append_tagged(stream, expected, &events, metadata, condition)
+                .append_tagged(tx, stream, expected, &events, metadata, condition)
                 .await?;
             debug_assert_eq!(recorded.len(), events.len(), "one record per event, in order");
             Ok(events
@@ -206,13 +212,18 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
     /// recorded for each, in order.
     fn append_tagged(
         &self,
+        tx: &mut Tx,
         stream: &StreamId,
         expected: ExpectedVersion,
         events: &[TaggedEvent<E>],
         metadata: &Metadata,
         condition: Option<&AppendCondition>,
     ) -> impl Future<Output = Result<Vec<Recorded>, StoreError>> + Send;
+}
 
+/// Reads by criteria, from any stream (Axon 5's DCB): what a decision
+/// spanning several aggregates, or an aggregate built from tags, reads.
+pub trait SourceEvents<E>: Send + Sync {
     /// Every event matching `criteria`, from any stream, in position order,
     /// and the head position they were read at: the `after` of the
     /// [`AppendCondition`] a decision on them appends with.
@@ -220,7 +231,21 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
         &self,
         criteria: &EventCriteria,
     ) -> impl Future<Output = Result<(Vec<EventEnvelope<E>>, u64), StoreError>> + Send;
+}
 
+/// Reads the whole log in order: what tracking processors and
+/// subscriptions follow.
+///
+/// # Global order
+///
+/// Every event gets a [`position`](EventEnvelope::position) in the whole
+/// store, increasing in the order positions are taken. A store whose
+/// appends run one at a time (this crate's in-memory one) has no gaps, and a
+/// position is visible only once every lower one is. One whose appends run
+/// in parallel (a SQL sequence) commits them out of order: readers of the
+/// global log read through a [`Cursor`] that remembers the positions skipped
+/// ([`read`](Self::read)), as Axon's gap-aware tracking tokens do.
+pub trait ReadLog<E>: Send + Sync {
     /// Up to `limit` events of every stream with `position > after`, in
     /// position order: the global log, read page by page.
     fn read_all(
@@ -253,6 +278,16 @@ pub trait EventStore<E: DomainEvent>: Send + Sync {
         ready(Ok(Cursor::at(position)))
     }
 }
+
+/// Every capability of an event store at once: what the in-memory and the
+/// PostgreSQL stores offer, and a shorter bound where all of them are used.
+/// Implemented for every type that has them; components ask only for the
+/// ones they use ([`LoadStream`], [`AppendEvents`], [`SourceEvents`],
+/// [`ReadLog`]), so a store for another database implements what that
+/// database can do.
+pub trait EventStore<E: DomainEvent>: LoadStream<E> + AppendEvents<E> + SourceEvents<E> + ReadLog<E> {}
+
+impl<E: DomainEvent, S> EventStore<E> for S where S: LoadStream<E> + AppendEvents<E> + SourceEvents<E> + ReadLog<E> {}
 
 /// Event store for tests and examples. `E: Clone` is required here (loading
 /// hands out copies), not by the [`EventStore`] contract.
@@ -352,7 +387,7 @@ impl<E: Clone> InMemoryEventStore<E> {
     }
 }
 
-impl<E: DomainEvent + Clone> EventStore<E> for InMemoryEventStore<E> {
+impl<E: Clone + Send + Sync> LoadStream<E> for InMemoryEventStore<E> {
     fn load(
         &self,
         stream: &StreamId,
@@ -375,9 +410,12 @@ impl<E: DomainEvent + Clone> EventStore<E> for InMemoryEventStore<E> {
             .unwrap_or_default();
         ready(Ok(events))
     }
+}
 
+impl<E: DomainEvent + Clone> AppendEvents<E> for InMemoryEventStore<E> {
     fn append_tagged(
         &self,
+        (): &mut (),
         stream: &StreamId,
         expected: ExpectedVersion,
         events: &[TaggedEvent<E>],
@@ -386,7 +424,9 @@ impl<E: DomainEvent + Clone> EventStore<E> for InMemoryEventStore<E> {
     ) -> impl Future<Output = Result<Vec<Recorded>, StoreError>> + Send {
         ready(self.append_now(stream, expected, events, metadata, condition))
     }
+}
 
+impl<E: Clone + Send + Sync> SourceEvents<E> for InMemoryEventStore<E> {
     fn source(
         &self,
         criteria: &EventCriteria,
@@ -399,7 +439,9 @@ impl<E: DomainEvent + Clone> EventStore<E> for InMemoryEventStore<E> {
             .collect();
         ready(Ok((matching, inner.log.len() as u64)))
     }
+}
 
+impl<E: Clone + Send + Sync> ReadLog<E> for InMemoryEventStore<E> {
     fn read_all(
         &self,
         after: u64,

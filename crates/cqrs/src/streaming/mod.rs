@@ -32,8 +32,8 @@ pub use subscription::{SubscriptionOptions, subscribe};
 pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf};
 
 use crate::{
-    Aggregate, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, EventStore, HandlerError,
-    InMemoryTokenStore, ProcessingFailure, StoreError, TokenStore, TransactionManager,
+    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, HandlerError,
+    InMemoryTokenStore, ProcessingFailure, ReadLog, StoreError, TokenStore, TransactionManager,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -173,7 +173,7 @@ impl<E, S, C, M> Events<E, S, C, M> {
 impl<E, S, C, M> Events<E, S, C, M>
 where
     E: DomainEvent + Clone,
-    S: EventStore<E> + Clone + 'static,
+    S: ReadLog<E> + Clone + 'static,
     C: TokenStore<Tx = M::Tx> + Clone + 'static,
     M: TransactionManager + Clone + 'static,
 {
@@ -251,7 +251,7 @@ where
 impl<E, S, C, M> crate::EventPublisher<E> for Events<E, S, C, M>
 where
     E: DomainEvent + Clone,
-    S: EventStore<E>,
+    S: AppendEvents<E>,
     C: Send + Sync,
     M: Send + Sync,
 {
@@ -269,7 +269,7 @@ where
 impl<E, S, C, M> EventFeed<E> for Events<E, S, C, M>
 where
     E: DomainEvent,
-    S: EventStore<E> + Clone + 'static,
+    S: ReadLog<E> + Clone + 'static,
     C: Send + Sync,
     M: Send + Sync,
 {

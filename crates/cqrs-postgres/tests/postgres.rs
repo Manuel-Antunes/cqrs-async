@@ -19,9 +19,10 @@ use std::{
 
 use cqrs::SnapshotStore;
 use cqrs::{
-    Aggregate, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler, EventPublisher, EventStore,
-    Events, ExpectedVersion, Gap, HandlerError, Metadata, Pending, ProcessingContext, StoreError, StreamId,
-    SubscriptionOptions, TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
+    Aggregate, AppendEvents, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler,
+    EventPublisher, Events, ExpectedVersion, Gap, HandlerError, LoadStream, Metadata, Pending, ProcessingContext,
+    ReadLog, SourceEvents, StoreError, StreamId, SubscriptionOptions, TokenStore, TrackingOptions, TrackingToken,
+    TransactionManager, retry_dead_letters,
 };
 use cqrs_postgres::{
     PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore,
@@ -121,7 +122,7 @@ async fn events_round_trip_with_their_envelope() {
     let metadata = Metadata::from([("correlation".to_owned(), "req-1".to_owned())]);
 
     let committed = store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &metadata)
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 2), &metadata)
         .await
         .unwrap();
     assert_eq!(
@@ -158,7 +159,7 @@ async fn old_events_are_upcast_when_read() {
     let pool = database_or_skip!();
     let none = Metadata::new();
     PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks")
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
         .await
         .unwrap();
 
@@ -175,6 +176,7 @@ async fn old_events_are_upcast_when_read() {
     }));
     store
         .append(
+            &mut (),
             &stream(1),
             ExpectedVersion::Exact(1),
             vec![ClockEventV2::Ticked { n: 2, by: "me".into() }],
@@ -215,20 +217,20 @@ async fn optimistic_concurrency_is_enforced() {
     let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     let none = Metadata::new();
     store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
         .await
         .unwrap();
 
     let twice = store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(2, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(2, 1), &none)
         .await;
     assert!(matches!(twice, Err(StoreError::Conflict { actual: Some(1), .. })));
     let stale = store
-        .append(&stream(1), ExpectedVersion::Exact(0), ticks(2, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::Exact(0), ticks(2, 1), &none)
         .await;
     assert!(matches!(stale, Err(StoreError::Conflict { .. })));
     store
-        .append(&stream(1), ExpectedVersion::Exact(1), ticks(2, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::Exact(1), ticks(2, 1), &none)
         .await
         .unwrap();
     assert_eq!(
@@ -251,7 +253,7 @@ async fn concurrent_writers_append_in_parallel_without_losing_anything() {
                     let expected = version.map_or(ExpectedVersion::NoStream, ExpectedVersion::Exact);
                     let events = ticks(round * 2, 2); // two events per append
                     let committed = store
-                        .append(&stream(id), expected, events, &Metadata::new())
+                        .append(&mut (), &stream(id), expected, events, &Metadata::new())
                         .await
                         .unwrap();
                     version = committed.last().map(|e| e.sequence);
@@ -283,7 +285,13 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
     store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(0, 1), &Metadata::new())
+        .append(
+            &mut (),
+            &stream(1),
+            ExpectedVersion::NoStream,
+            ticks(0, 1),
+            &Metadata::new(),
+        )
         .await
         .unwrap();
     let racers: Vec<_> = (0..12)
@@ -292,6 +300,7 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
             tokio::spawn(async move {
                 store
                     .append(
+                        &mut (),
                         &stream(1),
                         ExpectedVersion::Exact(1),
                         ticks(100 + n, 1),
@@ -314,7 +323,13 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
     // Refused appends (by the check or by the unique backstop) moved nothing.
     assert_eq!(store.last_position().await.unwrap(), 2);
     let next = store
-        .append(&stream(2), ExpectedVersion::NoStream, ticks(0, 1), &Metadata::new())
+        .append(
+            &mut (),
+            &stream(2),
+            ExpectedVersion::NoStream,
+            ticks(0, 1),
+            &Metadata::new(),
+        )
         .await
         .unwrap();
     assert_eq!(next[0].position, 3, "no gap left by the losers");
@@ -343,7 +358,10 @@ async fn a_subscription_reading_while_writers_race_misses_nothing() {
                 while appended < 10 {
                     let version = store.load(&stream(id), 0).await.unwrap().last().map(|e| e.sequence);
                     let expected = version.map_or(ExpectedVersion::NoStream, ExpectedVersion::Exact);
-                    match store.append(&stream(id), expected, ticks(0, 1), &Metadata::new()).await {
+                    match store
+                        .append(&mut (), &stream(id), expected, ticks(0, 1), &Metadata::new())
+                        .await
+                    {
                         Ok(_) => appended += 1,
                         Err(StoreError::Conflict { .. }) => {}
                         Err(error) => panic!("{error}"),
@@ -542,11 +560,12 @@ async fn two_event_enums_in_one_database_read_only_their_own_events() {
     let none = Metadata::new();
 
     clocks
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 2), &none)
         .await
         .unwrap();
     bells
         .append(
+            &mut (),
             &StreamId::new("bell", "1"),
             ExpectedVersion::NoStream,
             vec![BellEvent::Rung { times: 3 }],
@@ -555,7 +574,7 @@ async fn two_event_enums_in_one_database_read_only_their_own_events() {
         .await
         .unwrap();
     clocks
-        .append(&stream(1), ExpectedVersion::Exact(2), ticks(3, 1), &none)
+        .append(&mut (), &stream(1), ExpectedVersion::Exact(2), ticks(3, 1), &none)
         .await
         .unwrap();
 
@@ -569,6 +588,7 @@ async fn two_event_enums_in_one_database_read_only_their_own_events() {
     // A stream id of one log is free in the other: same type and id, no clash.
     bells
         .append(
+            &mut (),
             &stream(1),
             ExpectedVersion::NoStream,
             vec![BellEvent::Rung { times: 1 }],
@@ -746,7 +766,13 @@ async fn letters_are_parked_and_removed_with_their_unit_of_work() {
     let transactions = PostgresTransactions::new(pool.clone());
     let queue = PostgresDeadLetters::new(store.clone());
     store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 3), &Metadata::new())
+        .append(
+            &mut (),
+            &stream(1),
+            ExpectedVersion::NoStream,
+            ticks(1, 3),
+            &Metadata::new(),
+        )
         .await
         .unwrap();
     let all = store.read_all(0, 10).await.unwrap();
@@ -841,7 +867,13 @@ async fn racing_retries_apply_each_parked_event_once() {
     let transactions = PostgresTransactions::new(pool.clone());
     let queue = PostgresDeadLetters::new(store.clone());
     store
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 2), &Metadata::new())
+        .append(
+            &mut (),
+            &stream(1),
+            ExpectedVersion::NoStream,
+            ticks(1, 2),
+            &Metadata::new(),
+        )
         .await
         .unwrap();
     let mut unit = transactions.begin().await.unwrap();
@@ -1050,6 +1082,7 @@ async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
     // Another room's booking does not stand in the way.
     store
         .append(
+            &mut (),
             &StreamId::new("booking", "other"),
             ExpectedVersion::NoStream,
             vec![RoomEvent::Booked { room: 2, by: 0 }],
@@ -1072,6 +1105,7 @@ async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
             let stream = StreamId::new("booking", by.to_string());
             store
                 .append_if(
+                    &mut (),
                     &stream,
                     ExpectedVersion::NoStream,
                     book(by),
@@ -1130,7 +1164,13 @@ async fn criteria_match_all_their_tags_and_any_alternative() {
     for (id, event) in events {
         let stream = StreamId::new("seat", id.to_owned());
         store
-            .append(&stream, ExpectedVersion::NoStream, vec![event], &Metadata::new())
+            .append(
+                &mut (),
+                &stream,
+                ExpectedVersion::NoStream,
+                vec![event],
+                &Metadata::new(),
+            )
             .await
             .unwrap();
     }
@@ -1177,20 +1217,34 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
     // last position passed the condition, the exact check clears it.
     for (stream, events) in [take("a", 1, 3), take("b", 4, 2)] {
         store
-            .append(&stream, ExpectedVersion::NoStream, events, &none)
+            .append(&mut (), &stream, ExpectedVersion::NoStream, events, &none)
             .await
             .unwrap();
     }
     let (stream, events) = take("c", 1, 2);
     store
-        .append_if(&stream, ExpectedVersion::NoStream, events, &none, Some(&room_1_floor_2))
+        .append_if(
+            &mut (),
+            &stream,
+            ExpectedVersion::NoStream,
+            events,
+            &none,
+            Some(&room_1_floor_2),
+        )
         .await
         .unwrap();
 
     // Now an event with both exists after 0: refused.
     let (stream, events) = take("d", 1, 2);
     let refused = store
-        .append_if(&stream, ExpectedVersion::NoStream, events, &none, Some(&room_1_floor_2))
+        .append_if(
+            &mut (),
+            &stream,
+            ExpectedVersion::NoStream,
+            events,
+            &none,
+            Some(&room_1_floor_2),
+        )
         .await;
     assert!(matches!(refused, Err(StoreError::ConditionFailed)));
     // A condition read after it holds again.
@@ -1200,7 +1254,7 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
         ..room_1_floor_2
     };
     store
-        .append_if(&stream, ExpectedVersion::NoStream, events, &none, Some(&fresh))
+        .append_if(&mut (), &stream, ExpectedVersion::NoStream, events, &none, Some(&fresh))
         .await
         .unwrap();
 }
@@ -1411,7 +1465,7 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
     let tick = |n| vec![Parity::Ticked { n }];
     for n in 1..=4 {
         store
-            .append(&stream(1), ExpectedVersion::Any, tick(n), &Metadata::new())
+            .append(&mut (), &stream(1), ExpectedVersion::Any, tick(n), &Metadata::new())
             .await
             .unwrap();
     }
@@ -1427,11 +1481,12 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
         after: head,
     };
     store
-        .append(&stream(2), ExpectedVersion::Any, tick(5), &Metadata::new())
+        .append(&mut (), &stream(2), ExpectedVersion::Any, tick(5), &Metadata::new())
         .await
         .unwrap();
     store
         .append_if(
+            &mut (),
             &stream(3),
             ExpectedVersion::Any,
             tick(7),
@@ -1441,11 +1496,12 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
         .await
         .unwrap();
     store
-        .append(&stream(2), ExpectedVersion::Any, tick(6), &Metadata::new())
+        .append(&mut (), &stream(2), ExpectedVersion::Any, tick(6), &Metadata::new())
         .await
         .unwrap();
     let refused = store
         .append_if(
+            &mut (),
             &stream(4),
             ExpectedVersion::Any,
             tick(9),
@@ -1457,6 +1513,7 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
     // Nothing to append succeeds at once, whatever the condition (every store).
     let nothing = store
         .append_if(
+            &mut (),
             &stream(4),
             ExpectedVersion::Exact(9),
             vec![],
@@ -1521,7 +1578,13 @@ async fn a_failing_projection_interceptor_rolls_the_write_back() {
         .with_transactions(PostgresTransactions::new(pool.clone()));
     let last = events
         .store()
-        .append(&stream(1), ExpectedVersion::NoStream, ticks(1, 3), &Metadata::new())
+        .append(
+            &mut (),
+            &stream(1),
+            ExpectedVersion::NoStream,
+            ticks(1, 3),
+            &Metadata::new(),
+        )
         .await
         .unwrap();
     let last = last.last().unwrap().position;

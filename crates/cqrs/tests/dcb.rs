@@ -10,8 +10,8 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventStore, ExpectedVersion,
-    InMemoryEventStore, InlinePublisher, Metadata, StoreError, StreamId, TagResolver, testing::block_on,
+    Aggregate, AggregateLoader, AppendEvents, Appender, CommandGateway, CommandHandler, EventAppender, ExpectedVersion,
+    InMemoryEventStore, InlinePublisher, Metadata, SourceEvents, StoreError, StreamId, TagResolver, testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -193,6 +193,7 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
     for (course, capacity) in [(1, 1), (2, 5), (3, 5)] {
         let opened = SchoolEvent::CourseOpened { course, capacity };
         block_on(store.append(
+            &mut (),
             &StreamId::of::<Course>(&course),
             ExpectedVersion::NoStream,
             vec![opened],
@@ -221,6 +222,7 @@ fn gateway(sneak_in: Option<u32>) -> (Store, Wired) {
 fn subscribe_directly(store: &Store, course: u32, student: u32) {
     let event = SchoolEvent::Subscribed { course, student };
     block_on(store.append(
+        &mut (),
         &StreamId::of::<Course>(&course),
         ExpectedVersion::Any,
         vec![event],
@@ -383,7 +385,14 @@ fn hand_written_tags_select_and_guard_like_derived_ones() {
             carrier: carrier.to_owned(),
         };
         let stream = StreamId::new("parcel", parcel.to_string());
-        block_on(store.append_if(&stream, ExpectedVersion::Any, vec![event], &Metadata::new(), condition))
+        block_on(store.append_if(
+            &mut (),
+            &stream,
+            ExpectedVersion::Any,
+            vec![event],
+            &Metadata::new(),
+            condition,
+        ))
     };
     ship(1, "dhl", None).unwrap();
     ship(2, "ups", None).unwrap();
@@ -406,6 +415,13 @@ fn hand_written_tags_select_and_guard_like_derived_ones() {
     ));
     // Nothing to append succeeds at once, whatever the condition (every store).
     let (stream, metadata) = (StreamId::new("parcel", "6"), Metadata::new());
-    let nothing = block_on(store.append_if(&stream, ExpectedVersion::Exact(9), vec![], &metadata, Some(&condition)));
+    let nothing = block_on(store.append_if(
+        &mut (),
+        &stream,
+        ExpectedVersion::Exact(9),
+        vec![],
+        &metadata,
+        Some(&condition),
+    ));
     assert!(nothing.unwrap().is_empty());
 }

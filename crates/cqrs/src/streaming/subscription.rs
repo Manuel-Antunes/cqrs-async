@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-use crate::{Cursor, DomainEvent, EventEnvelope, EventStore, Horizon, StoreError};
+use crate::{Cursor, DomainEvent, EventEnvelope, Horizon, ReadLog, StoreError};
 use futures_core::Stream;
 use futures_util::{StreamExt, stream};
 use tokio::{
@@ -63,7 +63,7 @@ pub fn subscribe<E, S>(
 ) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<E, S>
 where
     E: DomainEvent,
-    S: EventStore<E> + 'static,
+    S: ReadLog<E> + 'static,
 {
     track(store, live, Start::At(after), options).map(|item| item.map(|(event, _)| event))
 }
@@ -86,7 +86,7 @@ pub(crate) fn track<E, S>(
 ) -> impl Stream<Item = Result<(Arc<EventEnvelope<E>>, Cursor), StoreError>> + Send + use<E, S>
 where
     E: DomainEvent,
-    S: EventStore<E> + 'static,
+    S: ReadLog<E> + 'static,
 {
     let state = State {
         store,
@@ -135,7 +135,7 @@ struct State<E, S> {
     failed: bool,
 }
 
-impl<E: DomainEvent, S: EventStore<E>> State<E, S> {
+impl<E: DomainEvent, S: ReadLog<E>> State<E, S> {
     /// Produces the next event, reading the store or the live feed as needed.
     async fn next(mut self) -> Option<(Result<(Arc<EventEnvelope<E>>, Cursor), StoreError>, Self)> {
         if self.failed {

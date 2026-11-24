@@ -6,7 +6,7 @@
 use std::{any::type_name, fmt, future::Future, marker::PhantomData};
 
 use crate::{
-    Aggregate, DomainEvent, EventEnvelope, EventHandler, EventPublisher, EventStore, HandlerError, Loaded, Pending,
+    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventHandler, EventPublisher, HandlerError, Loaded, Pending,
     StoreError,
 };
 
@@ -215,7 +215,7 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
 impl<E, S, P, F> EventPublisher<E> for InlinePublisher<E, S, P, F>
 where
     E: DomainEvent,
-    S: EventStore<E>,
+    S: AppendEvents<E>,
     P: EventProcessor<E>,
     F: OnFailure,
 {
@@ -241,14 +241,21 @@ pub(crate) async fn publish<E, A, S, P, F>(
 where
     E: DomainEvent,
     A: Aggregate<Event = E>,
-    S: EventStore<E>,
+    S: AppendEvents<E>,
     P: EventProcessor<E>,
     F: OnFailure,
 {
     let (stream, expected, loaded_condition) = entity.into_commit();
     let condition = crate::AppendCondition::both(loaded_condition, pending.condition);
     let committed = store
-        .append_if(&stream, expected, pending.events, &pending.metadata, condition.as_ref())
+        .append_if(
+            &mut (),
+            &stream,
+            expected,
+            pending.events,
+            &pending.metadata,
+            condition.as_ref(),
+        )
         .await?;
     // Processing failures do not undo the commit: a tracking processor
     // retries; for inline ones the failure policy decides.

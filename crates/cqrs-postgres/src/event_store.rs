@@ -5,11 +5,11 @@ use std::{
 };
 
 use cqrs::{
-    AppendCondition, Cursor, DomainEvent, EventCriteria, EventEnvelope, EventStore, ExpectedVersion, Gap, Horizon,
-    Metadata, Recorded, StoreError, StreamId, TaggedEvent,
+    AppendCondition, AppendEvents, Cursor, DomainEvent, EventCriteria, EventEnvelope, ExpectedVersion, Gap, Horizon,
+    LoadStream, Metadata, ReadLog, Recorded, SourceEvents, StoreError, StreamId, TaggedEvent,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use sqlx::{PgExecutor, PgPool};
+use sqlx::{Connection, PgConnection, PgExecutor, PgPool, Postgres, Transaction};
 
 use crate::{StoredEvent, Upcaster, backend};
 
@@ -107,9 +107,9 @@ macro_rules! select_events {
     };
 }
 
-impl<E, U> EventStore<E> for PostgresEventStore<E, U>
+impl<E, U> LoadStream<E> for PostgresEventStore<E, U>
 where
-    E: DomainEvent + Serialize + DeserializeOwned,
+    E: DeserializeOwned + Send + Sync,
     U: Upcaster,
 {
     async fn load(&self, stream: &StreamId, after: u64) -> Result<Vec<EventEnvelope<E>>, StoreError> {
@@ -125,9 +125,18 @@ where
         .map_err(backend)?;
         rows.into_iter().map(|row| envelope(row, &*self.upcaster)).collect()
     }
+}
 
+/// Appends on its own: one statement on the pool (an implicit transaction)
+/// without a condition, a transaction of its own with one.
+impl<E, U> AppendEvents<E> for PostgresEventStore<E, U>
+where
+    E: DomainEvent + Serialize,
+    U: Upcaster,
+{
     async fn append_tagged(
         &self,
+        (): &mut (),
         stream: &StreamId,
         expected: ExpectedVersion,
         events: &[TaggedEvent<E>],
@@ -148,27 +157,8 @@ where
             };
             return self.recorded(rows, stream, expected).await;
         };
-
-        // The criteria's keys (and the stream's) exclusive, in a statement of
-        // their own: the check then runs on a snapshot taken after the wait,
-        // and no matching append is half-way while it runs.
-        let mut exclusive = criteria_keys(&self.log, &condition.criteria)?;
-        exclusive.push(key(&self.log, "stream", &stream.to_string()));
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        sqlx::query!("SELECT cqrs_lock($1, $2)", &exclusive, &write_keys(&self.log, events))
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(backend)?;
-        for criterion in &condition.criteria.criteria {
-            let (tags, types) = bind_criterion(criterion);
-            let failed = condition_failed(&mut tx, &self.log, &tags, &types, to_i64(condition.after))
-                .await
-                .map_err(backend)?;
-            if failed {
-                return Err(StoreError::ConditionFailed);
-            }
-        }
-        let rows = append_rows(&mut *tx, &self.log, stream, expected, events, metadata).await;
+        let rows = append_conditional(&mut tx, &self.log, stream, expected, events, metadata, condition).await;
         if let Err(StoreError::Conflict { .. }) = rows {
             drop(tx); // roll back and unlock before reading the version
             return Err(self.conflict(stream, expected).await);
@@ -177,7 +167,61 @@ where
         tx.commit().await.map_err(backend)?;
         Ok(committed)
     }
+}
 
+/// Appends in the caller's transaction, so its own writes (an aggregate's
+/// state, an outbox row) and the events commit together. Nothing is visible
+/// before the caller commits; readers wait for its positions (they are gaps
+/// until then).
+///
+/// A conflict aborts the transaction, as any failed statement does in
+/// PostgreSQL: roll it back and decide again. A condition's locks are held
+/// until it ends, so keep a transaction with a conditional append short.
+impl<'c, E, U> AppendEvents<E, Transaction<'c, Postgres>> for PostgresEventStore<E, U>
+where
+    E: DomainEvent + Serialize,
+    U: Upcaster,
+{
+    async fn append_tagged(
+        &self,
+        tx: &mut Transaction<'c, Postgres>,
+        stream: &StreamId,
+        expected: ExpectedVersion,
+        events: &[TaggedEvent<E>],
+        metadata: &Metadata,
+        condition: Option<&AppendCondition>,
+    ) -> Result<Vec<Recorded>, StoreError> {
+        let rows = match condition {
+            Some(condition) => append_conditional(tx, &self.log, stream, expected, events, metadata, condition).await,
+            // `Any` goes again at the new end after a lost race, in a
+            // savepoint so the race does not abort the caller's transaction.
+            None if expected == ExpectedVersion::Any => {
+                let mut attempts = 0;
+                loop {
+                    let mut savepoint = tx.begin().await.map_err(backend)?;
+                    let rows = append_rows(&mut *savepoint, &self.log, stream, expected, events, metadata).await;
+                    attempts += 1;
+                    match rows {
+                        Err(StoreError::Conflict { .. }) if attempts < 16 => {}
+                        Ok(rows) => {
+                            savepoint.commit().await.map_err(backend)?;
+                            break Ok(rows);
+                        }
+                        rows => break rows,
+                    }
+                }
+            }
+            None => append_rows(&mut **tx, &self.log, stream, expected, events, metadata).await,
+        };
+        self.recorded(rows, stream, expected).await
+    }
+}
+
+impl<E, U> SourceEvents<E> for PostgresEventStore<E, U>
+where
+    E: DeserializeOwned + Send + Sync,
+    U: Upcaster,
+{
     async fn source(&self, criteria: &EventCriteria) -> Result<(Vec<EventEnvelope<E>>, u64), StoreError> {
         // The criteria's keys exclusive first: no matching append is
         // half-way, so every matching event is committed before the reads,
@@ -231,7 +275,13 @@ where
         events.dedup_by_key(|event| event.position);
         Ok((events, head))
     }
+}
 
+impl<E, U> ReadLog<E> for PostgresEventStore<E, U>
+where
+    E: DeserializeOwned + Send + Sync,
+    U: Upcaster,
+{
     async fn read_all(&self, after: u64, limit: usize) -> Result<Vec<EventEnvelope<E>>, StoreError> {
         let rows = select_events!(
             &*self.log,
@@ -338,7 +388,39 @@ where
     }
 }
 
-/// How far below a starting position [`EventStore::cursor_at`] looks for
+/// A conditional append on `conn` (in a transaction): the criteria's keys
+/// (and the stream's) exclusive, in a statement of their own, so the check
+/// runs on a snapshot taken after the wait and no matching append is
+/// half-way while it runs; then the check, then the append. The locks are
+/// held until the transaction ends.
+async fn append_conditional<E: DomainEvent + Serialize>(
+    conn: &mut PgConnection,
+    log: &str,
+    stream: &StreamId,
+    expected: ExpectedVersion,
+    events: &[TaggedEvent<E>],
+    metadata: &Metadata,
+    condition: &AppendCondition,
+) -> Result<Vec<Appended>, StoreError> {
+    let mut exclusive = criteria_keys(log, &condition.criteria)?;
+    exclusive.push(key(log, "stream", &stream.to_string()));
+    sqlx::query!("SELECT cqrs_lock($1, $2)", &exclusive, &write_keys(log, events))
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(backend)?;
+    for criterion in &condition.criteria.criteria {
+        let (tags, types) = bind_criterion(criterion);
+        let failed = condition_failed(conn, log, &tags, &types, to_i64(condition.after))
+            .await
+            .map_err(backend)?;
+        if failed {
+            return Err(StoreError::ConditionFailed);
+        }
+    }
+    append_rows(conn, log, stream, expected, events, metadata).await
+}
+
+/// How far below a starting position [`ReadLog::cursor_at`] looks for
 /// appends still being written.
 // shortcut: an append still uncommitted after this many later positions
 // were taken is missed by a subscription starting "from now" (Axon's head

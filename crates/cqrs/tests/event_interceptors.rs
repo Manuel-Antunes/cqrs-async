@@ -14,7 +14,7 @@ use std::{
 };
 
 use cqrs::{
-    DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, EventStore, Events, ExpectedVersion,
+    AppendEvents, DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, Events, ExpectedVersion,
     HandlerError, InMemoryEventStore, Intercepted, Metadata, ProcessingContext, StreamId,
 };
 
@@ -111,7 +111,7 @@ async fn tick(events: &Events<Ticked, Store>, ticks: impl IntoIterator<Item = u6
     let stream = StreamId::new("clock", "1");
     let appended = events
         .store()
-        .append(&stream, ExpectedVersion::Any, ticks, &Metadata::new())
+        .append(&mut (), &stream, ExpectedVersion::Any, ticks, &Metadata::new())
         .await
         .unwrap();
     appended.last().unwrap().position

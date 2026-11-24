@@ -9,7 +9,7 @@ use std::sync::{
 
 use cqrs::{
     Aggregate, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler, EventPublisher,
-    EventStore, HandlerError, InMemoryEventStore, InlinePublisher, ProcessingContext, ProcessingFailure, StoreError,
+    HandlerError, InMemoryEventStore, InlinePublisher, ProcessingContext, ProcessingFailure, ReadLog, StoreError,
     testing::block_on,
 };
 use tracing::{

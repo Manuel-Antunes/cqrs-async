@@ -112,8 +112,8 @@
 use std::future::Future;
 
 use crate::{
-    Aggregate, AppendCondition, Command, DomainEvent, ErrorOf, EventCriteria, EventEnvelope, EventStore,
-    ExpectedVersion, Loaded, Metadata, OutputOf, StoreError,
+    Aggregate, AppendCondition, Command, DomainEvent, ErrorOf, EventCriteria, EventEnvelope, ExpectedVersion, Loaded,
+    Metadata, OutputOf, SourceEvents, StoreError,
 };
 
 /// The context of one run of a command handler, handed in by the gateway
@@ -207,7 +207,7 @@ impl<E> Appender<E> {
     /// # Errors
     ///
     /// The store's.
-    pub async fn source<S: EventStore<E>>(
+    pub async fn source<S: SourceEvents<E>>(
         &mut self,
         store: &S,
         criteria: EventCriteria,

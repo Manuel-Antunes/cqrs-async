@@ -10,7 +10,7 @@ use std::{
 };
 
 use cqrs::{
-    EventEnvelope, EventHandler, EventStore, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
+    AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
     ProcessingContext, QueryGateway, QuerySubscriptions, QueryUpdateEmitter, StreamId, SubscriptionQueries,
 };
 use futures_util::StreamExt;
@@ -113,7 +113,13 @@ async fn tick(events: &Events<Ticked, InMemoryEventStore<Ticked>>, clock: &str, 
     let stream = StreamId::new("clock", clock.to_owned());
     events
         .store()
-        .append(&stream, ExpectedVersion::Any, vec![Ticked(n)], &Metadata::new())
+        .append(
+            &mut (),
+            &stream,
+            ExpectedVersion::Any,
+            vec![Ticked(n)],
+            &Metadata::new(),
+        )
         .await
         .unwrap();
 }

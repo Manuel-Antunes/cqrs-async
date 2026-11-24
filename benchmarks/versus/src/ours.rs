@@ -8,9 +8,9 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    AggregateLoader, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
-    EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext,
-    ProcessorHandle, SnapshotStore, StoreError, StreamId, TrackingOptions,
+    AggregateLoader, AppendEvents, Appender, CommandGateway, CommandHandler, EventAppender, EventEnvelope,
+    EventHandler, EventPublisher, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext,
+    ProcessorHandle, ReadLog, SnapshotStore, StoreError, StreamId, TrackingOptions,
 };
 use cqrs_postgres::{
     PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, PostgresTransactions,
@@ -302,7 +302,7 @@ where
             let batch = chunk.iter().map(|_| AccountEvent::Deposited { amount: 1 }).collect();
             self.events
                 .store()
-                .append(&stream, ExpectedVersion::Any, batch, &Metadata::new())
+                .append(&mut (), &stream, ExpectedVersion::Any, batch, &Metadata::new())
                 .await
                 .expect("seeding");
         }

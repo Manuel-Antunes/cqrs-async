@@ -110,6 +110,7 @@ pub fn post_history(id: PostId, events: usize) -> Vec<PostEvent> {
 pub async fn seed_post<S: EventStore<PostEvent>>(store: &S, id: PostId, events: usize) {
     store
         .append(
+            &mut (),
             &StreamId::of::<Post>(&id),
             ExpectedVersion::NoStream,
             post_history(id, events),

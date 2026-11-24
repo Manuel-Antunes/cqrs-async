@@ -19,8 +19,8 @@ use super::{
     subscription::{Start, track},
 };
 use crate::{
-    Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, EventStore, HandlerError,
-    ProcessingContext, StoreError, TokenStore, TrackingToken, TransactionManager, segment_of,
+    Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventEnvelope, EventHandler, HandlerError, ProcessingContext,
+    ReadLog, StoreError, TokenStore, TrackingToken, TransactionManager, segment_of,
 };
 
 /// What moving a segment's token did.
@@ -167,7 +167,7 @@ impl ProcessorStatus {
 impl<E, S, H, T, M> TrackingProcessor<E, S, H, T, M>
 where
     E: DomainEvent,
-    S: EventStore<E> + Clone + 'static,
+    S: ReadLog<E> + Clone + 'static,
     H: EventHandler<E, M::Tx> + 'static,
     T: TokenStore<Tx = M::Tx> + 'static,
     M: TransactionManager + 'static,
@@ -200,7 +200,7 @@ where
 impl<E, S, H, T, M, D> TrackingProcessor<E, S, H, T, M, D>
 where
     E: DomainEvent,
-    S: EventStore<E> + Clone + 'static,
+    S: ReadLog<E> + Clone + 'static,
     H: EventHandler<E, M::Tx> + 'static,
     T: TokenStore<Tx = M::Tx> + 'static,
     M: TransactionManager + 'static,

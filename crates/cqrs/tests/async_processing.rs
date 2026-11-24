@@ -15,9 +15,9 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, EventEnvelope, EventHandler, EventPublisher, EventStore, ExpectedVersion, HandlerError,
-    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, LiveEvents, Metadata, Pending, ProcessingContext,
-    StreamId, SubscriptionOptions, TrackingProcessor, subscribe,
+    Aggregate, AggregateLoader, AppendEvents, EventEnvelope, EventHandler, EventPublisher, ExpectedVersion,
+    HandlerError, InMemoryEventStore, InMemoryTokenStore, InlinePublisher, LiveEvents, LoadStream, Metadata, Pending,
+    ProcessingContext, StreamId, SubscriptionOptions, TrackingProcessor, subscribe,
 };
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
@@ -89,6 +89,7 @@ impl World {
         let ticks = self.store.load(&stream, 0).await.unwrap().len() as u32;
         self.store
             .append(
+                &mut (),
                 &stream,
                 match ticks {
                     0 => ExpectedVersion::NoStream,

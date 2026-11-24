@@ -538,7 +538,7 @@ async fn over_http(report: &mut Report, scale: &Scale) {
 /// each writer on its own streams), if `CQRS_POSTGRES_URL` is set. Appends
 /// are serialized by the head row, so this is the price of gapless order.
 async fn postgres(report: &mut Report, scale: &Scale) {
-    use cqrs::{EventStore, ExpectedVersion, Metadata, StreamId};
+    use cqrs::{AppendEvents, ExpectedVersion, Metadata, ReadLog, StreamId};
 
     #[derive(Clone, serde::Serialize, serde::Deserialize, cqrs::DomainEvent, cqrs::TagResolver)]
     struct Ticked(u64);
@@ -595,7 +595,13 @@ async fn postgres(report: &mut Report, scale: &Scale) {
                         let stream = StreamId::of::<Clock>(&(writer * 1_000_000 + n));
                         let sent = Instant::now();
                         store
-                            .append(&stream, ExpectedVersion::NoStream, vec![Ticked(n)], &Metadata::new())
+                            .append(
+                                &mut (),
+                                &stream,
+                                ExpectedVersion::NoStream,
+                                vec![Ticked(n)],
+                                &Metadata::new(),
+                            )
                             .await
                             .unwrap();
                         latencies.push(sent.elapsed());

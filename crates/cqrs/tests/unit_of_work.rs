@@ -18,10 +18,10 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
-    EventInterceptor, EventPublisher, EventStore, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters,
-    InMemoryEventStore, InMemoryTokenStore, InlinePublisher, Intercepted, Metadata, Pending, ProcessingContext,
-    StoreError, StreamId, TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
+    Aggregate, AppendEvents, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
+    EventInterceptor, EventPublisher, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
+    InMemoryTokenStore, InlinePublisher, Intercepted, Metadata, Pending, ProcessingContext, StoreError, StreamId,
+    TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent, cqrs::TagResolver)]
@@ -157,6 +157,7 @@ async fn tick(store: &InMemoryEventStore<Ticked>, ticks: impl IntoIterator<Item 
     let ticks = ticks.into_iter().map(Ticked).collect();
     store
         .append(
+            &mut (),
             &StreamId::new("clock", "1"),
             ExpectedVersion::Any,
             ticks,

@@ -11,8 +11,8 @@
 use std::{fmt, marker::PhantomData, ops::Deref};
 
 use crate::{
-    Aggregate, AppendCondition, Appender, EventCriteria, EventEnvelope, EventStore, ExpectedVersion, SnapshotStore,
-    StoreError, StreamId,
+    Aggregate, AppendCondition, Appender, EventCriteria, EventEnvelope, ExpectedVersion, LoadStream, SnapshotStore,
+    SourceEvents, StoreError, StreamId,
 };
 
 /// An aggregate together with the version it was loaded at.
@@ -214,7 +214,7 @@ impl<A, S, N> AggregateLoader<A, S, N> {
 impl<A, S, N> AggregateLoader<A, S, N>
 where
     A: Aggregate,
-    S: EventStore<A::Event>,
+    S: LoadStream<A::Event> + SourceEvents<A::Event>,
     N: SnapshotStore<A>,
 {
     /// Rebuilds the aggregate `id`, `None` if it has no events. Replay calls

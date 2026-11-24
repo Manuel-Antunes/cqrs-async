@@ -41,8 +41,8 @@ use std::sync::Arc;
 use crate::Intercepted;
 #[cfg(feature = "tokio")]
 use crate::{
-    DomainEvent, EventFeed, EventHandler, EventStore, Events, LocalProgress, ProcessorHandle, Projected, Projection,
-    ProjectionProgress, SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
+    DomainEvent, EventFeed, EventHandler, Events, LocalProgress, ProcessorHandle, Projected, Projection,
+    ProjectionProgress, ReadLog, SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
 };
 
 /// An application's CQRS unit: the command gateway `C`, the query gateway
@@ -156,7 +156,7 @@ impl<C, Q, E> Cqrs<C, Q, E> {
 impl<C, Q, Ev, S, T, M> Cqrs<C, Q, Events<Ev, S, T, M>>
 where
     Ev: DomainEvent,
-    S: EventStore<Ev> + Clone + 'static,
+    S: ReadLog<Ev> + Clone + 'static,
     T: Send + Sync,
     M: Send + Sync,
 {
@@ -310,7 +310,7 @@ impl<P, C, Q, U> CqrsBuilder<P, C, Q, (), U> {
 impl<P, C, Q, Ev, S, T, M, U> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, U>
 where
     Ev: DomainEvent + Clone,
-    S: EventStore<Ev> + Clone + 'static,
+    S: ReadLog<Ev> + Clone + 'static,
     T: TokenStore<Tx = M::Tx> + Clone + 'static,
     M: TransactionManager + Clone + 'static,
 {
@@ -424,7 +424,7 @@ impl<P, C, Q, E> CqrsBuilder<P, C, Q, E, ()> {
 impl<P, C, Q, Ev, S, T, M, U> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, Arc<U>>
 where
     Ev: DomainEvent,
-    S: EventStore<Ev> + Clone + 'static,
+    S: ReadLog<Ev> + Clone + 'static,
     T: Clone + Send + Sync + 'static,
     M: Clone + Send + Sync + 'static,
 {

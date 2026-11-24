@@ -77,7 +77,10 @@ pub use message::{
 };
 pub use projection::Projection;
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
-pub use store::{EventStore, ExpectedVersion, InMemoryEventStore, Recorded, StoreError, TaggedEvent};
+pub use store::{
+    AppendEvents, EventStore, ExpectedVersion, InMemoryEventStore, LoadStream, ReadLog, Recorded, SourceEvents,
+    StoreError, TaggedEvent,
+};
 #[cfg(feature = "tokio")]
 pub use streaming::{
     CatchUp, Events, GlobalProgress, LiveEvents, LiveQueries, LocalProgress, ProcessorHandle, ProcessorStatus,

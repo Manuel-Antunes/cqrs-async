@@ -9,7 +9,7 @@ use std::{
 
 use blog::domain::{Post, PostId};
 use cqrs::Aggregate;
-use cqrs::{CommandGateway, EventStore, Handler, InMemoryEventStore, InMemorySnapshots};
+use cqrs::{CommandGateway, Handler, InMemoryEventStore, InMemorySnapshots, ReadLog};
 use cqrs_benchmarks::{
     PlainPosts, now,
     ping::{Ping, PingGateway, PingHandler},
