@@ -15,7 +15,9 @@
 
 use std::{
     marker::PhantomData,
+    pin::pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use futures_core::Stream;
@@ -23,7 +25,7 @@ use futures_util::{StreamExt, stream};
 use tokio::sync::mpsc;
 
 use super::ProjectionProgress;
-use crate::{Dispatch, DomainEvent, EventFeed, Message, Metadata, OutputOf, Query, QuerySubscriptions};
+use crate::{Dispatch, DomainEvent, EventEnvelope, EventFeed, Message, Metadata, OutputOf, Query, QuerySubscriptions};
 
 /// Updates a subscriber may fall behind by before it is dropped (its stream
 /// ends; a client subscribes again).
@@ -128,6 +130,9 @@ pub struct Projected<F, P, E> {
     feed: F,
     /// How far the projection got.
     progress: P,
+    /// Emitters started with the unit: each says once it took its starting
+    /// point, which a subscription's must not precede.
+    emitters: Vec<tokio::sync::watch::Receiver<bool>>,
     /// The feed's event type.
     event: PhantomData<fn() -> E>,
 }
@@ -137,6 +142,7 @@ impl<F: Clone, P: Clone, E> Clone for Projected<F, P, E> {
         Self {
             feed: self.feed.clone(),
             progress: self.progress.clone(),
+            emitters: self.emitters.clone(),
             event: PhantomData,
         }
     }
@@ -149,6 +155,11 @@ where
     P: ProjectionProgress,
 {
     async fn caught_up(&self) {
+        // The emitters follow the log from before this subscription's start,
+        // so none of its updates is missed.
+        for started in &self.emitters {
+            let _ = started.clone().wait_for(|started| *started).await;
+        }
         // A failing read only costs freshness: the updates follow anyway.
         let head = self.feed.last_position().await.unwrap_or(0);
         self.progress.reached(head).await;
@@ -198,9 +209,20 @@ impl<G, U> SubscriptionQueries<G, U> {
             catch_up: Projected {
                 feed: events,
                 progress,
+                emitters: Vec::new(),
                 event: PhantomData,
             },
         }
+    }
+}
+
+impl<G, U, F, P, E> SubscriptionQueries<G, U, Projected<F, P, E>> {
+    /// Subscriptions also wait, before their first result, until each of
+    /// `emitters` took its starting point (a `true` on the channel).
+    #[cfg_attr(not(feature = "tokio"), allow(dead_code))]
+    pub(crate) fn after_emitters(mut self, emitters: Vec<tokio::sync::watch::Receiver<bool>>) -> Self {
+        self.catch_up.emitters = emitters;
+        self
     }
 }
 
@@ -262,3 +284,89 @@ fn distinct<T: Clone + PartialEq + Send, E: Send>(
         })
         .filter_map(std::future::ready)
 }
+
+/// Pushes the new results of the queries an event changed, once the read
+/// models are up to date with it (Axon's `QueryUpdateEmitter` calls, kept
+/// out of the projection's unit of work): typically a query on the read
+/// model, then [`QueryUpdateEmitter::emit`].
+///
+/// It runs on **every** instance of the application ([`emit_updates`],
+/// `Cqrs`'s `emit`), for every committed event, once the projections
+/// handled it, whichever instance did: so a subscriber connected to any
+/// instance sees every change. That is why it is not a projection's
+/// [`committed`](crate::EventHandler::committed), which runs only on the
+/// instance that handled the event.
+pub trait EmitUpdates<E: DomainEvent>: Send + Sync {
+    /// Emits what `event` changed. Failures are the emitter's to log: a
+    /// missed update only leaves a subscriber behind until the next one.
+    fn emit(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send;
+}
+
+/// A shared emitter emits.
+impl<E: DomainEvent, T: EmitUpdates<E>> EmitUpdates<E> for Arc<T> {
+    fn emit(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
+        (**self).emit(event)
+    }
+}
+
+/// Calls `emitter` for every event committed after position `after`, in
+/// order, each once `progress` reached it, until `shutdown` completes: what
+/// makes query updates reach the subscribers of every instance. Run it on
+/// each instance (`Cqrs`'s `emit` spawns it).
+///
+/// A subscriber misses the updates of the events between `after` and the
+/// position its subscription started at, so take `after` at the head
+/// ([`head_of`]) before serving subscriptions.
+pub async fn emit_updates<E, F, P, H>(
+    mut after: u64,
+    feed: F,
+    progress: P,
+    emitter: H,
+    shutdown: impl Future<Output = ()> + Send,
+) where
+    E: DomainEvent,
+    F: EventFeed<E>,
+    P: super::ProjectionProgress,
+    H: EmitUpdates<E>,
+{
+    let follow = async {
+        loop {
+            let mut events = pin!(feed.subscribe(after));
+            while let Some(next) = events.next().await {
+                match next {
+                    Ok(event) => {
+                        progress.reached(event.position).await;
+                        emitter.emit(&event).await;
+                        after = event.position;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot follow the events to emit updates");
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(RETRY).await; // then resume after the last one
+        }
+    };
+    tokio::select! {
+        () = follow => {}
+        () = shutdown => {}
+    }
+}
+
+/// The position of the last event committed to `feed`, retrying until it
+/// can be read: where an emitter starts.
+pub async fn head_of<E: DomainEvent, F: EventFeed<E>>(feed: &F) -> u64 {
+    loop {
+        match feed.last_position().await {
+            Ok(head) => return head,
+            Err(error) => {
+                tracing::warn!(%error, "cannot read the head of the log");
+                tokio::time::sleep(RETRY).await;
+            }
+        }
+    }
+}
+
+/// Wait before following the log again after a failed read.
+const RETRY: Duration = Duration::from_millis(100);

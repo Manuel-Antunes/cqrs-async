@@ -75,6 +75,11 @@ pub struct TrackingOptions {
     /// handled one at a time, with the usual retries and dead letters.
     /// Default 1.
     pub batch_size: usize,
+    /// How often an instance that does not own every segment reads the
+    /// others' progress from the token store, to tell when an event was
+    /// handled elsewhere ([`ProcessorStatus::handled`]): the extra latency of
+    /// subscriptions served by another instance. Default 50 ms.
+    pub progress_poll: Duration,
 }
 
 impl Default for TrackingOptions {
@@ -91,6 +96,7 @@ impl Default for TrackingOptions {
             segment_buffer: 1024,
             segment_stall_timeout: Duration::from_secs(1),
             batch_size: 1,
+            progress_poll: Duration::from_millis(50),
         }
     }
 }
@@ -157,9 +163,31 @@ pub struct ProcessorStatus {
     pub segments: Vec<u32>,
     /// Their cursors, in the same order.
     pub cursors: Vec<Cursor>,
+    /// How many segments the processor has, across its instances (0 until
+    /// its tokens are initialized).
+    pub segment_count: u32,
+    /// The stored cursor of every segment, whoever owns it: read from the
+    /// token store every `progress_poll` while this instance does not own
+    /// them all (empty otherwise). What tells, here, that another instance
+    /// handled an event.
+    pub shared_cursors: Vec<Cursor>,
 }
 
 impl ProcessorStatus {
+    /// Whether the processor, in any of its instances, handled the event at
+    /// `position` (and every event before it that was committed then): what
+    /// a read model's reader waits for. From this instance's segments when
+    /// it owns them all (no lag); otherwise from every segment's stored
+    /// cursor, as last read.
+    pub fn handled(&self, position: u64) -> bool {
+        if self.segment_count > 0 && self.segments.len() == self.segment_count as usize {
+            return self.covers(position);
+        }
+        self.shared_cursors.len() == self.segment_count as usize
+            && !self.shared_cursors.is_empty()
+            && self.shared_cursors.iter().all(|cursor| cursor.covers(position))
+    }
+
     /// Whether this instance owns segments and they all saw the event at
     /// `position` (the one it belongs to handled it).
     pub fn covers(&self, position: u64) -> bool {
@@ -352,6 +380,7 @@ where
             match started.await {
                 Ok((count, replay_until)) => {
                     self.replay_until.store(replay_until, Ordering::Relaxed);
+                    progress.count(count);
                     break count;
                 }
                 Err(error) => {
@@ -370,7 +399,7 @@ where
         let routes: Routes<E> = Arc::new(Mutex::new(HashMap::new()));
         let read_up_to = Arc::new(Mutex::new(Cursor::default()));
         let mut reader: Option<watch::Sender<bool>> = None;
-        loop {
+        'run: loop {
             while workers.try_join_next().is_some() {}
             owned.retain(|segment, (task, _)| {
                 let alive = !task.is_finished();
@@ -458,9 +487,22 @@ where
                 reader = Some(stop_reader);
             }
 
-            tokio::select! {
-                _ = stop.changed() => break,
-                () = tokio::time::sleep(self.options.claim_interval) => {}
+            // Until the next claim round: while other instances own
+            // segments, follow their progress from the token store.
+            let next_round = tokio::time::sleep(self.options.claim_interval);
+            let mut next_round = pin!(next_round);
+            let mut poll = tokio::time::interval(self.options.progress_poll);
+            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let sharing = (owned.len() as u32) < count;
+            loop {
+                tokio::select! {
+                    _ = stop.changed() => break 'run,
+                    () = &mut next_round => break,
+                    _ = poll.tick(), if sharing => match self.tokens.cursors(&self.name).await {
+                        Ok(cursors) => progress.share(cursors),
+                        Err(error) => tracing::debug!(processor = %self.name, %error, "cannot read the shared progress"),
+                    },
+                }
             }
         }
 
@@ -1029,11 +1071,26 @@ impl Progress {
     fn rebuild(&self, change: impl FnOnce(&mut BTreeMap<u32, (Cursor, Option<String>)>)) {
         let mut segments = self.segments.lock().expect("progress poisoned");
         change(&mut segments);
-        self.status.send_replace(ProcessorStatus {
-            position: lowest(&segments),
-            failing: segments.values().find_map(|(_, failing)| failing.clone()),
-            segments: segments.keys().copied().collect(),
-            cursors: segments.values().map(|(cursor, _)| cursor.clone()).collect(),
+        self.status.send_modify(|status| {
+            status.position = lowest(&segments);
+            status.failing = segments.values().find_map(|(_, failing)| failing.clone());
+            status.segments = segments.keys().copied().collect();
+            status.cursors = segments.values().map(|(cursor, _)| cursor.clone()).collect();
+        });
+    }
+
+    /// The processor has `count` segments.
+    fn count(&self, count: u32) {
+        self.status.send_modify(|status| status.segment_count = count);
+    }
+
+    /// Every segment's stored cursor, as just read: watchers are woken only
+    /// if it moved.
+    fn share(&self, cursors: Vec<Cursor>) {
+        self.status.send_if_modified(|status| {
+            let moved = status.shared_cursors != cursors;
+            status.shared_cursors = cursors;
+            moved
         });
     }
 

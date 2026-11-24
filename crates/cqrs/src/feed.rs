@@ -34,15 +34,6 @@ pub trait EventFeed<E: DomainEvent>: Send + Sync {
     fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send;
 }
 
-/// A query whose result may change when an event of type `E` is projected:
-/// what lets it be subscribed to ([`QuerySubscriptions`]).
-pub trait RefreshedBy<E: DomainEvent>: Query + Clone {
-    /// Whether `event`, once projected, may change this query's result.
-    /// Narrow it (e.g. to one aggregate) to re-run the query less often;
-    /// `true` is always correct.
-    fn refreshed_by(&self, event: &EventEnvelope<E>) -> bool;
-}
-
 /// Subscription queries (Axon 5): the query's current result, then a new
 /// one each time it changes. The client subscribes to the **same shape** it
 /// queries, so no event-to-API conversion is needed.

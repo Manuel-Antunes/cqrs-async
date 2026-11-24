@@ -29,7 +29,7 @@ use sea_orm_migration::MigratorTrait;
 use crate::{
     application::{
         commands::{PostCommandGateway, PostCommands},
-        projections::{NotifyOnPublish, PostSummaryProjection},
+        projections::{NotifyOnPublish, PostSummaryProjection, PostSummaryUpdates},
         queries::{PostQueries, PostQueryGateway, PostSubscriptions, PostUpdates},
     },
     domain::{Post, PostEvent},
@@ -81,7 +81,7 @@ pub fn in_memory_with(
     let notifier = Arc::new(InMemoryNotifier::default());
     // Synchronous: no subscriptions to push updates to.
     let processors = (
-        PostSummaryProjection::new(Arc::clone(&summaries), Arc::default()),
+        PostSummaryProjection::new(Arc::clone(&summaries)),
         NotifyOnPublish::new(Arc::clone(&notifier)),
     );
     let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_processor(processors);
@@ -151,13 +151,15 @@ pub fn start_in_memory()
     let audit = Arc::new(AuditLog::default());
     let metrics = Arc::new(ProjectionMetrics::default());
 
-    let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
+    let projection = PostSummaryProjection::new(Arc::clone(&summaries));
+    let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(Events::new(store.clone()))
         .commands(|events| PostCommandGateway::new(Arc::new(posts_over(&store, events))))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))
         .policy(NotifyOnPublish::new(Arc::clone(&notifier)))
+        .emit(emitter)
         .subscriptions(updates)
         .build();
 
@@ -203,13 +205,15 @@ pub async fn start(
     let audit = Arc::new(AuditLog::default());
     let metrics = Arc::new(ProjectionMetrics::default());
 
-    let projection = PostSummaryProjection::new(Arc::clone(&summaries), Arc::clone(&updates));
+    let projection = PostSummaryProjection::new(Arc::clone(&summaries));
+    let emitter = PostSummaryUpdates::new(Arc::clone(&summaries), Arc::clone(&updates));
     let app = Cqrs::new(events)
         .commands(|events| PostCommandGateway::new(Arc::new(SeaOrmPostRepository::new(pool, events))))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))
         .policy(NotifyOnPublish::new(Arc::clone(&notifier)))
+        .emit(emitter)
         .subscriptions(updates)
         .build();
 

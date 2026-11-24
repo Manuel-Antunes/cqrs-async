@@ -13,4 +13,4 @@ mod notify_on_publish;
 mod post_summary;
 
 pub use notify_on_publish::{NotificationError, Notifier, NotifyOnPublish};
-pub use post_summary::PostSummaryProjection;
+pub use post_summary::{PostSummaryProjection, PostSummaryUpdates};

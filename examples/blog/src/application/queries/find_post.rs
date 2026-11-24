@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
-use cqrs::{EventEnvelope, Handler, RefreshedBy};
+use cqrs::Handler;
 
 use super::{PostSummary, PostSummaryRepository};
-use crate::{
-    application::BlogError,
-    domain::{PostEvent, PostId},
-};
+use crate::{application::BlogError, domain::PostId};
 
 /// One post, published or not; `None` if it does not exist (yet).
 #[derive(Clone, Debug, cqrs::Query)]
@@ -14,13 +11,6 @@ use crate::{
 pub struct FindPost {
     /// The post to look up.
     pub id: PostId,
-}
-
-/// Only this post's events can change the answer.
-impl RefreshedBy<PostEvent> for FindPost {
-    fn refreshed_by(&self, event: &EventEnvelope<PostEvent>) -> bool {
-        event.stream.id() == self.id.to_string()
-    }
 }
 
 /// Handles [`FindPost`] by reading the read model.

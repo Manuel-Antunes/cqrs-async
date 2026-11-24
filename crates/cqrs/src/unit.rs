@@ -41,7 +41,7 @@ use std::sync::Arc;
 use crate::Intercepted;
 #[cfg(feature = "tokio")]
 use crate::{
-    DomainEvent, EventFeed, EventHandler, Events, LocalProgress, ProcessorHandle, Projected, Projection,
+    DomainEvent, EventFeed, EventHandler, Events, ProcessorHandle, ProcessorProgress, Projected, Projection,
     ProjectionProgress, ReadLog, SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
 };
 
@@ -67,11 +67,16 @@ struct Processing {
     /// Settings for the processors started from now on.
     options: TrackingOptions,
     /// Every processor's progress, for [`Cqrs::settled`].
-    all: Vec<LocalProgress>,
+    all: Vec<ProcessorProgress>,
     /// The projections' progress: what subscriptions wait for.
-    projections: Vec<LocalProgress>,
+    projections: Vec<ProcessorProgress>,
     /// The running processors, taken by [`Cqrs::stop`].
     handles: std::sync::Mutex<Vec<ProcessorHandle>>,
+    /// The running emitters ([`CqrsBuilder::emit`]): how to stop each, and
+    /// its task.
+    emitters: std::sync::Mutex<Vec<(tokio::sync::watch::Sender<bool>, tokio::task::JoinHandle<()>)>>,
+    /// Each emitter's start: subscriptions wait for them.
+    emitters_started: Vec<tokio::sync::watch::Receiver<bool>>,
 }
 
 /// Without `tokio` there is nothing to start.
@@ -145,6 +150,11 @@ impl<C, Q, E> Cqrs<C, Q, E> {
     /// event. Later calls do nothing.
     #[cfg(feature = "tokio")]
     pub async fn stop(&self) {
+        let emitters = std::mem::take(&mut *self.processing.emitters.lock().expect("emitters poisoned"));
+        for (stop, task) in emitters {
+            let _ = stop.send(true);
+            let _ = task.await;
+        }
         let handles = std::mem::take(&mut *self.processing.handles.lock().expect("processors poisoned"));
         for handle in handles {
             handle.stop().await;
@@ -353,8 +363,41 @@ where
         self
     }
 
+    /// Pushes query updates through `emitter` for every event committed from
+    /// now on, once every projection started so far handled it, in any
+    /// instance ([`emit_updates`](crate::emit_updates)): subscribers of
+    /// every instance see every change. Call it after the projections.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime.
+    #[must_use]
+    pub fn emit<H>(mut self, emitter: H) -> Self
+    where
+        H: crate::EmitUpdates<Ev> + 'static,
+    {
+        let (stop, mut stopped) = tokio::sync::watch::channel(false);
+        let shutdown = async move {
+            let _ = stopped.changed().await;
+        };
+        let (started, started_rx) = tokio::sync::watch::channel(false);
+        let (feed, progress) = (self.events.clone(), self.processing.projections.clone());
+        let task = tokio::spawn(async move {
+            let head = crate::head_of(&feed).await;
+            let _ = started.send(true);
+            crate::emit_updates(head, feed, progress, emitter, shutdown).await;
+        });
+        self.processing.emitters_started.push(started_rx);
+        self.processing
+            .emitters
+            .lock()
+            .expect("emitters poisoned")
+            .push((stop, task));
+        self
+    }
+
     /// Spawns `handler`'s processor and keeps its handle.
-    fn start<H>(&mut self, handler: H) -> LocalProgress
+    fn start<H>(&mut self, handler: H) -> ProcessorProgress
     where
         H: Projection + EventHandler<Ev, M::Tx> + 'static,
     {
@@ -363,7 +406,7 @@ where
             .projection(handler)
             .with_options(self.processing.options)
             .spawn();
-        let progress = LocalProgress::of(&handle);
+        let progress = ProcessorProgress::of(&handle);
         self.processing.all.push(progress.clone());
         self.processing
             .handles
@@ -432,8 +475,11 @@ where
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
-    ) -> Cqrs<C, SubscriptionQueries<Q, U, Projected<Events<Ev, S, T, M>, Vec<LocalProgress>, Ev>>, Events<Ev, S, T, M>>
-    {
+    ) -> Cqrs<
+        C,
+        SubscriptionQueries<Q, U, Projected<Events<Ev, S, T, M>, Vec<ProcessorProgress>, Ev>>,
+        Events<Ev, S, T, M>,
+    > {
         let CqrsBuilder {
             commands,
             queries,
@@ -442,8 +488,9 @@ where
             processing,
             ..
         } = self;
-        let queries =
-            SubscriptionQueries::new(queries, updates).after_projection(events.clone(), processing.projections.clone());
+        let queries = SubscriptionQueries::new(queries, updates)
+            .after_projection(events.clone(), processing.projections.clone())
+            .after_emitters(processing.emitters_started.clone());
         Cqrs {
             commands,
             queries,

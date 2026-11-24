@@ -391,7 +391,7 @@ async fn processors(report: &mut Report, scale: &Scale) {
         let handle = if projection {
             live.track(
                 "bench",
-                PostSummaryProjection::new(Arc::new(InMemoryPostSummaryRepository::default()), Arc::default()),
+                PostSummaryProjection::new(Arc::new(InMemoryPostSummaryRepository::default())),
             )
         } else {
             live.track("bench", Noop)

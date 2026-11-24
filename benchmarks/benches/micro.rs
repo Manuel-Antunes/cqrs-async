@@ -131,7 +131,7 @@ mod interceptors {
     use std::{future::Future, sync::Arc, time::SystemTime};
 
     use blog::{
-        application::{projections::PostSummaryProjection, queries::PostUpdates},
+        application::projections::PostSummaryProjection,
         domain::PostEvent,
         infrastructure::{InMemoryPostSummaryRepository, Measured, ProjectionMetrics},
     };
@@ -143,7 +143,7 @@ mod interceptors {
     type Summaries = PostSummaryProjection<InMemoryPostSummaryRepository>;
 
     fn summaries() -> Summaries {
-        PostSummaryProjection::new(Arc::default(), Arc::new(PostUpdates::default()))
+        PostSummaryProjection::new(Arc::default())
     }
 
     fn context(unit: &mut ()) -> ProcessingContext<'_> {

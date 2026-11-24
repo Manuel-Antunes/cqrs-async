@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+use cqrs::{EmitUpdates, EventEnvelope, EventHandler, HandlerError, ProcessingContext};
 
 use crate::{
     application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore, PostUpdates},
     domain::{PostEvent, PostId},
 };
 
-/// Keeps the [`PostSummaryRepository`] read model in step with the posts' events,
-/// and pushes the queries' new results once each change is committed
-/// (Axon 5's projection: an event handling component with its dependencies,
-/// in a processor named by its namespace).
+/// Keeps the [`PostSummaryRepository`] read model in step with the posts'
+/// events (Axon 5's projection: an event handling component with its
+/// dependencies, in a processor named by its namespace). The queries' new
+/// results are pushed by [`PostSummaryUpdates`], on every instance.
 ///
 /// Each event is applied once, in order: the processor commits the change
 /// and its token in one unit of work, so there is no bookkeeping of what was
@@ -22,14 +22,12 @@ use crate::{
 pub struct PostSummaryProjection<S> {
     /// Where the rows are kept.
     summaries: Arc<S>,
-    /// Where the queries' new results go.
-    updates: Arc<PostUpdates>,
 }
 
 impl<S> PostSummaryProjection<S> {
-    /// A projection writing to `summaries`, pushing through `updates`.
-    pub fn new(summaries: Arc<S>, updates: Arc<PostUpdates>) -> Self {
-        Self { summaries, updates }
+    /// A projection writing to `summaries`.
+    pub fn new(summaries: Arc<S>) -> Self {
+        Self { summaries }
     }
 }
 
@@ -76,9 +74,32 @@ where
         Ok(())
     }
 
-    /// Once committed: the post's new summary, and the new list of published
-    /// posts if it changed.
-    async fn committed(&self, event: &EventEnvelope<PostEvent>) {
+    /// Before a replay rebuilds it.
+    async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
+        self.summaries.clear(context.transaction()).await?;
+        Ok(())
+    }
+}
+
+/// Pushes the summary queries' new results once the projection handled an
+/// event, whichever instance projected it: the post's new summary, and the
+/// new list of published posts if it changed.
+pub struct PostSummaryUpdates<S> {
+    /// Where the rows are read from.
+    summaries: Arc<S>,
+    /// Where the queries' new results go.
+    updates: Arc<PostUpdates>,
+}
+
+impl<S> PostSummaryUpdates<S> {
+    /// Updates read from `summaries`, pushed through `updates`.
+    pub fn new(summaries: Arc<S>, updates: Arc<PostUpdates>) -> Self {
+        Self { summaries, updates }
+    }
+}
+
+impl<S: PostSummaryRepository> EmitUpdates<PostEvent> for PostSummaryUpdates<S> {
+    async fn emit(&self, event: &EventEnvelope<PostEvent>) {
         let Ok(id) = post_of(event) else { return };
         if let Ok(Some(summary)) = self.summaries.find(id).await {
             self.updates.find.emit(|query| query.id == id, Some(summary));
@@ -88,12 +109,6 @@ where
         {
             self.updates.published.emit(|_| true, published);
         }
-    }
-
-    /// Before a replay rebuilds it.
-    async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
-        self.summaries.clear(context.transaction()).await?;
-        Ok(())
     }
 }
 

@@ -16,8 +16,8 @@
 //! Every subscriber is the same type (a receiver of committed envelopes), so
 //! a dynamic number of them needs no `dyn`.
 
-mod live_queries;
 mod processor;
+mod progress;
 mod subscription;
 mod updates;
 
@@ -26,10 +26,12 @@ use std::sync::Arc;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-pub use live_queries::{GlobalProgress, LiveQueries, LocalProgress, ProjectionProgress};
 pub use processor::{ProcessorHandle, ProcessorStatus, ResetError, TrackingOptions, TrackingProcessor};
+pub use progress::{GlobalProgress, ProcessorProgress, ProjectionProgress};
 pub use subscription::{SubscriptionOptions, subscribe};
-pub use updates::{CatchUp, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf};
+pub use updates::{
+    CatchUp, EmitUpdates, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf, emit_updates, head_of,
+};
 
 use crate::{
     Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, HandlerError,

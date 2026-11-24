@@ -78,7 +78,7 @@ pub use criteria::{AppendCondition, Criterion, EventCriteria, Tag, TagResolver};
 pub use cursor::{Cursor, Gap, Horizon};
 pub use dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
 pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
-pub use feed::{EventFeed, QuerySubscriptions, RefreshedBy};
+pub use feed::{EventFeed, QuerySubscriptions};
 pub use forward::{FixedTopic, Forward, Outgoing, Publish, RoutedTopic, TopicOf};
 pub use inline::{EventProcessor, HandlerFailure, InlinePublisher, LogFailures, OnFailure, ProcessingFailure};
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
@@ -95,9 +95,9 @@ pub use store::{
 };
 #[cfg(feature = "tokio")]
 pub use streaming::{
-    CatchUp, Events, GlobalProgress, LiveEvents, LiveQueries, LocalProgress, ProcessorHandle, ProcessorStatus,
+    CatchUp, EmitUpdates, Events, GlobalProgress, LiveEvents, ProcessorHandle, ProcessorProgress, ProcessorStatus,
     Projected, ProjectionProgress, QueryUpdateEmitter, ResetError, SubscriptionOptions, SubscriptionQueries,
-    TrackingOptions, TrackingProcessor, UpdatesOf, subscribe,
+    TrackingOptions, TrackingProcessor, UpdatesOf, emit_updates, head_of, subscribe,
 };
 pub use token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
 pub use transaction::TransactionManager;
@@ -116,6 +116,6 @@ pub mod prelude {
     pub use crate::{
         Aggregate, Appender, Command, CommandGateway, CommandHandler, DomainEvent, EventAppender, EventEnvelope,
         EventFeed, EventHandler, EventPublisher, Handler, HandlerError, Message, Query, QueryGateway,
-        QuerySubscriptions, RefreshedBy, TagResolver,
+        QuerySubscriptions, TagResolver,
     };
 }

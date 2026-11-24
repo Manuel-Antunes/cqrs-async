@@ -223,10 +223,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
         seen: Arc::clone(&seen),
     };
     let summaries = Arc::new(SeaOrmPostSummaries::new(pool.clone()));
-    let projection = Intercepted::new(
-        PostSummaryProjection::new(Arc::clone(&summaries), Arc::default()),
-        interceptor,
-    );
+    let projection = Intercepted::new(PostSummaryProjection::new(Arc::clone(&summaries)), interceptor);
     let options = TrackingOptions {
         retry_initial: Duration::from_millis(10),
         ..TrackingOptions::default()
@@ -259,4 +256,36 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
         retitled,
         "the token moved with the read model"
     );
+}
+
+/// Two instances of the blog on one database: the projection runs on one of
+/// them (one segment), yet the subscribers of both get every change, as
+/// each instance emits once the projection handled an event, wherever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscribers_on_every_instance_get_the_changes_one_of_them_projected() {
+    use cqrs::QuerySubscriptions;
+    use futures_util::StreamExt;
+
+    let pool = database_or_skip!();
+    let a = blog::start(pool.clone()).await.expect("migrated");
+    let b = blog::start(pool.clone()).await.expect("migrated");
+    let mut on_a = std::pin::pin!(a.app.queries().subscribe(ListPublished));
+    let mut on_b = std::pin::pin!(b.app.queries().subscribe(ListPublished));
+    assert_eq!(within(10, on_a.next()).await.unwrap().unwrap(), []);
+    assert_eq!(within(10, on_b.next()).await.unwrap().unwrap(), []);
+
+    let id = a
+        .app
+        .commands()
+        .send(CreatePost { title: "shared".into() })
+        .await
+        .unwrap();
+    b.app.commands().send(PublishPost { id }).await.unwrap();
+    for (name, subscription) in [("a", &mut on_a), ("b", &mut on_b)] {
+        let published = within(10, subscription.next()).await.unwrap().unwrap();
+        assert_eq!(published.len(), 1, "instance {name}");
+        assert_eq!(published[0].id, id);
+    }
+    a.stop().await;
+    b.stop().await;
 }

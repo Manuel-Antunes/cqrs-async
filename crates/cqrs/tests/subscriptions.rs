@@ -1,5 +1,6 @@
-//! Subscription queries: the current result, then each change, only after
-//! the projection handled it; filtered, deduplicated and coalesced.
+//! Subscription queries with emitters: the current result once the
+//! projection caught up, then what the emitter pushes once each event is
+//! projected, on every instance, whichever projected it; deduplicated.
 
 #![cfg(feature = "tokio")]
 
@@ -11,8 +12,9 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, EventEnvelope, EventHandler, EventPublisher, Events, Handler, HandlerError, InMemoryEventStore,
-    LiveQueries, ProcessingContext, QuerySubscriptions, RefreshedBy, StoreError,
+    Aggregate, EmitUpdates, EventEnvelope, EventHandler, EventPublisher, Events, Handler, HandlerError,
+    InMemoryEventStore, ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateEmitter, StoreError,
+    SubscriptionQueries, emit_updates, head_of,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -46,6 +48,12 @@ impl Aggregate for Clock {
 #[derive(Default)]
 struct Ticks(Mutex<HashMap<String, u64>>);
 
+impl Ticks {
+    fn of(&self, id: &str) -> u64 {
+        self.0.lock().unwrap().get(id).copied().unwrap_or(0)
+    }
+}
+
 impl EventHandler<ClockEvent> for Ticks {
     async fn handle(
         &self,
@@ -63,20 +71,13 @@ impl EventHandler<ClockEvent> for Ticks {
 #[query(output = u64, error = StoreError)]
 struct TicksOf(u32);
 
-/// Re-run only for events of this clock.
-impl RefreshedBy<ClockEvent> for TicksOf {
-    fn refreshed_by(&self, event: &EventEnvelope<ClockEvent>) -> bool {
-        event.stream.id() == self.0.to_string()
-    }
-}
-
 struct TicksOfHandler(Arc<Ticks>);
 
 impl Handler for TicksOfHandler {
     type Message = TicksOf;
 
     async fn handle(&self, TicksOf(id): TicksOf) -> Result<u64, StoreError> {
-        Ok(self.0.0.lock().unwrap().get(&id.to_string()).copied().unwrap_or(0))
+        Ok(self.0.of(&id.to_string()))
     }
 }
 
@@ -85,45 +86,114 @@ struct ClockQueries {
     ticks: TicksOfHandler,
 }
 
+/// Where the queries' new results go.
+#[derive(Default, cqrs::QueryUpdates)]
+struct ClockUpdates {
+    ticks: QueryUpdateEmitter<TicksOf>,
+}
+
+/// Once an event is projected: the new count of its clock, to that clock's
+/// subscribers.
+struct EmitTicks {
+    ticks: Arc<Ticks>,
+    updates: Arc<ClockUpdates>,
+}
+
+impl EmitUpdates<ClockEvent> for EmitTicks {
+    async fn emit(&self, event: &EventEnvelope<ClockEvent>) {
+        let id = event.stream.id();
+        let count = self.ticks.of(id);
+        self.updates.ticks.emit(|query| query.0.to_string() == id, count);
+    }
+}
+
 type Store = InMemoryEventStore<ClockEvent>;
+
+/// One instance: its projection, its emitter task, its subscriptions.
+struct Instance {
+    queries: SubscriptionQueries<
+        ClockQueries,
+        ClockUpdates,
+        cqrs::Projected<Events<ClockEvent, Store>, ProcessorProgress, ClockEvent>,
+    >,
+    projection: cqrs::ProcessorHandle,
+    emitting: tokio::task::JoinHandle<()>,
+}
+
+impl Instance {
+    /// Its emitter starts at the head, before it serves subscriptions.
+    async fn new(events: &Events<ClockEvent, Store>, ticks: &Arc<Ticks>, options: cqrs::TrackingOptions) -> Self {
+        let projection = events
+            .processor("ticks", Arc::clone(ticks))
+            .with_options(options)
+            .spawn();
+        let progress = ProcessorProgress::of(&projection);
+        let updates = Arc::new(ClockUpdates::default());
+        let emitter = EmitTicks {
+            ticks: Arc::clone(ticks),
+            updates: Arc::clone(&updates),
+        };
+        let emitting = tokio::spawn(emit_updates(
+            head_of(events).await,
+            events.clone(),
+            progress.clone(),
+            emitter,
+            std::future::pending(),
+        ));
+        let queries = SubscriptionQueries::new(
+            ClockQueries {
+                ticks: TicksOfHandler(Arc::clone(ticks)),
+            },
+            updates,
+        )
+        .after_projection(events.clone(), progress);
+        Self {
+            queries,
+            projection,
+            emitting,
+        }
+    }
+
+    async fn stop(self) {
+        self.emitting.abort();
+        self.projection.stop().await;
+    }
+}
 
 struct World {
     clocks: cqrs::AggregateLoader<Clock, Store>,
     events: Events<ClockEvent, Store>,
-    queries: LiveQueries<ClockQueries, Events<ClockEvent, Store>, ClockEvent>,
-    projection: cqrs::ProcessorHandle,
+    instance: Instance,
 }
 
 impl World {
-    fn new() -> Self {
+    async fn new() -> Self {
         let events = Events::new(InMemoryEventStore::new());
         let ticks = Arc::new(Ticks::default());
-        let projection = events.track("ticks", Arc::clone(&ticks));
-        let queries = LiveQueries::new(
-            ClockQueries {
-                ticks: TicksOfHandler(ticks),
-            },
-            events.clone(),
-            &projection,
-        );
+        let instance = Instance::new(&events, &ticks, cqrs::TrackingOptions::default()).await;
         Self {
-            clocks: cqrs::AggregateLoader::new((*events.store()).clone()),
+            clocks: cqrs::AggregateLoader::new(events.store().clone()),
             events,
-            queries,
-            projection,
+            instance,
         }
     }
 
     async fn record(&self, id: u32, event: ClockEvent) {
-        let clock = match self.clocks.load(&id).await.unwrap() {
-            Some(clock) => clock,
-            None => cqrs::New(id).into(),
-        };
-        self.events
-            .commit(clock, cqrs::Pending::new(vec![event]))
-            .await
-            .unwrap();
+        record(&self.clocks, &self.events, id, event).await;
     }
+}
+
+async fn record(
+    clocks: &cqrs::AggregateLoader<Clock, Store>,
+    events: &Events<ClockEvent, Store>,
+    id: u32,
+    event: ClockEvent,
+) {
+    let clock = match clocks.load(&id).await.unwrap() {
+        Some(clock) => clock,
+        None => cqrs::New(id).into(),
+    };
+    events.commit(clock, cqrs::Pending::new(vec![event])).await.unwrap();
 }
 
 async fn next<T>(stream: &mut (impl Stream<Item = Result<T, StoreError>> + Unpin)) -> T {
@@ -143,57 +213,39 @@ async fn quiet<T: std::fmt::Debug>(stream: &mut (impl Stream<Item = Result<T, St
 
 #[tokio::test(start_paused = true)]
 async fn starts_with_the_current_result_then_follows_changes() {
-    let world = World::new();
+    let world = World::new().await;
     world.record(1, ClockEvent::Ticked).await;
     world.record(1, ClockEvent::Ticked).await;
 
-    let mut ticks = pin!(world.queries.subscribe(TicksOf(1)));
+    let mut ticks = pin!(world.instance.queries.subscribe(TicksOf(1)));
     assert_eq!(next(&mut ticks).await, 2); // current state, after projection
 
     world.record(1, ClockEvent::Ticked).await;
     assert_eq!(next(&mut ticks).await, 3);
-    world.projection.stop().await;
+    world.instance.stop().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn unrelated_and_unchanging_events_emit_nothing() {
-    let world = World::new();
-    let mut ticks = pin!(world.queries.subscribe(TicksOf(1)));
+    let world = World::new().await;
+    let mut ticks = pin!(world.instance.queries.subscribe(TicksOf(1)));
     assert_eq!(next(&mut ticks).await, 0);
 
     world.record(2, ClockEvent::Ticked).await; // another clock: filtered out
-    world.record(1, ClockEvent::Renamed("a".into())).await; // re-run, same result: deduplicated
+    world.record(1, ClockEvent::Renamed("a".into())).await; // same result: deduplicated
     quiet(&mut ticks).await;
 
     world.record(1, ClockEvent::Ticked).await;
     assert_eq!(next(&mut ticks).await, 1);
-    world.projection.stop().await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_burst_ends_on_the_final_result_and_never_goes_back() {
-    let world = World::new();
-    let mut ticks = pin!(world.queries.subscribe(TicksOf(1)));
-    assert_eq!(next(&mut ticks).await, 0);
-
-    for _ in 0..50 {
-        world.record(1, ClockEvent::Ticked).await;
-    }
-    let mut seen = vec![];
-    while seen.last() != Some(&50) {
-        seen.push(next(&mut ticks).await);
-    }
-    assert!(seen.windows(2).all(|w| w[0] < w[1]), "monotonic: {seen:?}");
-    assert!(seen.len() <= 50, "coalesced, at most one per event: {}", seen.len());
-    world.projection.stop().await;
+    world.instance.stop().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn each_subscriber_gets_its_own_query_and_pipeline() {
-    let world = World::new();
-    let one = world.queries.subscribe(TicksOf(1));
+    let world = World::new().await;
+    let one = world.instance.queries.subscribe(TicksOf(1));
     // RxJS-style operators are plain `StreamExt` combinators on the result.
-    let mut doubled_two = pin!(world.queries.subscribe(TicksOf(2)).map(|r| r.map(|n| n * 2)));
+    let mut doubled_two = pin!(world.instance.queries.subscribe(TicksOf(2)).map(|r| r.map(|n| n * 2)));
     let mut one = pin!(one.filter(|r| std::future::ready(matches!(r, Ok(n) if n % 2 == 0))));
 
     assert_eq!(next(&mut one).await, 0);
@@ -203,17 +255,17 @@ async fn each_subscriber_gets_its_own_query_and_pipeline() {
     world.record(1, ClockEvent::Ticked).await;
     assert_eq!(next(&mut doubled_two).await, 2);
     assert_eq!(next(&mut one).await, 2);
-    world.projection.stop().await;
+    world.instance.stop().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn plain_queries_still_work_through_the_same_gateway() {
     use cqrs::QueryGateway;
-    let world = World::new();
+    let world = World::new().await;
     world.record(1, ClockEvent::Ticked).await;
-    world.projection.caught_up(1).await;
-    assert_eq!(world.queries.query(TicksOf(1)).await.unwrap(), 1);
-    world.projection.stop().await;
+    world.instance.projection.caught_up(1).await;
+    assert_eq!(world.instance.queries.query(TicksOf(1)).await.unwrap(), 1);
+    world.instance.stop().await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -252,9 +304,12 @@ async fn global_progress_waits_for_every_segment_of_every_instance() {
         .unwrap();
 }
 
+/// Two instances share the projection, one segment each, and each serves
+/// its own subscribers: a subscriber gets the change whichever instance
+/// projected it (the other one sees it in the shared tokens).
 #[tokio::test(start_paused = true)]
-async fn live_queries_follow_a_projection_split_across_instances() {
-    use cqrs::{QueryGateway, StreamId, TrackingOptions, segment_of};
+async fn subscribers_of_every_instance_get_changes_projected_by_another() {
+    use cqrs::{StreamId, TrackingOptions, segment_of};
     let events: Events<ClockEvent, Store> = Events::new(InMemoryEventStore::new());
     let ticks = Arc::new(Ticks::default());
     let options = TrackingOptions {
@@ -262,51 +317,30 @@ async fn live_queries_follow_a_projection_split_across_instances() {
         max_segments: 1,
         ..TrackingOptions::default()
     };
-    // Two instances of the projection, one segment each.
-    let a = events
-        .processor("ticks", Arc::clone(&ticks))
-        .with_options(options)
-        .spawn();
-    let b = events
-        .processor("ticks", Arc::clone(&ticks))
-        .with_options(options)
-        .spawn();
-    let queries = LiveQueries::with_progress(
-        ClockQueries {
-            ticks: TicksOfHandler(Arc::clone(&ticks)),
-        },
-        events.clone(),
-        events.global_progress("ticks"),
-    );
-    let clocks = cqrs::AggregateLoader::<Clock, _>::new((*events.store()).clone());
-    let in_segment = |segment| {
+    let a = Instance::new(&events, &ticks, options).await;
+    let b = Instance::new(&events, &ticks, options).await;
+    tokio::time::sleep(Duration::from_secs(2)).await; // each claimed its segment
+    let (a_owns, b_owns) = (a.projection.status().segments, b.projection.status().segments);
+    assert_eq!((a_owns.len(), b_owns.len()), (1, 1), "{a_owns:?} {b_owns:?}");
+    // A clock of the segment `a` projects, watched from `b`, and the other
+    // way round.
+    let clock_of = |segment: u32| {
         (1..)
             .find(|id| segment_of(&StreamId::of::<Clock>(id), 2) == segment)
             .unwrap()
     };
-    let (first, second) = (in_segment(0), in_segment(1));
+    let (from_a, from_b) = (clock_of(a_owns[0]), clock_of(b_owns[0]));
 
-    let mut on_first = pin!(queries.subscribe(TicksOf(first)));
-    let mut on_second = pin!(queries.subscribe(TicksOf(second)));
-    assert_eq!(next(&mut on_first).await, 0);
-    assert_eq!(next(&mut on_second).await, 0);
-    for id in [first, second, second] {
-        let clock = match clocks.load(&id).await.unwrap() {
-            Some(clock) => clock,
-            None => cqrs::New(id).into(),
-        };
-        events
-            .commit(clock, cqrs::Pending::new(vec![ClockEvent::Ticked]))
-            .await
-            .unwrap();
-    }
-    // Each update shows the projected state, whichever instance projected it.
-    assert_eq!(next(&mut on_first).await, 1);
-    let mut seen = vec![next(&mut on_second).await];
-    while seen.last() != Some(&2) {
-        seen.push(next(&mut on_second).await);
-    }
-    assert_eq!(queries.query(TicksOf(second)).await.unwrap(), 2);
+    let mut watched_on_b = pin!(b.queries.subscribe(TicksOf(from_a)));
+    let mut watched_on_a = pin!(a.queries.subscribe(TicksOf(from_b)));
+    assert_eq!(next(&mut watched_on_b).await, 0);
+    assert_eq!(next(&mut watched_on_a).await, 0);
+
+    let clocks = cqrs::AggregateLoader::<Clock, _>::new(events.store().clone());
+    record(&clocks, &events, from_a, ClockEvent::Ticked).await;
+    record(&clocks, &events, from_b, ClockEvent::Ticked).await;
+    assert_eq!(next(&mut watched_on_b).await, 1, "projected by a, emitted on b");
+    assert_eq!(next(&mut watched_on_a).await, 1, "projected by b, emitted on a");
     a.stop().await;
     b.stop().await;
 }

@@ -1,21 +1,14 @@
 use std::sync::Arc;
 
-use cqrs::{EventEnvelope, Handler, RefreshedBy};
+use cqrs::Handler;
 
 use super::{PostSummary, PostSummaryRepository};
-use crate::{application::BlogError, domain::PostEvent};
+use crate::application::BlogError;
 
 /// Every published post, ordered by id.
 #[derive(Clone, Debug, cqrs::Query)]
 #[query(output = Vec<PostSummary>, error = BlogError)]
 pub struct ListPublished;
-
-/// A new draft is not published: only later events can change the list.
-impl RefreshedBy<PostEvent> for ListPublished {
-    fn refreshed_by(&self, event: &EventEnvelope<PostEvent>) -> bool {
-        !matches!(event.payload, PostEvent::Created { .. })
-    }
-}
 
 /// Handles [`ListPublished`] by reading the read model.
 pub struct ListPublishedHandler<M> {
