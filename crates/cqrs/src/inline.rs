@@ -36,7 +36,8 @@ pub struct ProcessingFailure {
 /// One handler that failed while processing a commit.
 #[derive(Debug)]
 pub struct HandlerFailure {
-    /// The handler's type name, to tell which one failed.
+    /// The handler's type name (or, inline, the projection's namespace), to
+    /// tell which one failed.
     pub handler: &'static str,
     /// Global position of the event it failed on: where a retry resumes.
     pub position: u64,
@@ -129,6 +130,40 @@ tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5);
 tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5, H6 6);
 tuple_processor!(H0 0, H1 1, H2 2, H3 3, H4 4, H5 5, H6 6, H7 7);
 
+/// A projection run inline ([`InlinePublisher::with_projection`]): each
+/// namespace sees the whole commit, isolated from the others (a failing
+/// notification never holds a read model back), each stopping at its first
+/// failure. Replays do not happen inline.
+#[derive(Debug)]
+pub struct InlineProjection<P>(P);
+
+impl<P: crate::Route<()>> EventProcessor<P::Event> for InlineProjection<P> {
+    async fn process(&self, events: &[EventEnvelope<P::Event>]) -> Result<(), ProcessingFailure> {
+        let mut failures = Vec::new();
+        for namespace in 0..P::NAMESPACES.len() {
+            let processor = P::processor_name(namespace);
+            for event in events {
+                let mut unit = ();
+                let mut context = crate::ProcessingContext::in_processor(&mut unit, false, &processor);
+                if let Err(error) = self.0.handle(namespace, event, &mut context).await {
+                    failures.push(HandlerFailure {
+                        handler: P::NAMESPACES[namespace],
+                        position: event.position,
+                        error,
+                    });
+                    break;
+                }
+                self.0.committed(namespace, event).await;
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ProcessingFailure { failures })
+        }
+    }
+}
+
 /// What happens to an [`EventProcessor`] failure after a commit that went
 /// through the [`EventPublisher`] port: nobody is left to return it to (the
 /// events are stored), so it is handed to the policy. Implemented for
@@ -207,6 +242,12 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
             on_failure: self.on_failure,
             event: PhantomData,
         }
+    }
+
+    /// Runs `projection` after every commit, each of its namespaces isolated
+    /// from the others ([`InlineProjection`]).
+    pub fn with_projection<P2>(self, projection: P2) -> InlinePublisher<E, S, InlineProjection<P2>, F> {
+        self.with_processor(InlineProjection(projection))
     }
 
     /// What to do when an inline handler fails after a commit.

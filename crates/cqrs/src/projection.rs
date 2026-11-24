@@ -1,25 +1,281 @@
-//! Projections (Axon 5's event handling components and processors): an
-//! [`EventHandler`](crate::EventHandler) holding a read model's
-//! dependencies, written with `#[cqrs::projection(namespace = "...")]` on
-//! its impl and run by a tracking processor named after it (see the
-//! example on [`EventHandler`](crate::EventHandler)).
+//! Projections (Axon 5's event handling components, grouped by namespace):
+//! one per aggregate root, a struct holding what its handlers need, with
+//! one event handler per namespace. Each namespace runs in a processor of
+//! its own (its token, its unit of work), named `"{projection}.{namespace}"`.
+//!
+//! ```
+//! # use std::sync::Mutex;
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created, Published }
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts", "notifications"))]
+//! #[derive(Default)]
+//! struct PostProjection {
+//!     published: Mutex<u64>,
+//!     sent: Mutex<Vec<String>>,
+//! }
+//!
+//! /// A read model: rebuilt by a replay.
+//! #[cqrs::event_handler(namespace = "counts")]
+//! impl EventHandler for PostProjection {
+//!     async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+//!         if let PostEvent::Published = event.payload {
+//!             *self.published.lock().unwrap() += 1;
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! /// A side effect: never repeated by a replay.
+//! #[cqrs::event_handler(namespace = "notifications")]
+//! impl EventHandler for PostProjection {
+//!     const REPLAY: bool = false;
+//!
+//!     async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+//!         if let PostEvent::Published = event.payload {
+//!             self.sent.lock().unwrap().push(format!("{} published", event.stream));
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! # use cqrs::Projection;
+//! assert_eq!(PostProjection::NAMESPACES, ["counts", "notifications"]);
+//! // Cqrs::new(events).projection(PostProjection::default()) runs both.
+//! ```
+//!
+//! The compiler checks both ways. A namespace listed without its handler:
+//!
+//! ```compile_fail,E0277
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts", "notifications"))]
+//! struct PostProjection;
+//!
+//! #[cqrs::event_handler(namespace = "counts")]
+//! impl EventHandler for PostProjection {
+//!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
+//! }
+//!
+//! fn runs<P: cqrs::Route<()>>(_: P) {}
+//! runs(PostProjection); // "notifications" has no handler
+//! ```
+//!
+//! and a handler for a namespace the projection does not list:
+//!
+//! ```compile_fail,E0277
+//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
+//! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"))]
+//! struct PostProjection;
+//!
+//! #[cqrs::event_handler(namespace = "notificatons")]
+//! impl EventHandler for PostProjection {
+//!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
+//! }
+//! ```
 //!
 //! The unit of work belongs to the processor's
 //! [`TransactionManager`](crate::TransactionManager), not to the
-//! projection: one writing SQL names the database's transaction in its
-//! context (`ProcessingContext<'_, PgTransaction>`); one that does not runs
-//! with any.
+//! projection: a handler writing SQL names the database's transaction in
+//! its context (`ProcessingContext<'_, PgTransaction>`); one that does not
+//! runs with any.
 
-/// An event handling component with a namespace: the tracking processor
-/// running it (Axon's `@Namespace`), and the key of its tokens.
-/// Implemented by `#[cqrs::projection(namespace = "...")]`;
-/// [`Events::projection`](crate::Events::projection) runs it.
-pub trait Projection: Send + Sync {
-    /// The processor's name.
-    const NAMESPACE: &'static str;
+use std::{future::Future, sync::Arc};
+
+use crate::{DomainEvent, EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+
+/// A projection: a name, the events it is built from, and its namespaces,
+/// each run by a processor of its own. Implemented by
+/// `#[cqrs::projection(name = "...", events = Event, namespaces(...))]`.
+pub trait Projection: Send + Sync + 'static {
+    /// Its name: the prefix of its namespaces' processors and tokens, so two
+    /// projections never share one.
+    const NAME: &'static str;
+
+    /// The events it is built from (one aggregate's event enum).
+    type Event: DomainEvent;
+
+    /// Its namespaces, in order: one handler and one processor each.
+    const NAMESPACES: &'static [&'static str];
+
+    /// The processor (and token key) of `namespace`:
+    /// `"{NAME}.{namespace}"`.
+    fn processor_name(namespace: usize) -> String {
+        format!("{}.{}", Self::NAME, Self::NAMESPACES[namespace])
+    }
 }
 
-/// A shared projection keeps its namespace.
-impl<P: Projection> Projection for std::sync::Arc<P> {
-    const NAMESPACE: &'static str = P::NAMESPACE;
+/// A projection whose every namespace has its handler, for units of work
+/// `Tx`: what runs it. Implemented by `#[cqrs::projection]`, for the units
+/// of work every handler of the projection accepts.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot run in units of work `{Tx}`",
+    note = "each namespace its `#[cqrs::projection]` lists needs a `#[cqrs::event_handler(namespace = \"...\")] impl EventHandler for {Self}`, in units of work `{Tx}`"
+)]
+pub trait Route<Tx: Send>: Projection {
+    /// Hands `event` to the handler of `namespace` (an index into
+    /// [`NAMESPACES`](Projection::NAMESPACES)).
+    fn handle(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<Self::Event>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send;
+
+    /// The handler of `namespace`'s post-commit step.
+    fn committed(&self, namespace: usize, event: &EventEnvelope<Self::Event>) -> impl Future<Output = ()> + Send;
+
+    /// The handler of `namespace`'s reset, before a replay.
+    fn reset(
+        &self,
+        namespace: usize,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send;
+
+    /// Whether the handler of `namespace` sees replays
+    /// ([`EventHandler::REPLAY`]): a read model does, a side effect does not.
+    fn replays(namespace: usize) -> bool;
+}
+
+/// The handler of one namespace of a projection, the namespace named by
+/// its ID ([`namespace_id`]): what `#[cqrs::event_handler(namespace =
+/// "...")]` turns an `impl EventHandler` into. Its methods are
+/// [`EventHandler`]'s.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no handler for one of the namespaces its projection lists",
+    note = "add `#[cqrs::event_handler(namespace = \"...\")] impl EventHandler for {Self}` for it"
+)]
+pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>: HasNamespace<ID> + Send + Sync {
+    /// As [`EventHandler::REPLAY`].
+    const REPLAY: bool = true;
+
+    /// As [`EventHandler::handle`].
+    fn handle(
+        &self,
+        event: &EventEnvelope<E>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send;
+
+    /// As [`EventHandler::committed`].
+    fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
+        let _ = event;
+        async {}
+    }
+
+    /// As [`EventHandler::reset`].
+    fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        let _ = context;
+        async { Ok(()) }
+    }
+}
+
+/// A projection lists the namespace with this ID: what a namespace's
+/// handler requires, so one for a namespace the projection does not list
+/// does not compile. Implemented by `#[cqrs::projection]`.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not list this namespace",
+    note = "add it to `namespaces(...)` in the `#[cqrs::projection]` of `{Self}` (check its spelling)"
+)]
+pub trait HasNamespace<const ID: u64> {
+    /// The namespace.
+    const NAME: &'static str;
+}
+
+/// The ID of the namespace `name`: FNV-1a of its bytes, computed at compile
+/// time, as `&str` cannot be a type parameter on stable Rust.
+#[doc(hidden)]
+pub const fn namespace_id(name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut index = 0;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u64;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+        index += 1;
+    }
+    hash
+}
+
+/// One namespace of a projection, as the event handler its processor runs.
+pub(crate) struct NamespaceOf<P> {
+    /// The projection, shared by its namespaces' processors.
+    pub(crate) projection: Arc<P>,
+    /// Which namespace.
+    pub(crate) namespace: usize,
+}
+
+impl<P: Route<Tx>, Tx: Send> EventHandler<P::Event, Tx> for NamespaceOf<P> {
+    // Decided per namespace, at run time: see `handle_in`.
+    const REPLAY: bool = true;
+
+    fn handle(
+        &self,
+        event: &EventEnvelope<P::Event>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        self.projection.handle(self.namespace, event, context)
+    }
+
+    fn committed(&self, event: &EventEnvelope<P::Event>) -> impl Future<Output = ()> + Send {
+        self.projection.committed(self.namespace, event)
+    }
+
+    fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        self.projection.reset(self.namespace, context)
+    }
+
+    async fn handle_in(
+        &self,
+        event: &EventEnvelope<P::Event>,
+        context: &mut ProcessingContext<'_, Tx>,
+        _: crate::message::sealed::Internal,
+    ) -> Result<(), HandlerError> {
+        if context.replay() && !P::replays(self.namespace) {
+            return Ok(());
+        }
+        self.projection.handle(self.namespace, event, context).await
+    }
+
+    async fn committed_in(&self, event: &EventEnvelope<P::Event>, replay: bool, _: crate::message::sealed::Internal) {
+        if !replay || P::replays(self.namespace) {
+            self.projection.committed(self.namespace, event).await;
+        }
+    }
+}
+
+/// A shared projection is the projection.
+impl<P: Projection> Projection for Arc<P> {
+    const NAME: &'static str = P::NAME;
+    type Event = P::Event;
+    const NAMESPACES: &'static [&'static str] = P::NAMESPACES;
+}
+
+/// A shared projection runs as the projection.
+impl<P: Route<Tx>, Tx: Send> Route<Tx> for Arc<P> {
+    fn handle(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<Self::Event>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        (**self).handle(namespace, event, context)
+    }
+
+    fn committed(&self, namespace: usize, event: &EventEnvelope<Self::Event>) -> impl Future<Output = ()> + Send {
+        (**self).committed(namespace, event)
+    }
+
+    fn reset(
+        &self,
+        namespace: usize,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        (**self).reset(namespace, context)
+    }
+
+    fn replays(namespace: usize) -> bool {
+        P::replays(namespace)
+    }
 }

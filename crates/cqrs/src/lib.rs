@@ -81,7 +81,8 @@ pub use event::{DomainEvent, EventEnvelope, Metadata, StreamId};
 pub use feed::{EventFeed, QuerySubscriptions};
 pub use forward::{FixedTopic, Forward, Outgoing, Publish, RoutedTopic, TopicOf};
 pub use inline::{
-    EventProcessor, HandlerFailure, InlinePublisher, Isolated, LogFailures, OnFailure, ProcessingFailure,
+    EventProcessor, HandlerFailure, InlineProjection, InlinePublisher, Isolated, LogFailures, OnFailure,
+    ProcessingFailure,
 };
 pub use interceptor::{EventChain, EventInterceptor, Intercepted, Interceptor};
 pub use loader::{AggregateLoader, Loaded, New, NotFound};
@@ -89,7 +90,9 @@ pub use message::{
     Command, CommandGateway, Dispatch, DispatchVia, ErrorOf, EventHandler, Handler, HandlerError, Message, OutputOf,
     ProcessingContext, Query, QueryGateway,
 };
-pub use projection::Projection;
+#[doc(hidden)]
+pub use projection::{HasNamespace, NamespaceHandler, namespace_id};
+pub use projection::{Projection, Route};
 pub use snapshot::{InMemorySnapshots, SnapshotStore};
 pub use store::{
     AppendEvents, EventStore, ExpectedVersion, InMemoryEventStore, LoadStream, ReadLog, Recorded, SourceEvents,
@@ -98,8 +101,9 @@ pub use store::{
 #[cfg(feature = "tokio")]
 pub use streaming::{
     CatchUp, EmitUpdates, Events, GlobalProgress, LiveEvents, ProcessorHandle, ProcessorProgress, ProcessorStatus,
-    Projected, ProjectionProgress, QueryUpdateEmitter, ResetError, SubscriptionOptions, SubscriptionQueries,
-    TrackingOptions, TrackingProcessor, UpdatesOf, emit_updates, head_of, subscribe,
+    Projected, ProjectionHandle, ProjectionProcessors, ProjectionProgress, QueryUpdateEmitter, ResetError,
+    SubscriptionOptions, SubscriptionQueries, TrackingOptions, TrackingProcessor, UpdatesOf, emit_updates, head_of,
+    subscribe,
 };
 pub use token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
 pub use transaction::TransactionManager;
@@ -110,7 +114,7 @@ pub use upcast::{StoredEvent, Upcast, Upcaster, upcast};
 #[cfg(feature = "derive")]
 pub use cqrs_derive::{
     AggregateRoot, Command, Commands, DomainEvent, Gateway, Queries, Query, QueryUpdates, aggregate, command,
-    command_handler, projection, query, query_handler,
+    command_handler, event_handler, projection, query, query_handler,
 };
 
 /// Everything a domain or application module usually needs.

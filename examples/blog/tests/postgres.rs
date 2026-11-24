@@ -21,7 +21,7 @@ use std::{
 use blog::{
     application::{
         commands::{CreatePost, PostRepository, PublishPost, RetitlePost},
-        projections::PostSummaryProjection,
+        projections::PostProjection,
         queries::{FindPost, ListPublished},
     },
     domain::{Post, PostEvent},
@@ -127,7 +127,7 @@ async fn the_blog_runs_on_postgres_and_a_restart_picks_up_where_it_was() {
         .unwrap();
     assert!(next.0 > id.0, "ids come from the database");
     within(10, running.settled()).await;
-    assert_eq!(running.metrics.handled(), 1, "only the new event");
+    assert_eq!(running.metrics.handled(), 2, "only the new event, in both namespaces");
     assert_eq!(count(&pool, "SELECT count(*) FROM post_summaries").await, 2);
     running.stop().await;
 }
@@ -172,8 +172,8 @@ async fn a_post_state_and_its_events_commit_together_and_a_lost_race_undoes_both
     assert_eq!(stream, 2, "the losing event was never stored");
 }
 
-/// Lets the projection write, then fails the first time it sees `position`:
-/// what the processor's rollback must undo.
+/// Lets the projection's `summaries` namespace write, then fails the first
+/// time it sees `position` there: what the processor's rollback must undo.
 struct FailsOnceAfterWriting {
     position: u64,
     /// How many times it saw `position`.
@@ -187,8 +187,9 @@ impl<Tx: Send> EventInterceptor<PostEvent, Tx> for FailsOnceAfterWriting {
         context: &mut ProcessingContext<'_, Tx>,
         next: N,
     ) -> Result<(), HandlerError> {
+        let summaries = context.processor() == "post.summaries";
         next.proceed(context).await?;
-        if event.position == self.position && self.seen.fetch_add(1, Ordering::SeqCst) == 0 {
+        if summaries && event.position == self.position && self.seen.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(HandlerError::msg("failed after writing"));
         }
         Ok(())
@@ -223,7 +224,13 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
         seen: Arc::clone(&seen),
     };
     let summaries = Arc::new(SeaOrmPostSummaries::new(pool.clone()));
-    let projection = Intercepted::new(PostSummaryProjection::new(Arc::clone(&summaries)), interceptor);
+    let projection = Intercepted::new(
+        PostProjection::new(
+            Arc::clone(&summaries),
+            Arc::new(blog::infrastructure::InMemoryNotifier::default()),
+        ),
+        interceptor,
+    );
     let options = TrackingOptions {
         retry_initial: Duration::from_millis(10),
         ..TrackingOptions::default()
@@ -249,7 +256,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
         .unwrap();
     assert_eq!(rows, [(id.0 as i64, "final".to_owned())]);
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT position FROM cqrs_tokens WHERE processor = 'post-summaries'")
+        sqlx::query_scalar::<_, i64>("SELECT position FROM cqrs_tokens WHERE processor = 'post.summaries'")
             .fetch_one(&pool)
             .await
             .unwrap() as u64,

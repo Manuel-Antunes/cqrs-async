@@ -10,8 +10,8 @@
 //!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher
 //!     .intercept(Audit(log))
 //!     .queries(PostQueryGateway::new(summaries.clone()))
-//!     .projection(PostSummaryProjection::new(summaries, updates.clone()))
-//!     .policy(NotifyOnPublish::new(notifier))
+//!     .projection(PostProjection::new(summaries, notifier))  // every namespace
+//!     .emit(PostSummaryUpdates::new(summaries, updates.clone()))
 //!     .subscriptions(updates)                                 // queries wait for the projections
 //!     .build();
 //!
@@ -41,8 +41,8 @@ use std::sync::Arc;
 use crate::Intercepted;
 #[cfg(feature = "tokio")]
 use crate::{
-    DomainEvent, EventFeed, EventHandler, Events, ProcessorHandle, ProcessorProgress, Projected, Projection,
-    ProjectionProgress, ReadLog, SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
+    DomainEvent, EventFeed, Events, ProcessorHandle, ProcessorProgress, Projected, ProjectionProgress, ReadLog, Route,
+    SubscriptionQueries, TokenStore, TrackingOptions, TransactionManager,
 };
 
 /// An application's CQRS unit: the command gateway `C`, the query gateway
@@ -200,7 +200,7 @@ where
 /// ```compile_fail,E0599
 /// # #[derive(Clone, cqrs::DomainEvent)] struct Ticked;
 /// # struct Counter;
-/// # #[cqrs::projection(namespace = "counter")]
+/// # #[cqrs::event_handler]
 /// # impl cqrs::EventHandler for Counter {
 /// #     async fn handle(&self, _: &cqrs::EventEnvelope<Ticked>, _: &mut cqrs::ProcessingContext<'_>) -> Result<(), cqrs::HandlerError> { Ok(()) }
 /// # }
@@ -332,8 +332,10 @@ where
         self
     }
 
-    /// Starts a processor running `projection` (named by its namespace).
-    /// The unit's subscriptions wait for it before their first result.
+    /// Starts `projection`: a processor per namespace, named
+    /// `"{projection}.{namespace}"`. The unit's subscriptions wait, before
+    /// their first result, for the namespaces that see replays (its read
+    /// models), not for the others (side effects, such as notifications).
     ///
     /// # Panics
     ///
@@ -341,25 +343,20 @@ where
     #[must_use]
     pub fn projection<H>(mut self, projection: H) -> Self
     where
-        H: Projection + EventHandler<Ev, M::Tx> + 'static,
+        H: Route<M::Tx, Event = Ev> + 'static,
     {
-        let progress = self.start(projection);
-        self.processing.projections.push(progress);
-        self
-    }
-
-    /// Starts a processor running `policy` (named by its namespace): a
-    /// side effect, which subscriptions do not wait for.
-    ///
-    /// # Panics
-    ///
-    /// Outside a Tokio runtime.
-    #[must_use]
-    pub fn policy<H>(mut self, policy: H) -> Self
-    where
-        H: Projection + EventHandler<Ev, M::Tx> + 'static,
-    {
-        self.start(policy);
+        let running = self
+            .events
+            .projection(projection)
+            .with_options(self.processing.options)
+            .spawn();
+        self.processing.projections.extend(running.read_models());
+        self.processing.all.extend(running.progress());
+        self.processing
+            .handles
+            .get_mut()
+            .expect("processors poisoned")
+            .extend(running.into_handles());
         self
     }
 
@@ -394,26 +391,6 @@ where
             .expect("emitters poisoned")
             .push((stop, task));
         self
-    }
-
-    /// Spawns `handler`'s processor and keeps its handle.
-    fn start<H>(&mut self, handler: H) -> ProcessorProgress
-    where
-        H: Projection + EventHandler<Ev, M::Tx> + 'static,
-    {
-        let handle = self
-            .events
-            .projection(handler)
-            .with_options(self.processing.options)
-            .spawn();
-        let progress = ProcessorProgress::of(&handle);
-        self.processing.all.push(progress.clone());
-        self.processing
-            .handles
-            .get_mut()
-            .expect("processors poisoned")
-            .push(handle);
-        progress
     }
 }
 

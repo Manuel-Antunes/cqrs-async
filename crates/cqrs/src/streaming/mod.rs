@@ -18,6 +18,7 @@
 
 mod processor;
 mod progress;
+mod projection;
 mod subscription;
 mod updates;
 
@@ -28,6 +29,7 @@ use tokio::sync::broadcast;
 
 pub use processor::{ProcessorHandle, ProcessorStatus, ResetError, TrackingOptions, TrackingProcessor};
 pub use progress::{GlobalProgress, ProcessorProgress, ProjectionProgress};
+pub use projection::{ProjectionHandle, ProjectionProcessors};
 pub use subscription::{SubscriptionOptions, subscribe};
 pub use updates::{
     CatchUp, EmitUpdates, Projected, QueryUpdateEmitter, SubscriptionQueries, UpdatesOf, emit_updates, head_of,
@@ -210,13 +212,13 @@ where
         self.processor(name, handler).spawn()
     }
 
-    /// The processor of `projection`, named after its namespace
-    /// ([`Projection::NAMESPACE`](crate::Projection::NAMESPACE)).
-    pub fn projection<P>(&self, projection: P) -> TrackingProcessor<E, S, P, C, M>
+    /// The processors of `projection`, one per namespace, named
+    /// `"{projection}.{namespace}"`, to configure and `spawn`.
+    pub fn projection<P>(&self, projection: P) -> ProjectionProcessors<E, S, P, C, M>
     where
-        P: crate::Projection + EventHandler<E, M::Tx> + 'static,
+        P: crate::Route<M::Tx, Event = E> + 'static,
     {
-        self.processor(P::NAMESPACE, projection)
+        ProjectionProcessors::new(projection, |name, handler| self.processor(&name, handler))
     }
 }
 

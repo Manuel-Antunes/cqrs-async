@@ -108,7 +108,7 @@ struct Rows {
     failed: AtomicBool,
 }
 
-#[cqrs::projection(namespace = "rows")]
+#[cqrs::event_handler]
 impl EventHandler for Rows {
     async fn handle(
         &self,
@@ -174,7 +174,7 @@ async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
         .with_tokens(journal.clone())
         .with_transactions(journal.clone());
     let projection = Intercepted::new(rows(&journal, 1), Stamp(Arc::clone(&journal.phases)));
-    let running = events.projection(projection).spawn();
+    let running = events.processor("rows", projection).spawn();
     let last = tick(events.store(), [1, 2]).await.last().unwrap().position;
     tokio::time::timeout(Duration::from_secs(60), running.caught_up(last))
         .await
@@ -223,7 +223,10 @@ async fn batched(fail_on: u64) -> Journal {
         batch_size: 10,
         ..TrackingOptions::default()
     };
-    let running = events.projection(rows(&journal, fail_on)).with_options(options).spawn();
+    let running = events
+        .processor("rows", rows(&journal, fail_on))
+        .with_options(options)
+        .spawn();
     tokio::time::timeout(Duration::from_secs(60), running.caught_up(last))
         .await
         .expect("caught up");

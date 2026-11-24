@@ -18,13 +18,13 @@ use std::{
 
 use blog::application::queries::FindPost;
 use blog::{
-    application::projections::PostSummaryProjection,
+    application::projections::PostProjection,
     application::{
         BlogError,
         commands::{CreatePost, RetitlePost},
     },
     domain::{Post, PostId},
-    infrastructure::InMemoryPostSummaryRepository,
+    infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository},
     presentation::{BlogApi, graphql, http},
 };
 use cqrs::{CommandGateway, QuerySubscriptions};
@@ -384,28 +384,38 @@ async fn live_queries(report: &mut Report, scale: &Scale) {
 /// A tracking processor catching up on an existing log.
 async fn processors(report: &mut Report, scale: &Scale) {
     let events = scale.processor_events;
-    for (name, projection) in [("no-op handler", false), ("post summaries projection", true)] {
+    for (name, projection) in [("no-op handler", false), ("post projection (2 namespaces)", true)] {
         let live = Live::new();
         seed_posts(&live.store, events, 1).await;
         let started = Instant::now();
-        let handle = if projection {
-            live.track(
-                "bench",
-                PostSummaryProjection::new(Arc::new(InMemoryPostSummaryRepository::default())),
-            )
+        let head = live.last_position().await;
+        if projection {
+            let summaries = Arc::new(InMemoryPostSummaryRepository::default());
+            let notifier = Arc::new(InMemoryNotifier::default());
+            let running = live
+                .events()
+                .projection(PostProjection::new(summaries, notifier))
+                .spawn();
+            running.caught_up(head).await;
+            report_throughput(report, name, events, started.elapsed());
+            running.stop().await;
         } else {
-            live.track("bench", Noop)
-        };
-        handle.caught_up(live.last_position().await).await;
-        let elapsed = started.elapsed();
-        report.add(
-            format!("tracking processor, {name}, {events} events"),
-            "throughput",
-            events as f64 / elapsed.as_secs_f64(),
-            "events/s",
-        );
-        handle.stop().await;
+            let handle = live.track("bench", Noop);
+            handle.caught_up(head).await;
+            report_throughput(report, name, events, started.elapsed());
+            handle.stop().await;
+        }
     }
+}
+
+/// Records how fast a processor caught up on `events` events.
+fn report_throughput(report: &mut Report, name: &str, events: u64, elapsed: Duration) {
+    report.add(
+        format!("tracking processor, {name}, {events} events"),
+        "throughput",
+        events as f64 / elapsed.as_secs_f64(),
+        "events/s",
+    );
 }
 
 /// A processor with a CPU-bound handler over 1, 4 and 14 segments: how far

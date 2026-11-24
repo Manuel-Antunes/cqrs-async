@@ -143,8 +143,8 @@ fn a_failing_policy_behind_the_gateway_does_not_fail_the_command() {
 
 #[test]
 fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
-    use blog::application::projections::PostSummaryProjection;
-    use cqrs::{EventHandler, ProcessingContext};
+    use blog::{application::projections::PostProjection, infrastructure::InMemoryNotifier};
+    use cqrs::{ProcessingContext, Route};
     use std::sync::Arc;
     block_on(async {
         let store = PostStore::default();
@@ -155,15 +155,16 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
             .await
             .unwrap();
 
-        // A replay: cleared, then every event again, in order.
-        let projection = PostSummaryProjection::new(Arc::clone(&summaries));
+        // A replay of the `summaries` namespace (index 0): cleared, then
+        // every event again, in order.
+        let projection = PostProjection::new(Arc::clone(&summaries), Arc::new(InMemoryNotifier::default()));
         projection
-            .reset(&mut ProcessingContext::new(&mut (), false))
+            .reset(0, &mut ProcessingContext::new(&mut (), false))
             .await
             .unwrap();
         for event in store.all() {
             projection
-                .handle(&event, &mut ProcessingContext::new(&mut (), true))
+                .handle(0, &event, &mut ProcessingContext::new(&mut (), true))
                 .await
                 .unwrap();
         }
@@ -199,7 +200,9 @@ fn components_depend_on_gateway_ports() {
 #[test]
 fn a_gateway_can_be_written_by_hand_without_the_derive() {
     use blog::{
-        application::projections::PostSummaryProjection, domain::PostId, infrastructure::InMemoryPostSummaryRepository,
+        application::projections::PostProjection,
+        domain::PostId,
+        infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository},
     };
     use cqrs::{Dispatch, Handler, InMemoryEventStore, Metadata, dispatch_command};
 
@@ -235,8 +238,10 @@ fn a_gateway_can_be_written_by_hand_without_the_derive() {
     block_on(async {
         let store = InMemoryEventStore::new();
         let summaries = Arc::new(InMemoryPostSummaryRepository::default());
-        let publisher =
-            InlinePublisher::new(store.clone()).with_processor((PostSummaryProjection::new(summaries.clone()),));
+        let publisher = InlinePublisher::new(store.clone()).with_projection(PostProjection::new(
+            summaries.clone(),
+            Arc::new(InMemoryNotifier::default()),
+        ));
         let posts = Arc::new(EventSourcedPostRepository::new(store, publisher));
         let gateway = ByHand {
             create: CreatePostHandler::new(Arc::clone(&posts)),

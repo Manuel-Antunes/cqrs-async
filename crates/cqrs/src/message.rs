@@ -108,13 +108,33 @@ pub struct ProcessingContext<'a, Tx = ()> {
     transaction: &'a mut Tx,
     /// Whether the event is replayed.
     replay: bool,
+    /// The processor handling it (`""` outside one).
+    processor: &'a str,
 }
 
 impl<'a, Tx> ProcessingContext<'a, Tx> {
-    /// A context over `transaction`. `replay`: the event was handled before
-    /// a [reset](crate::TrackingProcessor::reset).
+    /// A context over `transaction`, outside any processor. `replay`: the
+    /// event was handled before a [reset](crate::TrackingProcessor::reset).
     pub fn new(transaction: &'a mut Tx, replay: bool) -> Self {
-        Self { transaction, replay }
+        Self::in_processor(transaction, replay, "")
+    }
+
+    /// A context over `transaction` in the processor named `processor`
+    /// (for a projection, `"{projection}.{namespace}"`).
+    pub fn in_processor(transaction: &'a mut Tx, replay: bool, processor: &'a str) -> Self {
+        Self {
+            transaction,
+            replay,
+            processor,
+        }
+    }
+
+    /// The processor handling the event (Axon's processing context knows
+    /// it too): for a projection, `"{projection}.{namespace}"`; `""` outside
+    /// a processor. What an interceptor around a whole projection tells its
+    /// namespaces apart by.
+    pub fn processor(&self) -> &str {
+        self.processor
     }
 
     /// The unit of work, to write the read model in (it commits with the
@@ -133,9 +153,12 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 /// enum): Axon's event handling component. Read models (projections) and
 /// side effects (policies, notifications) share this one contract.
 ///
-/// Usually written with `#[cqrs::projection]` on the impl, which fills in
-/// the event type and the unit of work from `handle`'s signature, and
-/// names the processor (`namespace = "..."`):
+/// Usually written with `#[cqrs::event_handler]` on the impl, which fills
+/// in the event type and the unit of work from `handle`'s signature, and run
+/// by a processor named when it is made (`events.processor(name, handler)`).
+/// The handlers of an aggregate's projection are written the same way, one
+/// per namespace (`#[cqrs::event_handler(namespace = "...")]`, see
+/// [`Projection`](crate::Projection)):
 ///
 /// ```
 /// # use std::sync::Mutex;
@@ -146,7 +169,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 ///     count: Mutex<u64>,
 /// }
 ///
-/// #[cqrs::projection(namespace = "published-count")]
+/// #[cqrs::event_handler]
 /// impl EventHandler for PublishedCount {
 ///     async fn handle(&self, event: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
 ///         match event.payload {
@@ -163,9 +186,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 ///     }
 /// }
 ///
-/// # fn named<P: cqrs::Projection>(_: &P) -> &'static str { P::NAMESPACE }
-/// assert_eq!(named(&PublishedCount::default()), "published-count");
-/// // events.projection(PublishedCount::default()).spawn();
+/// // events.processor("published-count", PublishedCount::default()).spawn();
 /// ```
 ///
 /// `Tx` is the unit of work: a tracking processor opens one per event from

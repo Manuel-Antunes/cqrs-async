@@ -102,7 +102,7 @@ pub struct Bank<R, P> {
 /// transaction.
 struct AccountViews;
 
-#[cqrs::projection(namespace = "views")]
+#[cqrs::event_handler]
 impl EventHandler for AccountViews {
     async fn handle(
         &self,
@@ -133,7 +133,7 @@ struct TransferPolicy<B> {
     bank: Arc<B>,
 }
 
-#[cqrs::projection(namespace = "transfers")]
+#[cqrs::event_handler]
 impl<B: CommandGateway<Execute> + 'static> EventHandler for TransferPolicy<B> {
     async fn handle(
         &self,
@@ -221,11 +221,11 @@ where
             events: events.clone(),
         };
         let bank = Arc::new(Bank { execute });
-        let views = started(events.projection(AccountViews).with_options(options()).spawn()).await;
+        let views = started(events.processor("views", AccountViews).with_options(options()).spawn()).await;
         let policy = TransferPolicy {
             bank: Arc::clone(&bank),
         };
-        let transfers = started(events.projection(policy).with_options(options()).spawn()).await;
+        let transfers = started(events.processor("transfers", policy).with_options(options()).spawn()).await;
         Self {
             pool,
             events,
@@ -287,7 +287,7 @@ where
     async fn rebuild(&self) -> u64 {
         let mut views = self.views.lock().await;
         views.take().expect("running").stop().await;
-        let projection = self.events.projection(AccountViews).with_options(options());
+        let projection = self.events.processor("views", AccountViews).with_options(options());
         projection.reset().await.expect("resetting");
         let running = projection.spawn();
         let head = self.events.store().last_position().await.expect("reading the head");

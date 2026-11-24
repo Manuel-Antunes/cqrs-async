@@ -96,7 +96,7 @@ impl EventHandler<Ticked> for Handler {
 #[derive(Default)]
 struct Sum(Mutex<u64>);
 
-#[cqrs::projection(namespace = "sum")]
+#[cqrs::event_handler]
 impl EventHandler for Sum {
     async fn handle(&self, event: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
         *self.0.lock().unwrap() += event.payload.0;
@@ -166,7 +166,7 @@ async fn a_projection_interceptor_runs_inside_its_transaction() {
     let events = Events::new(Store::default());
     let sum = Arc::new(Sum::default());
     let intercepted = Intercepted::new(Arc::clone(&sum), FailsOnce(AtomicBool::new(false)));
-    let projection = events.projection(intercepted).spawn();
+    let projection = events.processor("sum", intercepted).spawn();
     let last = tick(&events, [5, 7]).await;
     within(projection.caught_up(last)).await;
     projection.stop().await;

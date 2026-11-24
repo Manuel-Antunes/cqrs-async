@@ -1,23 +1,26 @@
-//! `#[projection]` on `impl EventHandler for H`: fills in the event type and
-//! the unit of work from `handle`'s signature, and names the processor.
+//! `#[event_handler]` on `impl EventHandler for H`: fills in the event type
+//! and the unit of work from `handle`'s signature; with `namespace = ".."`,
+//! makes it the handler of that namespace of `H`'s projection.
+//! `#[projection(..)]` on the projection's struct: its name, events and
+//! namespaces, and the route to their handlers.
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote};
+use quote::quote;
 use syn::{
-    Error, FnArg, GenericArgument, GenericParam, ImplItem, ItemImpl, LitStr, PathArguments, Result, Type,
+    Error, FnArg, GenericArgument, GenericParam, ImplItem, ItemImpl, ItemStruct, LitStr, PathArguments, Result, Type,
     TypeReference, parse_quote, spanned::Spanned, visit_mut::VisitMut,
 };
 
 use crate::krate;
 
-/// The arguments of `#[projection(...)]`.
+/// The arguments of `#[event_handler(...)]`.
 #[derive(Default)]
-pub struct Arguments {
-    /// `namespace = "..."`: the processor's name.
+pub struct HandlerArguments {
+    /// `namespace = "..."`: the projection's namespace it handles.
     pub namespace: Option<LitStr>,
 }
 
-impl syn::parse::Parse for Arguments {
+impl syn::parse::Parse for HandlerArguments {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
         let mut arguments = Self::default();
         if input.is_empty() {
@@ -33,8 +36,8 @@ impl syn::parse::Parse for Arguments {
     }
 }
 
-/// Expansion of `#[projection(...)]`.
-pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStream2> {
+/// Expansion of `#[event_handler(...)]`.
+pub fn event_handler(arguments: HandlerArguments, mut item: ItemImpl) -> Result<TokenStream2> {
     let krate = krate();
     let Some((_, trait_path, _)) = &item.trait_ else {
         return Err(Error::new(item.self_ty.span(), "expected `impl EventHandler for ...`"));
@@ -46,7 +49,6 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
     {
         return Err(Error::new(trait_path.span(), "expected `impl EventHandler for ...`"));
     }
-
     let handle = item
         .items
         .iter()
@@ -72,9 +74,9 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
         )
     })?;
     let transaction = context_transaction(context)?;
-
-    // No unit of work named: generic over any, so it runs with every token
-    // store; the contexts written `ProcessingContext<'_>` get it too.
+    // No unit of work named: generic over any, so it runs with every
+    // transaction manager; the contexts written `ProcessingContext<'_>` get
+    // it too.
     let transaction = match transaction {
         Some(transaction) => transaction,
         None => {
@@ -90,49 +92,205 @@ pub fn projection(arguments: Arguments, mut item: ItemImpl) -> Result<TokenStrea
             generic
         }
     };
-    let (_, trait_path, _) = item.trait_.as_mut().expect("checked above");
-    let last = trait_path.segments.last_mut().expect("checked above");
-    last.arguments = PathArguments::AngleBracketed(parse_quote!(<#event, #transaction>));
 
-    let named = arguments.namespace.map(|namespace| {
-        // The handler's type alone has a namespace, whatever the unit of
-        // work: only the parameters of the type, without the bounds the
-        // handler needs (which may name the transaction).
-        let self_ty = &item.self_ty;
-        let used = idents(self_ty.to_token_stream());
-        let mut generics = item.generics.clone();
-        generics.where_clause = None;
-        generics.params = generics
-            .params
-            .into_iter()
-            .filter_map(|param| match param {
-                GenericParam::Type(mut ty) => used.contains(&ty.ident.to_string()).then(|| {
-                    ty.bounds.clear();
-                    ty.colon_token = None;
-                    ty.default = None;
-                    GenericParam::Type(ty)
-                }),
-                GenericParam::Lifetime(mut lifetime) => used.contains(&lifetime.lifetime.ident.to_string()).then(|| {
-                    lifetime.bounds.clear();
-                    lifetime.colon_token = None;
-                    GenericParam::Lifetime(lifetime)
-                }),
-                GenericParam::Const(constant) => {
-                    used.contains(&constant.ident.to_string()).then_some(GenericParam::Const(constant))
+    let (_, trait_path, _) = item.trait_.as_mut().expect("checked above");
+    // The path as written (`EventHandler`), still referred to below so its
+    // import does not read as unused once the impl names another trait.
+    let mut written = trait_path.clone();
+    if let Some(last) = written.segments.last_mut() {
+        last.arguments = PathArguments::None;
+    }
+    *trait_path = match &arguments.namespace {
+        Some(namespace) => {
+            parse_quote!(#krate::NamespaceHandler<{ #krate::namespace_id(#namespace) }, #event, #transaction>)
+        }
+        None => parse_quote!(#krate::EventHandler<#event, #transaction>),
+    };
+    Ok(quote! {
+        #item
+        const _: () = {
+            #[allow(unused_imports)]
+            use #written as _;
+        };
+    })
+}
+
+/// The arguments of `#[projection(...)]`.
+pub struct ProjectionArguments {
+    /// `name = "..."`: the prefix of its processors.
+    name: LitStr,
+    /// `events = Type`.
+    events: Type,
+    /// `namespaces("...", ...)`.
+    namespaces: Vec<LitStr>,
+}
+
+impl syn::parse::Parse for ProjectionArguments {
+    fn parse(input: syn::parse::ParseStream) -> Result<Self> {
+        let (mut name, mut events, mut namespaces) = (None, None, None);
+        let span = input.span();
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            match key.to_string().as_str() {
+                "name" => {
+                    input.parse::<syn::Token![=]>()?;
+                    name = Some(input.parse::<LitStr>()?);
                 }
-            })
-            .collect();
-        let (impl_generics, _, _) = generics.split_for_impl();
-        quote! {
-            #[automatically_derived]
-            impl #impl_generics #krate::Projection for #self_ty where #self_ty: ::core::marker::Send + ::core::marker::Sync {
-                const NAMESPACE: &'static str = #namespace;
+                "events" => {
+                    input.parse::<syn::Token![=]>()?;
+                    events = Some(input.parse::<Type>()?);
+                }
+                "namespaces" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    let list = content.parse_terminated(|input| input.parse::<LitStr>(), syn::Token![,])?;
+                    namespaces = Some(list.into_iter().collect::<Vec<_>>());
+                }
+                _ => {
+                    return Err(Error::new(
+                        key.span(),
+                        "expected `name = \"...\"`, `events = Type` or `namespaces(\"...\", ...)`",
+                    ));
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
             }
         }
-    });
-    let mut output = item.into_token_stream();
-    output.extend(named);
-    Ok(output)
+        let name = name.ok_or_else(|| Error::new(span, "missing `name = \"...\"`"))?;
+        let events = events.ok_or_else(|| Error::new(span, "missing `events = EventType`"))?;
+        let namespaces = namespaces.ok_or_else(|| Error::new(span, "missing `namespaces(\"...\", ...)`"))?;
+        if namespaces.is_empty() {
+            return Err(Error::new(span, "a projection needs at least one namespace"));
+        }
+        for (index, namespace) in namespaces.iter().enumerate() {
+            if namespaces[..index]
+                .iter()
+                .any(|other| other.value() == namespace.value())
+            {
+                return Err(Error::new(namespace.span(), "this namespace is listed twice"));
+            }
+        }
+        Ok(Self {
+            name,
+            events,
+            namespaces,
+        })
+    }
+}
+
+/// Expansion of `#[projection(...)]`: the struct, `Projection`, one
+/// `HasNamespace` per namespace, and `Route` over every namespace's handler.
+pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<TokenStream2> {
+    let krate = krate();
+    let ProjectionArguments {
+        name,
+        events,
+        namespaces,
+    } = arguments;
+    let ident = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let self_ty = quote!(#ident #ty_generics);
+    let ids: Vec<_> = namespaces
+        .iter()
+        .map(|namespace| quote!({ #krate::namespace_id(#namespace) }))
+        .collect();
+    let indices: Vec<_> = (0..namespaces.len()).collect();
+    // The struct's parameters have no bounds of their own: the projection is
+    // shared by its processors, so it is `Send + Sync + 'static` itself.
+    let mut projection_generics = item.generics.clone();
+    projection_generics
+        .make_where_clause()
+        .predicates
+        .push(parse_quote!(#ident #ty_generics: ::core::marker::Send + ::core::marker::Sync + 'static));
+    let projection_where = projection_generics.where_clause.clone();
+    let has: Vec<_> = namespaces
+        .iter()
+        .zip(&ids)
+        .map(|(namespace, id)| {
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics #krate::HasNamespace<#id> for #self_ty #where_clause {
+                    const NAME: &'static str = #namespace;
+                }
+            }
+        })
+        .collect();
+
+    // `Route` for units of work `__CqrsTx`: the struct's generics, plus it.
+    let mut route_generics = item.generics.clone();
+    route_generics
+        .params
+        .push(GenericParam::Type(parse_quote!(__CqrsTx: ::core::marker::Send)));
+    let route_where = route_generics.make_where_clause();
+    route_where
+        .predicates
+        .push(parse_quote!(Self: #krate::Projection<Event = #events>));
+    for id in &ids {
+        route_where
+            .predicates
+            .push(parse_quote!(Self: #krate::NamespaceHandler<#id, #events, __CqrsTx>));
+    }
+    let (route_impl, _, route_where) = route_generics.split_for_impl();
+    let handler = |id: &TokenStream2| quote!(<Self as #krate::NamespaceHandler<#id, #events, __CqrsTx>>);
+    let handles = ids.iter().map(&handler);
+    let commits = ids.iter().map(&handler);
+    let resets = ids.iter().map(&handler);
+    let replays = ids.iter().map(&handler);
+    let (i1, i2, i3, i4) = (&indices, &indices, &indices, &indices);
+
+    Ok(quote! {
+        #item
+
+        #[automatically_derived]
+        impl #impl_generics #krate::Projection for #self_ty #projection_where {
+            const NAME: &'static str = #name;
+            type Event = #events;
+            const NAMESPACES: &'static [&'static str] = &[#(#namespaces),*];
+        }
+
+        #(#has)*
+
+        #[automatically_derived]
+        impl #route_impl #krate::Route<__CqrsTx> for #self_ty #route_where {
+            async fn handle(
+                &self,
+                namespace: usize,
+                event: &#krate::EventEnvelope<#events>,
+                context: &mut #krate::ProcessingContext<'_, __CqrsTx>,
+            ) -> ::core::result::Result<(), #krate::HandlerError> {
+                match namespace {
+                    #(#i1 => #handles::handle(self, event, context).await,)*
+                    _ => ::core::result::Result::Ok(()),
+                }
+            }
+
+            async fn committed(&self, namespace: usize, event: &#krate::EventEnvelope<#events>) {
+                match namespace {
+                    #(#i2 => #commits::committed(self, event).await,)*
+                    _ => {}
+                }
+            }
+
+            async fn reset(
+                &self,
+                namespace: usize,
+                context: &mut #krate::ProcessingContext<'_, __CqrsTx>,
+            ) -> ::core::result::Result<(), #krate::HandlerError> {
+                match namespace {
+                    #(#i3 => #resets::reset(self, context).await,)*
+                    _ => ::core::result::Result::Ok(()),
+                }
+            }
+
+            fn replays(namespace: usize) -> bool {
+                match namespace {
+                    #(#i4 => #replays::REPLAY,)*
+                    _ => true,
+                }
+            }
+        }
+    })
 }
 
 /// `E` in `&EventEnvelope<E>`.
@@ -222,19 +380,4 @@ impl VisitMut for AddTransaction<'_> {
         }
         syn::visit_mut::visit_path_segment_mut(self, segment);
     }
-}
-
-/// Every identifier in `tokens`, nested groups included.
-fn idents(tokens: TokenStream2) -> std::collections::HashSet<String> {
-    let mut found = std::collections::HashSet::new();
-    for token in tokens {
-        match token {
-            proc_macro2::TokenTree::Ident(ident) => {
-                found.insert(ident.to_string());
-            }
-            proc_macro2::TokenTree::Group(group) => found.extend(idents(group.stream())),
-            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {}
-        }
-    }
-    found
 }

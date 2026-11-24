@@ -565,7 +565,11 @@ async fn interceptors_audit_every_command_and_measure_the_projection() {
             ("PublishPost", None, false)
         ]
     );
-    assert_eq!(running.metrics.handled(), 2, "created and published, each applied once");
+    assert_eq!(
+        running.metrics.handled(),
+        4,
+        "created and published, each applied once in each of the projection's two namespaces"
+    );
     server.abort();
     running.stop().await;
 }

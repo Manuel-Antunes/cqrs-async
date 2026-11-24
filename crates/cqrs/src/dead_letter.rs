@@ -251,7 +251,10 @@ where
         while let Some(letter) = queue.first(processor, &sequence).await? {
             let mut tx = transactions.begin().await?;
             if handler
-                .handle(&letter.event, &mut ProcessingContext::new(&mut tx, false))
+                .handle(
+                    &letter.event,
+                    &mut ProcessingContext::in_processor(&mut tx, false, processor),
+                )
                 .await
                 .is_err()
             {

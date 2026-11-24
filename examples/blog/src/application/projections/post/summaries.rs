@@ -1,40 +1,27 @@
+//! The `summaries` namespace: the read model the queries answer from.
+
 use std::sync::Arc;
 
 use cqrs::{EmitUpdates, EventEnvelope, EventHandler, HandlerError, ProcessingContext};
 
+use super::PostProjection;
 use crate::{
     application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore, PostUpdates},
     domain::{PostEvent, PostId},
 };
 
 /// Keeps the [`PostSummaryRepository`] read model in step with the posts'
-/// events (Axon 5's projection: an event handling component with its
-/// dependencies, in a processor named by its namespace). The queries' new
-/// results are pushed by [`PostSummaryUpdates`], on every instance.
-///
-/// Each event is applied once, in order: the processor commits the change
-/// and its token in one unit of work, so there is no bookkeeping of what was
-/// applied (as in Axon, with the token store next to the read model).
-///
-/// Generic over the read model's ports and over the unit of work it writes
-/// in: the adapter (in memory, SeaORM in the processor's PostgreSQL
-/// transaction) is the composition root's choice.
-pub struct PostSummaryProjection<S> {
-    /// Where the rows are kept.
-    summaries: Arc<S>,
-}
-
-impl<S> PostSummaryProjection<S> {
-    /// A projection writing to `summaries`.
-    pub fn new(summaries: Arc<S>) -> Self {
-        Self { summaries }
-    }
-}
-
-#[cqrs::projection(namespace = "post-summaries")]
-impl<S, Tx> EventHandler for PostSummaryProjection<S>
+/// events. Each event is applied once, in order: the processor commits the
+/// change and its token in one unit of work, so there is no bookkeeping of
+/// what was applied (as in Axon, with the token store next to the read
+/// model). Generic over the unit of work it writes in: the adapter (in
+/// memory, SeaORM in the processor's PostgreSQL transaction) is the
+/// composition root's choice.
+#[cqrs::event_handler(namespace = "summaries")]
+impl<S, N, Tx> EventHandler for PostProjection<S, N>
 where
     S: PostSummaryRepository + PostSummaryStore<Tx>,
+    N: Send + Sync,
     Tx: Send,
 {
     async fn handle(

@@ -42,7 +42,7 @@ struct Totals {
     updates: Arc<Updates>,
 }
 
-#[cqrs::projection(namespace = "totals")]
+#[cqrs::event_handler]
 impl EventHandler for Totals {
     async fn handle(&self, event: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
         *self
@@ -98,7 +98,7 @@ struct Queries {
 /// Emits only, holds nothing; no namespace: it runs in a group.
 struct Ticks(Arc<QueryUpdateEmitter<GrandTotal, u64>>);
 
-#[cqrs::projection]
+#[cqrs::event_handler]
 impl EventHandler for Ticks {
     async fn handle(&self, _: &EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
         Ok(())
@@ -146,7 +146,7 @@ async fn subscriptions_get_the_current_result_then_the_updates_for_their_query()
         Arc::clone(&updates),
     );
     tick(&events, "a", 1).await;
-    let projection = events.projection(Arc::clone(&totals)).spawn();
+    let projection = events.processor("totals", Arc::clone(&totals)).spawn();
     within(projection.caught_up(1)).await;
 
     let mut a = Box::pin(queries.subscribe(TotalOf { clock: "a".into() }));

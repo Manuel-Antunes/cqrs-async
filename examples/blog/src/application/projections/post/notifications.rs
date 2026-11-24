@@ -1,7 +1,11 @@
-use std::{fmt, future::Future, sync::Arc};
+//! The `notifications` namespace: a side effect, announcing what gets
+//! published.
+
+use std::{fmt, future::Future};
 
 use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
 
+use super::PostProjection;
 use crate::domain::PostEvent;
 
 /// Port to whatever delivers notifications (e-mail, chat, ...).
@@ -22,22 +26,10 @@ impl fmt::Display for NotificationError {
 
 impl std::error::Error for NotificationError {}
 
-/// Announces every post that gets published, in a processor of its own.
-pub struct NotifyOnPublish<N> {
-    /// Who delivers the announcement.
-    notifier: Arc<N>,
-}
-
-impl<N> NotifyOnPublish<N> {
-    /// A policy that announces through `notifier`.
-    pub fn new(notifier: Arc<N>) -> Self {
-        Self { notifier }
-    }
-}
-
-#[cqrs::projection(namespace = "notify-on-publish")]
-impl<N: Notifier> EventHandler for NotifyOnPublish<N> {
-    /// A notification already went out: a replay must not send it again.
+/// Announces every post that gets published. A notification already went
+/// out: a replay must not send it again, so it does not see replays.
+#[cqrs::event_handler(namespace = "notifications")]
+impl<S: Send + Sync, N: Notifier> EventHandler for PostProjection<S, N> {
     const REPLAY: bool = false;
 
     /// Announces the post if `event` published it.

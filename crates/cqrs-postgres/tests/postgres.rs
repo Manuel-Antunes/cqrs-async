@@ -1276,7 +1276,7 @@ struct Totals {
 #[derive(Clone)]
 struct Applied;
 
-#[cqrs::projection(namespace = "totals")]
+#[cqrs::event_handler]
 impl EventHandler for Totals {
     async fn handle(
         &self,
@@ -1340,7 +1340,10 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         ..Totals::default()
     };
     let mut announced = Box::pin(totals_projection.applied.subscribe(Applied));
-    let running = events.projection(totals_projection).with_options(options(2, 2)).spawn();
+    let running = events
+        .processor("totals", totals_projection)
+        .with_options(options(2, 2))
+        .spawn();
     tokio::time::timeout(Duration::from_secs(20), running.caught_up(last))
         .await
         .expect("caught up");
@@ -1374,9 +1377,12 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
 
     // Replay: the reset handler truncates, and the rebuild gives the same.
     running.stop().await;
-    events.projection(Totals::default()).reset().await.unwrap();
+    events.processor("totals", Totals::default()).reset().await.unwrap();
     assert_eq!(totals(&pool).await, (0, 0));
-    let running = events.projection(Totals::default()).with_options(options(2, 2)).spawn();
+    let running = events
+        .processor("totals", Totals::default())
+        .with_options(options(2, 2))
+        .spawn();
     tokio::time::timeout(Duration::from_secs(20), running.caught_up(last))
         .await
         .expect("rebuilt");
@@ -1598,7 +1604,10 @@ async fn a_failing_projection_interceptor_rolls_the_write_back() {
     // FailsOnce outermost: the audit row and the total of the failed try
     // are in the same transaction, both rolled back.
     let projection = cqrs::Intercepted::new(Totals::default(), (FailsOnce(Default::default()), AuditRows));
-    let running = events.projection(projection).with_options(options(1, 1)).spawn();
+    let running = events
+        .processor("totals", projection)
+        .with_options(options(1, 1))
+        .spawn();
     tokio::time::timeout(Duration::from_secs(20), running.caught_up(last))
         .await
         .expect("caught up");
@@ -1640,7 +1649,10 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         batch_size: 64,
         ..options(2, 2)
     };
-    let running = events.projection(totals_projection).with_options(batched).spawn();
+    let running = events
+        .processor("totals", totals_projection)
+        .with_options(batched)
+        .spawn();
     tokio::time::timeout(Duration::from_secs(20), running.caught_up(last))
         .await
         .expect("caught up");

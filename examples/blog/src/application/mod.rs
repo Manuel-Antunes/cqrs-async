@@ -10,8 +10,8 @@
 //!   [`PostQueryGateway`](queries::PostQueryGateway). They never touch the
 //!   event store.
 //! - [`projections`] handle committed events: one keeps the read model up
-//!   to date ([`PostSummaryProjection`](projections::PostSummaryProjection)),
-//!   another notifies ([`NotifyOnPublish`](projections::NotifyOnPublish)).
+//!   to date and notifies, one namespace each
+//!   ([`PostProjection`](projections::PostProjection)).
 //!
 //! Every handler is one struct per message, generic over the ports it needs;
 //! the concrete adapters are chosen by the composition root

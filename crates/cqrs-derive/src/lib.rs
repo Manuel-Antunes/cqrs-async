@@ -81,40 +81,36 @@ pub fn derive_query_updates(input: TokenStream) -> TokenStream {
     into_stream(query_updates::query_updates(parse_macro_input!(input)))
 }
 
-/// Implements `Aggregate` for a struct: `TYPE` from `#[aggregate(name =
-/// "...")]` (default: the struct's name in snake case), the `Id` from the
-/// field `id` (or the one marked `#[aggregate(id)]`), the initial state
-/// with every other field at its `Default` (or `#[aggregate(initial =
-/// path)]`, called with `&Id`), and `evolve` calling the struct's inherent
-/// `apply(&mut self, &Event)` (or `#[aggregate(apply = method)]`).
+/// On `impl EventHandler for H`: fills in the event type and the unit of
+/// work from `handle`'s signature (`&EventEnvelope<Event>`,
+/// `&mut ProcessingContext<'_, Tx>`; without a `Tx`, generic over any).
 ///
-/// `#[aggregate(tag = "course")]` builds the aggregate from every event
-/// tagged `course=<id>`, whatever stream holds it (Axon 5's entity sourced
-/// by tags, for dynamic consistency boundaries).
+/// With `namespace = "..."`, the impl is the handler of that namespace of
+/// `H`'s projection (`#[cqrs::projection]` on `H`, which must list it). One
+/// struct then has one such impl per namespace, each run by a processor of
+/// its own.
 ///
 /// ```ignore
-/// #[derive(AggregateRoot)]
-/// #[aggregate(event = PostEvent)]
-/// struct Post { id: PostId, title: String, published: bool }
-///
-/// impl Post {
-///     fn apply(&mut self, event: &PostEvent) { /* ... */ }
+/// #[cqrs::event_handler(namespace = "summaries")]
+/// impl EventHandler for PostProjection {
+///     async fn handle(&self, event: &EventEnvelope<PostEvent>, context: &mut ProcessingContext<'_>)
+///         -> Result<(), HandlerError> { .. }
 /// }
 /// ```
-/// On `impl EventHandler for H`: fills in the trait's event type (from
-/// `handle`'s `&EventEnvelope<Event>`) and unit of work (from its
-/// `&mut ProcessingContext<'_, Tx>`; none named: any, so the handler runs
-/// with every token store), and with `namespace = "..."` implements
-/// `Projection`: the processor's name (Axon's `@Namespace`).
-///
-/// ```text
-/// #[cqrs::projection(namespace = "post-summaries")]
-/// impl EventHandler for PostSummaries {
-///     async fn handle(&self, event: &EventEnvelope<PostEvent>, context: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
-///         match &event.payload { /* ... */ }
-///     }
-/// }
-/// ```
+#[proc_macro_attribute]
+pub fn event_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
+    into_stream(projection::event_handler(
+        parse_macro_input!(arguments),
+        parse_macro_input!(item),
+    ))
+}
+
+/// On a projection's struct: `#[cqrs::projection(name = "post", events =
+/// PostEvent, namespaces("summaries", "notifications"))]`. Implements
+/// `Projection` (its name, events and namespaces) and `Route` (each
+/// namespace to its `#[cqrs::event_handler(namespace = ..)]` impl): a
+/// projection missing a handler does not run, and a handler for a namespace
+/// not listed does not compile. Put it before `#[derive]`.
 #[proc_macro_attribute]
 pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(projection::projection(

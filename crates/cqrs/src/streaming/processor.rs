@@ -292,7 +292,7 @@ where
         }
         let mut tx = self.transactions.begin().await?;
         self.handler
-            .reset(&mut ProcessingContext::new(&mut tx, false))
+            .reset(&mut ProcessingContext::in_processor(&mut tx, false, &self.name))
             .await
             .map_err(ResetError::Handler)?;
         Ok(self.transactions.commit(tx).await?)
@@ -866,7 +866,11 @@ where
         for (event, _) in batch {
             let replay = event.position <= replay_until;
             self.handler
-                .handle_in(event, &mut ProcessingContext::new(&mut tx, replay), INTERNAL)
+                .handle_in(
+                    event,
+                    &mut ProcessingContext::in_processor(&mut tx, replay, &self.name),
+                    INTERNAL,
+                )
                 .await?;
         }
         let token = TrackingToken {
@@ -973,7 +977,11 @@ where
     ) -> Result<TokenUpdate, HandlerError> {
         let mut tx = self.transactions.begin().await.map_err(HandlerError::from)?;
         self.handler
-            .handle_in(event, &mut ProcessingContext::new(&mut tx, token.replay), INTERNAL)
+            .handle_in(
+                event,
+                &mut ProcessingContext::in_processor(&mut tx, token.replay, token.processor),
+                INTERNAL,
+            )
             .await?;
         if !self.tokens.store(&mut tx, token).await.map_err(HandlerError::from)? {
             // Another instance owns the segment: dropping `tx` rolls back.

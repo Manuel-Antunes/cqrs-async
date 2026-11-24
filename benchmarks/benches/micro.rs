@@ -131,20 +131,23 @@ mod interceptors {
     use std::{future::Future, sync::Arc, time::SystemTime};
 
     use blog::{
-        application::projections::PostSummaryProjection,
+        application::projections::PostProjection,
         domain::PostEvent,
-        infrastructure::{InMemoryPostSummaryRepository, Measured, ProjectionMetrics},
+        infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository, Measured, ProjectionMetrics},
     };
     use cqrs::{
-        DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, HandlerError, Intercepted, Interceptor,
-        Message, Metadata, ProcessingContext, StreamId,
+        DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, Interceptor, Message,
+        Metadata, ProcessingContext, Route, StreamId,
     };
 
-    type Summaries = PostSummaryProjection<InMemoryPostSummaryRepository>;
+    type Summaries = PostProjection<InMemoryPostSummaryRepository, InMemoryNotifier>;
 
     fn summaries() -> Summaries {
-        PostSummaryProjection::new(Arc::default())
+        PostProjection::new(Arc::default(), Arc::default())
     }
+
+    /// The projection's `summaries` namespace.
+    const SUMMARIES: usize = 0;
 
     fn context(unit: &mut ()) -> ProcessingContext<'_> {
         ProcessingContext::new(unit, false)
@@ -212,7 +215,7 @@ mod interceptors {
                 title: "a".into(),
             },
         };
-        now(summaries.handle(&created, &mut context(&mut ()))).unwrap();
+        now(summaries.handle(SUMMARIES, &created, &mut context(&mut ()))).unwrap();
         let payload = PostEvent::Retitled { title: "b".into() };
         EventEnvelope {
             position: 2,
@@ -229,7 +232,7 @@ mod interceptors {
     fn event_plain(bencher: divan::Bencher) {
         let summaries = summaries();
         let event = retitled(&summaries);
-        bencher.bench_local(|| now(summaries.handle(black_box(&event), &mut context(&mut ()))).unwrap());
+        bencher.bench_local(|| now(summaries.handle(SUMMARIES, black_box(&event), &mut context(&mut ()))).unwrap());
     }
 
     /// The same, through an interceptor that only calls `next`.
@@ -237,7 +240,7 @@ mod interceptors {
     fn event_intercepted(bencher: divan::Bencher) {
         let summaries = Intercepted::new(summaries(), Pass);
         let event = retitled(summaries.inner());
-        bencher.bench_local(|| now(summaries.handle(black_box(&event), &mut context(&mut ()))).unwrap());
+        bencher.bench_local(|| now(summaries.handle(SUMMARIES, black_box(&event), &mut context(&mut ()))).unwrap());
     }
 
     /// The same, through the blog's `Measured` (a clock read, two atomics).
@@ -245,7 +248,7 @@ mod interceptors {
     fn event_measured(bencher: divan::Bencher) {
         let summaries = Intercepted::new(summaries(), Measured(Arc::new(ProjectionMetrics::default())));
         let event = retitled(summaries.inner());
-        bencher.bench_local(|| now(summaries.handle(black_box(&event), &mut context(&mut ()))).unwrap());
+        bencher.bench_local(|| now(summaries.handle(SUMMARIES, black_box(&event), &mut context(&mut ()))).unwrap());
     }
 }
 

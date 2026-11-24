@@ -21,6 +21,7 @@ use std::future::Future;
 
 use crate::{
     Dispatch, DomainEvent, EventEnvelope, EventHandler, HandlerError, Message, Metadata, ProcessingContext, Projection,
+    Route,
 };
 
 /// Runs around the handling of messages `M`: it may look at or change the
@@ -319,7 +320,62 @@ where
     }
 }
 
-/// An intercepted projection keeps its namespace.
-impl<P: Projection, I: Send + Sync> Projection for Intercepted<P, I> {
-    const NAMESPACE: &'static str = P::NAMESPACE;
+/// An intercepted projection is the projection.
+impl<P: Projection, I: Send + Sync + 'static> Projection for Intercepted<P, I> {
+    const NAME: &'static str = P::NAME;
+    type Event = P::Event;
+    const NAMESPACES: &'static [&'static str] = P::NAMESPACES;
+}
+
+/// The end of the chain around a projection: the handler of one of its
+/// namespaces.
+struct RouteIn<'p, 'e, P: Projection> {
+    projection: &'p P,
+    namespace: usize,
+    event: &'e EventEnvelope<P::Event>,
+}
+
+impl<Tx: Send, P: Route<Tx>> EventChain<Tx> for RouteIn<'_, '_, P> {
+    fn proceed(self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        self.projection.handle(self.namespace, self.event, context)
+    }
+}
+
+/// An intercepted projection: every namespace's events go through the
+/// interceptor, then to their handler.
+impl<Tx, P, I> Route<Tx> for Intercepted<P, I>
+where
+    Tx: Send,
+    P: Route<Tx>,
+    I: EventInterceptor<P::Event, Tx> + 'static,
+{
+    fn handle(
+        &self,
+        namespace: usize,
+        event: &EventEnvelope<P::Event>,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        let next = RouteIn {
+            projection: &self.inner,
+            namespace,
+            event,
+        };
+        self.interceptor.intercept(event, context, next)
+    }
+
+    fn committed(&self, namespace: usize, event: &EventEnvelope<P::Event>) -> impl Future<Output = ()> + Send {
+        self.inner.committed(namespace, event)
+    }
+
+    fn reset(
+        &self,
+        namespace: usize,
+        context: &mut ProcessingContext<'_, Tx>,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        self.inner.reset(namespace, context)
+    }
+
+    fn replays(namespace: usize) -> bool {
+        P::replays(namespace)
+    }
 }

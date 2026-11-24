@@ -9,7 +9,7 @@ use crate::{
 
 /// The read model in memory: one row per post. Only storage: what the rows
 /// hold is the
-/// [`PostSummaryProjection`](crate::application::projections::PostSummaryProjection)'s
+/// [`PostProjection`](crate::application::projections::PostProjection)'s
 /// business. Its unit of work is `()`: there is nothing to roll back.
 #[derive(Default)]
 pub struct InMemoryPostSummaryRepository {
