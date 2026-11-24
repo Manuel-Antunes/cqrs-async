@@ -162,3 +162,39 @@ in the run before, theirs improved (22.6 against 24.8 ms; 1.76 against
 2.10 ms). The snapshot replay does not go through a command at all. Open
 account, which misses before, passes now, with our highest throughput so
 far. Read as noise on a loaded machine: the A/B on a quiet one decides.
+
+## 2026-11-24, A/B against `5437e6e` after 7b, D17 and D18 (`768ac7d`)
+
+The two release binaries run alternately, three rounds of one run each
+(base, head, base, head, base, head). Nothing else ran on the machine:
+load average 2.8 before the first round, 10-13 during the runs (the
+benchmark's own 32 clients per system and PostgreSQL).
+
+| Measure | Passes if | base r1 | base r2 | base r3 | **base** | head r1 | head r2 | head r3 | **head** |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| open account, cmd/s | >= 1.10 | 1.41 (3887) | 1.28 (4113) | 1.22 (4118) | **1.28** | 1.24 (4578) | 1.11 (3890) | 1.18 (4393) | **1.18** |
+| open account, p99 | | 0.70 (23.4) | 0.79 (17.7) | 0.90 (18.0) | **0.79** | 0.94 (15.2) | 1.83 (25.7) | 1.22 (16.8) | **1.22** |
+| mixed load, cmd/s | >= 1.25 | 1.37 (3798) | 1.34 (3837) | 1.28 (3877) | **1.34** | 1.16 (3528) | 1.53 (3257) | 1.32 (3929) | **1.32** |
+| mixed load, p99 | <= 0.76 | 0.82 (19.7) | 0.80 (18.9) | 0.81 (18.5) | **0.81** | 0.95 (21.8) | 0.33 (24.0) | 0.80 (18.4) | **0.80** |
+| mixed load, all done | <= 0.77 | 0.75 | 0.76 | 0.80 | **0.76** | 0.88 | 0.66 | 0.77 | **0.77** |
+| hot account, cmd/s | >= 1.00 | 0.80 | 1.29 | 1.31 | **1.29** | 1.41 | 1.15 | 1.21 | **1.21** |
+| read model rebuild | >= 16 | 18.1 | 24.0 | 26.4 | **24.0** | 22.9 | 18.9 | 34.7 | **22.9** |
+| 5000-event replay, p50 | <= 0.95 | 0.79 | 0.77 | 0.87 | **0.79** | 0.81 | 0.77 | 0.81 | **0.81** |
+| with snapshot every 100, p50 | <= 0.61 | 0.62 | 0.35 | 0.64 | **0.62** | 0.65 | 0.61 | 0.33 | **0.61** |
+| events or money lost (ours / cqrs-es events) | 0 | 0 / 195 | 0 / 179 | 0 / 197 | **0** | 0 / 200 | 0 / 208 | 0 / 211 | **0** |
+
+Head and base are equal within the spread of their own rounds on every
+measure. Mixed p99 misses its threshold on both, by the same amount (0.80
+and 0.81): the threshold comes from a 0.63 this machine does not
+reproduce, with the base code either. The open account p99 of 38 ms seen
+before (`926476c`) did not come back: ours was 15-26 ms, as low as or lower
+than the base's 18-23 ms; its ratio moves with cqrs-es's p99.
+
+Micro benchmarks (median, load below 6): `command_cycle` 1.02 us,
+`command_intercepted_4` 13.6 ns, `interceptors/command_plain` 3.4 ns.
+`dispatch` now routes a query (`Echo`), commands always running in a unit
+of work (D17). `unit/command_gateway` is 29.4 ns against 14.3 ns at
+`5437e6e`; measured at `c75b727` (before D17) it was 33.1 ns, so the
+difference is the command's unit of work (7b.1b: begin, append, commit,
+announce, the retry loop), not D17 or D18. 15 ns per command against a
+command of about 1 ms on PostgreSQL; the versus does not see it.
