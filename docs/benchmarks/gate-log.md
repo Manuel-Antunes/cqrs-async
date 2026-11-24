@@ -64,3 +64,53 @@ Micro benchmarks (median): `unit/command_gateway` 13.1 ns (Phase 0: 13.7), `comm
 375 ns (458). The static dispatch the plan wants kept costs nothing more after moving the publisher
 into the handler. (These are not the plan's 4.0 / 15.6 ns: the plan's numbers do not reproduce on this
 machine even for the Phase 0 code.)
+
+## After the review fixes (commit 4662e11)
+
+Snapshot-store failures logged, `tracing` without default features, dead letters as one trait over
+the unit of work. Two plain gate runs back to back, median of 3 each. The machine was in use: load
+average 10-11 during run a, 12-17 during run b.
+
+| Measure | gate | run a | run b |
+|---|---|---:|---:|
+| open account, cmd/s | >= 1.10 | 0.95 (3265) | 1.10 (3040) |
+| mixed load, cmd/s | >= 1.25 | 1.30 (3316) | 1.12 (2603) |
+| mixed load, p99 | <= 0.76 | 0.69 (24.45) | 0.86 (34.25) |
+| mixed load, all done | <= 0.77 | 0.78 (6111) | 0.91 (7797) |
+| hot account, cmd/s | >= 1.00 | 1.10 (103) | 1.29 (105) |
+| read model rebuild | >= 16 | 39.99 (41624) | 20.89 (26373) |
+| 5000-event replay, p50 | <= 0.95 | 0.85 (4.60) | 0.79 (4.52) |
+| snapshot every 100, p50 | <= 0.61 | 0.54 (1.23) | 0.36 (1.71) |
+
+Events and money lost by our read model: 0 in both runs (cqrs-es: 171 and 254 events).
+
+Run a misses two measures (open account, all done by 0.01), run b misses three (mixed throughput,
+p99, all done). Only "all done" is missed in both, and the Phase 0 code missed it too under load
+(A/B rows above). Throughput of both libraries fell from run a to run b as the load rose. The gate
+is still undecided on this machine; none of the three commits touches the write path.
+
+Micro benchmarks (median): `unit/command_gateway` 12.7 ns, `command_through_unit` 12.4,
+`command_intercepted_4` 10.8, `command_cycle` 1.01 us, `add_new_aggregate` 333 ns,
+`dispatch/derived_gateway` 1.4 ns, `load_with_snapshot_100k_events` 116 ns. Equal to or slightly
+better than the Phase 3 numbers above.
+
+### A/B against the Phase 0 code (18839c6 vs 4662e11)
+
+The two release binaries run alternately, three rounds of one run each. Load average 17-22 (the
+machine was busier than in any earlier run). Ours / theirs, ours in parentheses.
+
+| Measure | base 1 | head 1 | base 2 | head 2 | base 3 | head 3 |
+|---|---:|---:|---:|---:|---:|---:|
+| open account, cmd/s | 1.38 (3234) | 1.22 (2886) | 1.10 (3400) | 1.09 (2729) | 1.15 (2731) | 1.20 (4476) |
+| mixed load, cmd/s | 1.24 (2408) | 1.43 (2465) | 1.30 (3440) | 1.28 (2366) | 1.32 (2572) | 1.32 (3885) |
+| mixed load, p99 | 0.79 (35.69) | 0.68 (33.97) | 0.88 (30.58) | 0.76 (36.34) | 0.79 (34.08) | 0.74 (18.26) |
+| mixed load, all done | 0.81 (8401) | 0.71 (8201) | 0.78 (5899) | 0.79 (8532) | 0.77 (7901) | 0.77 (5200) |
+| hot account, cmd/s | 1.23 (93.55) | 1.14 (96.32) | 1.25 (115) | 1.18 (93.89) | 1.31 (97.74) | 1.23 (130) |
+| read model rebuild | 27.69 (20891) | 13.25 (22091) | 44.70 (39412) | 28.60 (21157) | 15.33 (21494) | 22.28 (42646) |
+| 5000-event replay, p50 | 0.75 (5.92) | 0.85 (4.21) | 0.71 (5.33) | 0.97 (7.06) | 0.79 (3.90) | 0.81 (4.07) |
+| snapshot every 100, p50 | 0.35 (2.27) | 0.33 (1.13) | 0.39 (1.88) | 0.21 (1.38) | 0.60 (1.09) | 0.55 (1.20) |
+
+Median ratio, base then head: open account 1.15 / 1.20, mixed 1.30 / 1.32, mixed p99 0.79 / 0.74,
+all done 0.78 / 0.77, hot account 1.25 / 1.18. The same binary moves between 2700 and 4500 cmd/s on
+open account with the machine's load, and cqrs-es moves with it. No difference between the Phase 0
+code and the current one stands out of that spread.
