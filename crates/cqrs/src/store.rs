@@ -12,7 +12,7 @@ use std::{
 
 use crate::{AppendCondition, Cursor, DomainEvent, EventCriteria, EventEnvelope, Horizon, Metadata, StreamId, Tag};
 
-/// An event with its tags, resolved once by [`EventStore::append_if`]:
+/// An event with its tags, resolved once by [`AppendEvents::append_if`]:
 /// what a store writes. The tags are sorted and without duplicates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaggedEvent<E> {
@@ -34,7 +34,7 @@ impl<E: DomainEvent> TaggedEvent<E> {
 
 /// What a store decided for one appended event: the rest of its envelope
 /// comes from the event and the append's arguments
-/// ([`EventStore::append_if`] builds it).
+/// ([`AppendEvents::append_if`] builds it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Recorded {
     /// Its place in the whole store.
@@ -46,7 +46,7 @@ pub struct Recorded {
 }
 
 /// The version a writer believes the stream is at: the optimistic
-/// concurrency check of [`EventStore::append`]. If the stream moved on since
+/// concurrency check of [`AppendEvents::append`]. If the stream moved on since
 /// the writer read it, the append fails instead of building on stale state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExpectedVersion {
@@ -502,7 +502,7 @@ impl<E: Clone + Send + Sync> ReadLog<E> for InMemoryEventStore<E> {
 }
 
 impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
-    /// The synchronous body of [`EventStore::append`]: checks `expected`
+    /// The synchronous body of [`AppendEvents::append`]: checks `expected`
     /// against the stream's last sequence, then numbers and stores the events.
     fn append_now(
         &self,

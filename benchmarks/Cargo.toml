@@ -3,12 +3,13 @@ name = "cqrs-benchmarks"
 description = "Benchmarks: micro (divan) and load (Tokio harness) for the cqrs PoC"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Over cqrs-postgres: sqlx 0.9's.
+rust-version = "1.94"
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-cqrs.workspace = true
+cqrs = { workspace = true, features = ["derive", "tokio"] }
 blog = { path = "../examples/blog" }
 futures-util.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

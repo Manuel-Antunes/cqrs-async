@@ -2,12 +2,12 @@
 //! stores keep the events and the tokens; SeaORM, the blog's own choice,
 //! keeps the posts' state and the read model, in the same transactions.
 //!
-//! - [`SeaOrm`]: SeaORM over a borrowed sqlx transaction (the `cqrs-sea-orm`
+//! - [`SeaOrm`](crate::infrastructure::postgres::SeaOrm): SeaORM over a borrowed sqlx transaction (the `cqrs-sea-orm`
 //!   crate).
 //! - [`SeaOrmPostRepository`]: the posts' state, saved with their events.
 //! - [`SeaOrmPostSummaries`]: the read model, written in the projection's
 //!   unit of work.
-//! - [`Migrator`]: the blog's migrations, the library's tables among them.
+//! - [`Migrator`](crate::infrastructure::postgres::Migrator): the blog's migrations, the library's tables among them.
 
 /// The tables, as SeaORM entities.
 pub mod entities;

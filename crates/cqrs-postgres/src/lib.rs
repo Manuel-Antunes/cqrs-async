@@ -77,7 +77,7 @@ pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared
 // with any other store keeping JSON.
 pub use cqrs::{StoredEvent, Upcast, Upcaster, upcast};
-/// The `sqlx` this crate is built on: [`PgPool`](sqlx::PgPool) and
+/// The `sqlx` this crate is built on: [`sqlx::PgPool`] and
 /// [`PgTransaction`] are in its API, so a new major version of `sqlx` is a
 /// breaking change of this crate. Use this one to name them.
 pub use sqlx;

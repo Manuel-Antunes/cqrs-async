@@ -82,13 +82,25 @@ jobs:
       - run: cargo check -p cqrs --no-default-features --features json
       - run: cargo test -p cqrs --no-default-features --lib
 
+  # Each crate on its own MSRV: the core and its macros on 1.89; the
+  # PostgreSQL crates on 1.94, the one of sqlx 0.9.
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cqrs -p cqrs-derive -p cqrs-postgres --all-features
+      - run: cargo check -p cqrs -p cqrs-derive --all-features
+      - run: cargo check -p cqrs --no-default-features
+      - run: cargo test -p cqrs --all-features
+
+  msrv-postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p cqrs-postgres -p cqrs-sea-orm --all-features
         env:
           SQLX_OFFLINE: "true"
 

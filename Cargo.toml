@@ -18,7 +18,10 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-cqrs = { path = "crates/cqrs" }
+# Without its default features, so a member can turn them off (the Cargo of
+# the MSRV, 1.89, refuses `default-features = false` over a workspace
+# dependency that has them on): members ask for the features they use.
+cqrs = { path = "crates/cqrs", default-features = false }
 cqrs-derive = { path = "crates/cqrs-derive" }
 cqrs-postgres = { path = "crates/cqrs-postgres" }
 cqrs-sea-orm = { path = "crates/cqrs-sea-orm" }

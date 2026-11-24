@@ -36,7 +36,7 @@ impl Default for SubscriptionOptions {
 ///
 /// It switches between two sources:
 ///
-/// - **the store** ([`EventStore::read`]), the source of truth: used to
+/// - **the store** ([`ReadLog::read`](crate::ReadLog::read)), the source of truth: used to
 ///   catch up at the start, and whenever the live feed may have skipped
 ///   something;
 /// - **the broadcaster**, for low latency once caught up.

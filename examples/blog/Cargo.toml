@@ -9,7 +9,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-cqrs.workspace = true
+cqrs = { workspace = true, features = ["derive", "tokio"] }
 # The PostgreSQL wiring: the library's stores, and SeaORM as the blog's own
 # infrastructure (its repositories, its read model, its migrations).
 cqrs-postgres.workspace = true
