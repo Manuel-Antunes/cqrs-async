@@ -1,7 +1,8 @@
-//! CQRS and event sourcing for Rust, statically dispatched: there is no
-//! `dyn`, no `Box<dyn Future>`, no `Any` and no `TypeId` registry. Routing a
-//! message to its handler is resolved by the type checker, so a missing or
-//! duplicated handler is a compile error instead of a runtime one.
+//! CQRS and event sourcing for Rust, statically dispatched: no handler
+//! registry behind `dyn`, no `Box<dyn Future>`, no `Any` and no `TypeId`
+//! (only errors are boxed, in [`HandlerError`]).
+//! Routing a message to its handler is resolved by the type checker, so a
+//! missing or duplicated handler is a compile error instead of a runtime one.
 //!
 //! A library, not a framework: the application owns its repositories, its
 //! database and its transactions, and lends them to the handlers.
