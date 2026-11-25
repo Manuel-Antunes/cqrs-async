@@ -11,8 +11,11 @@ use blog::{
     domain::{Post, PostEvent},
 };
 use cqrs::{
-    AggregateLoader, EventEnvelope, EventFeed, EventHandler, EventPublisher, Events, HandlerError, InMemoryEventStore,
-    Loaded, Pending, ProcessingContext, ProcessorHandle, StoreError,
+    aggregate::{AggregateLoader, Loaded},
+    command::{EventPublisher, Pending},
+    event::EventEnvelope,
+    processing::{EventHandler, Events, HandlerError, ProcessingContext, ProcessorHandle},
+    store::{EventFeed, InMemoryEventStore, StoreError},
 };
 use futures_util::Stream;
 

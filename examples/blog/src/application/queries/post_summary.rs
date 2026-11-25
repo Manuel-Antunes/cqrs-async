@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use cqrs::StoreError;
+use cqrs::store::StoreError;
 
 use crate::domain::PostId;
 

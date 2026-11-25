@@ -14,8 +14,10 @@ use std::{
 };
 
 use cqrs::{
-    AppendEvents, DomainEvent, EventChain, EventEnvelope, EventHandler, EventInterceptor, Events, ExpectedVersion,
-    HandlerError, InMemoryEventStore, Intercepted, Metadata, ProcessingContext, StreamId,
+    Intercepted,
+    event::{DomainEvent, EventEnvelope, Metadata, StreamId},
+    processing::{EventChain, EventHandler, EventInterceptor, Events, HandlerError, ProcessingContext},
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]

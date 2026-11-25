@@ -20,7 +20,7 @@ use crate::DomainEvent;
 /// Those decision methods take `&self` and an [`EventAppender`]:
 ///
 /// ```
-/// # use cqrs::{Aggregate, EventAppender};
+/// # use cqrs::aggregate::{Aggregate, EventAppender};
 /// # #[derive(cqrs::DomainEvent)] enum PostEvent { Published }
 /// # struct Post { id: u64, published: bool }
 /// # #[derive(Debug)] enum PostError { AlreadyPublished }
@@ -44,7 +44,7 @@ use crate::DomainEvent;
 /// [`New`](crate::New) (Axon 5's static creational command handler):
 ///
 /// ```
-/// # use cqrs::EventAppender;
+/// # use cqrs::aggregate::EventAppender;
 /// # #[derive(cqrs::DomainEvent)] enum PostEvent { Created { id: u64, title: String } }
 /// # struct Post;
 /// # #[derive(Debug)] enum PostError { EmptyTitle }
@@ -102,7 +102,7 @@ pub trait Aggregate: Send + Sync + Sized + 'static {
 /// passes, and what a test passes):
 ///
 /// ```
-/// # use cqrs::EventAppender;
+/// # use cqrs::aggregate::EventAppender;
 /// fn publish(events: &mut impl EventAppender<&'static str>) {
 ///     events.append("published");
 /// }

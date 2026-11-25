@@ -5,8 +5,11 @@
 use std::future::{Future, ready};
 
 use cqrs::{
-    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Loaded,
-    Pending, SnapshotStore, StoreError, testing::block_on,
+    aggregate::{Aggregate, AggregateLoader, InMemorySnapshots, Loaded, SnapshotStore},
+    command::{EventPublisher, Pending},
+    processing::InlinePublisher,
+    store::{InMemoryEventStore, StoreError},
+    testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -59,7 +62,7 @@ impl<N: SnapshotStore<Sum>> App<N> {
     fn add(&self, n: u64) {
         let sum = block_on(self.loader.load(&1))
             .unwrap()
-            .unwrap_or_else(|| cqrs::New(1).into());
+            .unwrap_or_else(|| cqrs::aggregate::New(1).into());
         block_on(self.publisher.commit(sum, Pending::new(vec![Added(n)]))).unwrap();
     }
 

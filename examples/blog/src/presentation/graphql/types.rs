@@ -2,7 +2,7 @@
 //! application's, so renaming a domain field never breaks clients.
 
 use async_graphql::{Enum, ID, SimpleObject};
-use cqrs::EventEnvelope;
+use cqrs::event::EventEnvelope;
 
 use crate::{application::queries::PostSummary, domain::PostEvent};
 

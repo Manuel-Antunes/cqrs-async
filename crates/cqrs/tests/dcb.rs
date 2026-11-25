@@ -10,8 +10,11 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, AppendEvents, CommandContext, CommandGateway, CommandHandler, EventAppender,
-    ExpectedVersion, InMemoryEventStore, InlinePublisher, Metadata, SourceEvents, StoreError, StreamId, TagResolver,
+    aggregate::{Aggregate, AggregateLoader, EventAppender},
+    command::{CommandContext, CommandGateway, CommandHandler},
+    event::{Metadata, StreamId, TagResolver},
+    processing::InlinePublisher,
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore, SourceEvents, StoreError},
     testing::block_on,
 };
 
@@ -185,7 +188,7 @@ impl Wired {
 /// unit (in memory, its transaction is `()`).
 fn commit(events: &mut CommandContext<SchoolEvent>, publisher: &Publisher) -> Result<(), StoreError> {
     let writes = events.take_writes();
-    block_on(cqrs::append_writes::<_, cqrs::InTransaction<()>, _>(
+    block_on(cqrs::command::append_writes::<_, cqrs::command::InTransaction<()>, _>(
         publisher,
         &mut (),
         writes,
@@ -365,7 +368,7 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
 #[test]
 fn a_new_aggregate_root_is_created_in_its_own_stream() {
     let (store, gateway) = gateway(None);
-    let course = cqrs::New::<Course>(9);
+    let course = cqrs::aggregate::New::<Course>(9);
     let mut events = CommandContext::with_metadata(Metadata::new());
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
     events.record(course);
@@ -383,23 +386,23 @@ enum Shipping {
     Shipped { parcel: u32, carrier: String },
 }
 
-impl cqrs::DomainEvent for Shipping {
+impl cqrs::event::DomainEvent for Shipping {
     fn event_type(&self) -> &'static str {
         "Shipped"
     }
 }
 
 impl TagResolver for Shipping {
-    fn tags(&self) -> Vec<cqrs::Tag> {
+    fn tags(&self) -> Vec<cqrs::event::Tag> {
         let Self::Shipped { carrier, .. } = self;
-        vec![cqrs::Tag::new("carrier", carrier)]
+        vec![cqrs::event::Tag::new("carrier", carrier)]
     }
 }
 
 #[test]
 fn hand_written_tags_select_and_guard_like_derived_ones() {
     let store = InMemoryEventStore::new();
-    let ship = |parcel: u32, carrier: &str, condition: Option<&cqrs::AppendCondition>| {
+    let ship = |parcel: u32, carrier: &str, condition: Option<&cqrs::event::AppendCondition>| {
         let event = Shipping::Shipped {
             parcel,
             carrier: carrier.to_owned(),
@@ -420,7 +423,7 @@ fn hand_written_tags_select_and_guard_like_derived_ones() {
     let dhl = cqrs::criteria![carrier = "dhl"];
     let (events, head) = block_on(store.source(&dhl)).unwrap();
     assert_eq!(events.iter().map(|e| e.position).collect::<Vec<_>>(), [1]);
-    let condition = cqrs::AppendCondition {
+    let condition = cqrs::event::AppendCondition {
         criteria: dhl,
         after: head,
     };

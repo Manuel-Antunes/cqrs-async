@@ -28,8 +28,13 @@ use blog::{
     infrastructure::{SeaOrmPostRepository, SeaOrmPostSummaries, postgres::Migrator},
 };
 use cqrs::{
-    CommandContext, CommandGateway, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, New,
-    ProcessingContext, QueryGateway, StoreError, TrackingOptions,
+    Intercepted,
+    aggregate::New,
+    command::{CommandContext, CommandGateway},
+    event::EventEnvelope,
+    processing::{EventChain, EventInterceptor, HandlerError, ProcessingContext, TrackingOptions},
+    query::QueryGateway,
+    store::StoreError,
 };
 use cqrs_postgres::sqlx::{
     self, PgPool,
@@ -140,22 +145,22 @@ fn post_events(pool: &PgPool) -> blog::PgPostEvents {
 async fn save(
     unit: &blog::PgPostEvents,
     posts: &SeaOrmPostRepository,
-    post: cqrs::Loaded<Post>,
+    post: cqrs::aggregate::Loaded<Post>,
     appender: &mut CommandContext<PostEvent>,
 ) -> Result<(), StoreError> {
-    use cqrs::UnitOfWork;
-    type Unit = cqrs::InTransaction<cqrs_postgres::PgTransaction>;
+    use cqrs::command::UnitOfWork;
+    type Unit = cqrs::command::InTransaction<cqrs_postgres::PgTransaction>;
     let mut tx = UnitOfWork::<PostEvent, Unit>::begin(unit).await?;
     let post = appender.record(post);
     posts.save(&post, &mut tx).await?;
-    let appended = cqrs::append_writes::<_, Unit, _>(unit, &mut tx, appender.take_writes()).await?;
+    let appended = cqrs::command::append_writes::<_, Unit, _>(unit, &mut tx, appender.take_writes()).await?;
     UnitOfWork::<PostEvent, Unit>::commit(unit, tx).await?;
     UnitOfWork::<PostEvent, Unit>::announce(unit, appended).await;
     Ok(())
 }
 
 /// The post `id` as the repository finds it, in a transaction of its own.
-async fn find(pool: &PgPool, id: PostId) -> Option<cqrs::Loaded<Post>> {
+async fn find(pool: &PgPool, id: PostId) -> Option<cqrs::aggregate::Loaded<Post>> {
     let mut tx = pool.begin().await.unwrap();
     SeaOrmPostRepository.find(id, &mut tx).await.unwrap()
 }
@@ -307,7 +312,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
 /// each instance emits once the projection handled an event, wherever.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn subscribers_on_every_instance_get_the_changes_one_of_them_projected() {
-    use cqrs::QuerySubscriptions;
+    use cqrs::query::QuerySubscriptions;
     use futures_util::StreamExt;
 
     let pool = database_or_skip!();

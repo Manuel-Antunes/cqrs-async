@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use async_graphql::{Context, ID, Object, Result};
-use cqrs::QueryGateway;
+use cqrs::query::QueryGateway;
 
 use super::{
     error::{from_blog, post_id},

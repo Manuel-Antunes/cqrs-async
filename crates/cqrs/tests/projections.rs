@@ -10,8 +10,10 @@ use std::{
 };
 
 use cqrs::{
-    AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
-    ProcessingContext, QueryGateway, QuerySubscriptions, QueryUpdateChannel, StreamId, SubscriptionQueries,
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{EventHandler, Events, HandlerError, ProcessingContext},
+    query::{QueryGateway, QuerySubscriptions, QueryUpdateChannel, SubscriptionQueries},
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore},
 };
 use futures_util::StreamExt;
 
@@ -75,14 +77,14 @@ impl EventHandler for Totals {
 struct Queries(Arc<Totals>);
 
 #[cqrs::query_handler]
-impl cqrs::QueryHandler<TotalOf> for Queries {
+impl cqrs::query::QueryHandler<TotalOf> for Queries {
     async fn handle(&self, query: TotalOf) -> Result<Option<u64>, ()> {
         Ok(self.0.sums.lock().unwrap().get(&query.clock).copied())
     }
 }
 
 #[cqrs::query_handler]
-impl cqrs::QueryHandler<GrandTotal> for Queries {
+impl cqrs::query::QueryHandler<GrandTotal> for Queries {
     async fn handle(&self, _: GrandTotal) -> Result<u64, ()> {
         Ok(self.0.sums.lock().unwrap().values().sum())
     }

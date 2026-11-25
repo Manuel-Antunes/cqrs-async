@@ -11,8 +11,9 @@ use std::sync::{
 };
 
 use cqrs::{
-    AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore, Metadata,
-    ProcessingContext, StreamId,
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{EventHandler, Events, HandlerError, ProcessingContext},
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -82,7 +83,7 @@ async fn tick(events: &Events<Ticked, InMemoryEventStore<Ticked>>, from: u64, co
 
 #[tokio::test(start_paused = true)]
 async fn each_namespace_runs_on_its_own_and_only_read_models_replay() {
-    use cqrs::{Projection, TokenStore};
+    use cqrs::processing::{Projection, TokenStore};
     let events = Events::new(InMemoryEventStore::new());
     let projection = std::sync::Arc::new(ClockProjection::default());
     let running = events.projection(std::sync::Arc::clone(&projection)).spawn();
@@ -100,8 +101,11 @@ async fn each_namespace_runs_on_its_own_and_only_read_models_replay() {
     running.stop().await;
 
     // `counts` asks for batches of 64; `alerts` takes the processors' options.
-    assert_eq!(<ClockProjection as cqrs::Route<()>>::batch_size(0), Some(64));
-    assert_eq!(<ClockProjection as cqrs::Route<()>>::batch_size(1), None);
+    assert_eq!(
+        <ClockProjection as cqrs::processing::Route<()>>::batch_size(0),
+        Some(64)
+    );
+    assert_eq!(<ClockProjection as cqrs::processing::Route<()>>::batch_size(1), None);
 
     // Each namespace has its own token, named after the projection.
     assert_eq!(ClockProjection::processor_name(0), "clock.counts");

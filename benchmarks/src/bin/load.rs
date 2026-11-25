@@ -27,7 +27,7 @@ use blog::{
     infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository},
     presentation::{BlogApi, graphql, http},
 };
-use cqrs::{CommandGateway, QuerySubscriptions};
+use cqrs::{command::CommandGateway, query::QuerySubscriptions};
 use cqrs_benchmarks::{
     live::{Busy, Live, Noop, settle, start_blog},
     seed_posts,
@@ -284,7 +284,9 @@ async fn fan_out(report: &mut Report, scale: &Scale) {
         for n in 1..=events {
             let mut events = Vec::new();
             Post::create(PostId(n), "fan-out", &mut events).unwrap();
-            live.commit(cqrs::New::<Post>(PostId(n)), events).await.unwrap();
+            live.commit(cqrs::aggregate::New::<Post>(PostId(n)), events)
+                .await
+                .unwrap();
         }
         let committed = started.elapsed();
         for task in tasks {
@@ -426,9 +428,9 @@ async fn segments(report: &mut Report, scale: &Scale) {
     seed_posts(&live.store, events, 1).await; // one event per aggregate: spread evenly
     let last = live.last_position().await;
     for segments in [1_u32, 4, 14] {
-        let options = cqrs::TrackingOptions {
+        let options = cqrs::processing::TrackingOptions {
             segments,
-            ..cqrs::TrackingOptions::default()
+            ..cqrs::processing::TrackingOptions::default()
         };
         let started = Instant::now();
         let handle = live
@@ -548,13 +550,16 @@ async fn over_http(report: &mut Report, scale: &Scale) {
 /// each writer on its own streams), if `CQRS_POSTGRES_URL` is set. Appends
 /// are serialized by the head row, so this is the price of gapless order.
 async fn postgres(report: &mut Report, scale: &Scale) {
-    use cqrs::{AppendEvents, ExpectedVersion, Metadata, ReadLog, StreamId};
+    use cqrs::{
+        event::{Metadata, StreamId},
+        store::{AppendEvents, ExpectedVersion, ReadLog},
+    };
 
     #[derive(Clone, serde::Serialize, serde::Deserialize, cqrs::DomainEvent)]
     struct Ticked(u64);
 
     struct Clock;
-    impl cqrs::Aggregate for Clock {
+    impl cqrs::aggregate::Aggregate for Clock {
         const TYPE: &'static str = "clock";
         type Id = u64;
         type Event = Ticked;

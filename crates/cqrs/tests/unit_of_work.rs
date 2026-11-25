@@ -18,10 +18,16 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, AppendEvents, Cursor, DeadLetter, DeadLetterQueue, DomainEvent, EventChain, EventEnvelope, EventHandler,
-    EventInterceptor, EventPublisher, Events, ExpectedVersion, HandlerError, InMemoryDeadLetters, InMemoryEventStore,
-    InMemoryTokenStore, InlinePublisher, Intercepted, Metadata, Pending, ProcessingContext, StoreError, StreamId,
-    TokenStore, TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
+    Intercepted,
+    aggregate::Aggregate,
+    command::{EventPublisher, Pending},
+    event::{DomainEvent, EventEnvelope, Metadata, StreamId},
+    processing::{
+        DeadLetter, DeadLetterQueue, EventChain, EventHandler, EventInterceptor, Events, HandlerError,
+        InMemoryDeadLetters, InMemoryTokenStore, InlinePublisher, ProcessingContext, TokenStore, TrackingOptions,
+        TrackingToken, TransactionManager, retry_dead_letters,
+    },
+    store::{AppendEvents, Cursor, ExpectedVersion, InMemoryEventStore, StoreError},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -424,7 +430,10 @@ async fn inline_handlers_get_their_committed_step() {
     let phases = Phases::default();
     let clocks = InlinePublisher::new(InMemoryEventStore::new()).with_processor((Inline(Arc::clone(&phases)),));
     clocks
-        .commit(cqrs::New::<Clock>(1).into(), Pending::new(vec![Ticked(1), Ticked(2)]))
+        .commit(
+            cqrs::aggregate::New::<Clock>(1).into(),
+            Pending::new(vec![Ticked(1), Ticked(2)]),
+        )
         .await
         .unwrap();
     assert_eq!(

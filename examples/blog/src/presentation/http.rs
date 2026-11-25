@@ -16,7 +16,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use cqrs::Metadata;
+use cqrs::event::Metadata;
 
 use super::{BlogApi, graphql::BlogSchema};
 

@@ -15,7 +15,7 @@ pub mod http;
 
 use std::sync::Arc;
 
-use cqrs::{Cqrs, EventFeed};
+use cqrs::{Cqrs, store::EventFeed};
 
 use crate::{
     application::{

@@ -1,4 +1,7 @@
-use cqrs::{Aggregate, Loaded, StoreError};
+use cqrs::{
+    aggregate::{Aggregate, Loaded},
+    store::StoreError,
+};
 use cqrs_postgres::PgTransaction;
 use sea_orm::{ConnectionTrait, DbBackend, EntityTrait, Set, Statement, sea_query::OnConflict};
 

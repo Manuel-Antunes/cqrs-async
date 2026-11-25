@@ -1,4 +1,7 @@
-use cqrs::{CommandContext, CommandHandler, New};
+use cqrs::{
+    aggregate::New,
+    command::{CommandContext, CommandHandler},
+};
 
 use crate::{
     application::{

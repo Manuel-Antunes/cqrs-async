@@ -42,7 +42,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 /// `&A` and an appender, and the events are applied only if it succeeds.
 ///
 /// ```
-/// # use cqrs::{Aggregate, EventAppender, testing::AggregateFixture};
+/// # use cqrs::{aggregate::{Aggregate, EventAppender}, testing::AggregateFixture};
 /// # #[derive(Debug, PartialEq, cqrs::DomainEvent)] enum Event { Opened, Closed }
 /// # #[derive(Debug, PartialEq)] struct Door { open: bool }
 /// # impl Aggregate for Door {

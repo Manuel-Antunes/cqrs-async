@@ -1,9 +1,9 @@
 //! PostgreSQL storage for the `cqrs` crate, over a plain `sqlx` pool: an
-//! [`EventStore`](cqrs::EventStore) (with [`Upcaster`]s for old event
-//! shapes), a [`SnapshotStore`](cqrs::SnapshotStore), a
-//! [`TokenStore`](cqrs::TokenStore) and the
-//! [`TransactionManager`](cqrs::TransactionManager) they share
-//! ([`PostgresTransactions`]): [`Projection`](cqrs::Projection)s over
+//! [`EventStore`](cqrs::store::EventStore) (with [`Upcaster`]s for old event
+//! shapes), a [`SnapshotStore`](cqrs::aggregate::SnapshotStore), a
+//! [`TokenStore`](cqrs::processing::TokenStore) and the
+//! [`TransactionManager`](cqrs::processing::TransactionManager) they share
+//! ([`PostgresTransactions`]): [`Projection`](cqrs::processing::Projection)s over
 //! [`PgTransaction`] write their read model in the transaction that moves
 //! the processor's token.
 //!
@@ -24,7 +24,7 @@
 //! become visible before an older one, leaving a temporary gap, and an
 //! append that loses a race leaves a permanent one. Readers of the global
 //! log (tracking processors, subscriptions, live queries) read through a
-//! [`Cursor`](cqrs::Cursor), Axon's gap-aware tracking token: they keep
+//! [`Cursor`](cqrs::store::Cursor), Axon's gap-aware tracking token: they keep
 //! going past a gap and pick it up once it is committed.
 //!
 //! Axon gives a gap up after a timeout, so a transaction slower than that
@@ -76,19 +76,20 @@ pub use snapshot_store::PostgresSnapshotStore;
 pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared
 // with any other store keeping JSON.
-pub use cqrs::{StoredEvent, Upcast, Upcaster, upcast};
+pub use cqrs::store::{StoredEvent, Upcast, Upcaster, upcast};
 /// The `sqlx` this crate is built on: [`sqlx::PgPool`] and
 /// [`PgTransaction`] are in its API, so a new major version of `sqlx` is a
 /// breaking change of this crate. Use this one to name them.
 pub use sqlx;
 
-use cqrs::StoreError;
+use cqrs::store::StoreError;
 use sqlx::PgPool;
 
 /// The events service of one log over PostgreSQL: its store, the tokens
 /// and the transactions its processors (and commands) run in.
 #[cfg(feature = "tokio")]
-pub type PgEvents<E, U = ()> = cqrs::Events<E, PostgresEventStore<E, U>, PostgresTokenStore, PostgresTransactions>;
+pub type PgEvents<E, U = ()> =
+    cqrs::processing::Events<E, PostgresEventStore<E, U>, PostgresTokenStore, PostgresTransactions>;
 
 /// The infrastructure every aggregate root of an application shares on one
 /// database, defined once: the pool, the token store and the transactions.
@@ -138,7 +139,7 @@ impl Postgres {
     /// aggregate root.
     #[cfg(feature = "tokio")]
     pub fn events<E>(&self, log: &str) -> PgEvents<E> {
-        cqrs::Events::new(self.store(log))
+        cqrs::processing::Events::new(self.store(log))
             .with_tokens(self.tokens.clone())
             .with_transactions(self.transactions.clone())
     }

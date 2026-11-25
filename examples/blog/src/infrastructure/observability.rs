@@ -15,8 +15,9 @@ use std::{
 };
 
 use cqrs::{
-    DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, Interceptor, Message, Metadata,
-    ProcessingContext,
+    Interceptor, Message,
+    event::{DomainEvent, EventEnvelope, Metadata},
+    processing::{EventChain, EventInterceptor, HandlerError, ProcessingContext},
 };
 
 /// One audited command.

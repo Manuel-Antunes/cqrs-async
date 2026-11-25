@@ -9,8 +9,9 @@ use std::{
 };
 
 use cqrs::{
-    AppendEvents, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore,
-    InMemoryTokenStore, Metadata, ProcessingContext, ResetError, StreamId,
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{EventHandler, Events, HandlerError, InMemoryTokenStore, ProcessingContext, ResetError},
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]

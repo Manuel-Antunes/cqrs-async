@@ -8,8 +8,13 @@ use std::{
 };
 
 use blog::domain::{Post, PostId};
-use cqrs::Aggregate;
-use cqrs::{CommandGateway, InMemoryEventStore, InMemorySnapshots, QueryGateway, QueryHandler, ReadLog};
+use cqrs::aggregate::Aggregate;
+use cqrs::{
+    aggregate::InMemorySnapshots,
+    command::CommandGateway,
+    query::{QueryGateway, QueryHandler},
+    store::{InMemoryEventStore, ReadLog},
+};
 use cqrs_benchmarks::{
     PlainPosts, now,
     ping::{Echo, Ping, PingGateway},
@@ -93,7 +98,7 @@ mod persistence {
             .bench_local_values(|id| {
                 let mut events = Vec::new();
                 Post::create(id, "title", &mut events).unwrap();
-                now(posts.commit(cqrs::New::<Post>(id), events)).unwrap();
+                now(posts.commit(cqrs::aggregate::New::<Post>(id), events)).unwrap();
             });
     }
 
@@ -136,8 +141,9 @@ mod interceptors {
         infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository, Measured, ProjectionMetrics},
     };
     use cqrs::{
-        DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, Intercepted, Interceptor, Message,
-        Metadata, ProcessingContext, Route, StreamId,
+        Intercepted, Interceptor, Message,
+        event::{DomainEvent, EventEnvelope, Metadata, StreamId},
+        processing::{EventChain, EventInterceptor, HandlerError, ProcessingContext, Route},
     };
 
     type Summaries = PostProjection<InMemoryPostSummaryRepository, InMemoryNotifier>;

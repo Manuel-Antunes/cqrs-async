@@ -98,7 +98,7 @@ tuple_interceptor!(A 0, B 1, C 2, D 3, E 4, F5 5, G 6, H 7);
 /// interceptor writes in it.
 ///
 /// ```
-/// use cqrs::{DomainEvent, EventChain, EventEnvelope, EventInterceptor, HandlerError, ProcessingContext};
+/// use cqrs::{event::{DomainEvent, EventEnvelope}, processing::{EventChain, EventInterceptor, HandlerError, ProcessingContext}};
 ///
 /// /// Skips replayed events for the handlers it wraps.
 /// struct LiveOnly;

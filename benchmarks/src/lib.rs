@@ -10,8 +10,11 @@
 use blog::domain::{Post, PostEvent, PostId};
 
 use cqrs::{
-    AggregateLoader, EventPublisher, EventStore, ExpectedVersion, InMemoryEventStore, InlinePublisher, Loaded,
-    Metadata, Pending, SnapshotStore, StoreError, StreamId,
+    aggregate::{AggregateLoader, Loaded, SnapshotStore},
+    command::{EventPublisher, Pending},
+    event::{Metadata, StreamId},
+    processing::InlinePublisher,
+    store::{EventStore, ExpectedVersion, InMemoryEventStore, StoreError},
 };
 
 pub mod live;
@@ -29,11 +32,11 @@ pub fn now<F: std::future::Future>(future: F) -> F::Output {
 /// A trivial command and its handler: dispatch cost with no work behind it.
 pub mod ping {
     /// Returns its input plus one.
-    #[cqrs::command(output = u64, error = cqrs::StoreError)]
+    #[cqrs::command(output = u64, error = cqrs::store::StoreError)]
     pub struct Ping(pub u64);
 
     /// Answers its input plus one: routing with no unit of work.
-    #[cqrs::query(output = u64, error = cqrs::StoreError)]
+    #[cqrs::query(output = u64, error = cqrs::store::StoreError)]
     pub struct Echo(pub u64);
 
     /// A query gateway with one route.
@@ -41,8 +44,8 @@ pub mod ping {
     pub struct PingGateway;
 
     #[cqrs::query_handler]
-    impl cqrs::QueryHandler<Echo> for PingGateway {
-        async fn handle(&self, echo: Echo) -> Result<u64, cqrs::StoreError> {
+    impl cqrs::query::QueryHandler<Echo> for PingGateway {
+        async fn handle(&self, echo: Echo) -> Result<u64, cqrs::store::StoreError> {
             Ok(echo.0 + 1)
         }
     }
@@ -62,8 +65,12 @@ pub mod ping {
     /// Handles [`Ping`] as a command handler: through an appender and a
     /// unit of work, recording nothing.
     #[cqrs::command_handler]
-    impl<P> cqrs::CommandHandler<Ping> for PingCommands<P> {
-        async fn handle(&self, ping: &Ping, _: &mut cqrs::CommandContext<Pinged>) -> Result<u64, cqrs::StoreError> {
+    impl<P> cqrs::command::CommandHandler<Ping> for PingCommands<P> {
+        async fn handle(
+            &self,
+            ping: &Ping,
+            _: &mut cqrs::command::CommandContext<Pinged>,
+        ) -> Result<u64, cqrs::store::StoreError> {
             Ok(ping.0 + 1)
         }
     }
@@ -71,24 +78,24 @@ pub mod ping {
     /// A unit of work that stores nothing.
     pub struct NoStore;
 
-    impl cqrs::UnitOfWork<Pinged, cqrs::Autocommit> for NoStore {
-        async fn begin(&self) -> Result<(), cqrs::StoreError> {
+    impl cqrs::command::UnitOfWork<Pinged, cqrs::command::Autocommit> for NoStore {
+        async fn begin(&self) -> Result<(), cqrs::store::StoreError> {
             Ok(())
         }
 
         async fn append(
             &self,
             (): &mut (),
-            _: cqrs::Write<Pinged>,
-        ) -> Result<Vec<cqrs::EventEnvelope<Pinged>>, cqrs::StoreError> {
+            _: cqrs::command::Write<Pinged>,
+        ) -> Result<Vec<cqrs::event::EventEnvelope<Pinged>>, cqrs::store::StoreError> {
             Ok(Vec::new())
         }
 
-        async fn commit(&self, (): ()) -> Result<(), cqrs::StoreError> {
+        async fn commit(&self, (): ()) -> Result<(), cqrs::store::StoreError> {
             Ok(())
         }
 
-        async fn announce(&self, _: Vec<cqrs::EventEnvelope<Pinged>>) {}
+        async fn announce(&self, _: Vec<cqrs::event::EventEnvelope<Pinged>>) {}
     }
 }
 

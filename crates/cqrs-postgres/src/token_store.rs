@@ -1,4 +1,7 @@
-use cqrs::{Cursor, Gap, StoreError, TokenStore, TrackingToken, TransactionManager};
+use cqrs::{
+    processing::{TokenStore, TrackingToken, TransactionManager},
+    store::{Cursor, Gap, StoreError},
+};
 use sqlx::PgPool;
 
 use crate::backend;

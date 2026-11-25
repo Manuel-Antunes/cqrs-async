@@ -2,7 +2,7 @@
 //! `extensions.code` so clients branch on the code, never on the message.
 
 use async_graphql::{Error, ErrorExtensions, ID};
-use cqrs::StoreError;
+use cqrs::store::StoreError;
 
 use crate::{application::BlogError, domain::PostId};
 

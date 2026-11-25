@@ -7,8 +7,11 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, CommandContext, CommandGateway, CommandHandler, EventAppender, EventPublisher,
-    InMemoryEventStore, InlinePublisher, Loaded, NotFound, Pending, StoreError, testing::block_on,
+    aggregate::{Aggregate, AggregateLoader, EventAppender, Loaded, NotFound},
+    command::{CommandContext, CommandGateway, CommandHandler, EventPublisher, Pending},
+    processing::InlinePublisher,
+    store::{InMemoryEventStore, StoreError},
+    testing::block_on,
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -120,11 +123,12 @@ impl Engine {
 /// The engine runs the commands' units of work too, through its publisher:
 /// in memory, one entity per command without a transaction, several with
 /// the (empty) transaction of memory.
-impl<U: cqrs::UnitMode> cqrs::UnitOfWork<CounterEvent, U> for Engine
+impl<U: cqrs::command::UnitMode> cqrs::command::UnitOfWork<CounterEvent, U> for Engine
 where
-    InlinePublisher<CounterEvent, Store>: cqrs::UnitOfWork<CounterEvent, U>,
+    InlinePublisher<CounterEvent, Store>: cqrs::command::UnitOfWork<CounterEvent, U>,
 {
-    const ROLLS_BACK: bool = <InlinePublisher<CounterEvent, Store> as cqrs::UnitOfWork<CounterEvent, U>>::ROLLS_BACK;
+    const ROLLS_BACK: bool =
+        <InlinePublisher<CounterEvent, Store> as cqrs::command::UnitOfWork<CounterEvent, U>>::ROLLS_BACK;
 
     fn begin(&self) -> impl std::future::Future<Output = Result<U::Tx, StoreError>> + Send {
         self.publisher.begin()
@@ -133,17 +137,21 @@ where
     fn append(
         &self,
         tx: &mut U::Tx,
-        write: cqrs::Write<CounterEvent>,
-    ) -> impl std::future::Future<Output = Result<Vec<cqrs::EventEnvelope<CounterEvent>>, StoreError>> + Send {
+        write: cqrs::command::Write<CounterEvent>,
+    ) -> impl std::future::Future<Output = Result<Vec<cqrs::event::EventEnvelope<CounterEvent>>, StoreError>> + Send
+    {
         self.publisher.append(tx, write)
     }
 
     fn commit(&self, tx: U::Tx) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
-        cqrs::UnitOfWork::<CounterEvent, U>::commit(&self.publisher, tx)
+        cqrs::command::UnitOfWork::<CounterEvent, U>::commit(&self.publisher, tx)
     }
 
-    fn announce(&self, events: Vec<cqrs::EventEnvelope<CounterEvent>>) -> impl std::future::Future<Output = ()> + Send {
-        cqrs::UnitOfWork::<CounterEvent, U>::announce(&self.publisher, events)
+    fn announce(
+        &self,
+        events: Vec<cqrs::event::EventEnvelope<CounterEvent>>,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        cqrs::command::UnitOfWork::<CounterEvent, U>::announce(&self.publisher, events)
     }
 }
 
@@ -190,7 +198,7 @@ impl Gateway {
 /// handles `Open` (`Handles`, which the attribute writes otherwise).
 impl CommandHandler<Open> for Gateway {
     type Event = CounterEvent;
-    type Unit = cqrs::Autocommit;
+    type Unit = cqrs::command::Autocommit;
 
     async fn handle(
         &self,
@@ -199,7 +207,7 @@ impl CommandHandler<Open> for Gateway {
         (): &mut (),
     ) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
-        events.record(cqrs::New::<Counter>(*id));
+        events.record(cqrs::aggregate::New::<Counter>(*id));
         Ok(*id)
     }
 }
@@ -319,7 +327,7 @@ struct Twice(Counters);
 
 impl CommandHandler<Add> for Twice {
     type Event = CounterEvent;
-    type Unit = cqrs::InTransaction<()>;
+    type Unit = cqrs::command::InTransaction<()>;
 
     async fn handle(
         &self,
@@ -346,10 +354,10 @@ fn a_unit_that_cannot_roll_back_is_not_run_again_after_a_partial_write() {
     block_on(Gateway::new(&counters).send(Open(1))).unwrap();
     let twice = Twice(Arc::clone(&counters));
     assert!(matches!(
-        block_on(cqrs::dispatch_command(
+        block_on(cqrs::command::dispatch_command(
             &twice,
             Add { id: 1, n: 1 },
-            cqrs::Metadata::new(),
+            cqrs::event::Metadata::new(),
             &counters
         )),
         Err(Error::Store(StoreError::Conflict { .. }))
@@ -362,7 +370,7 @@ fn several_entities_without_a_transaction_are_refused() {
     struct TwiceWithoutTransaction(Counters);
     impl CommandHandler<Add> for TwiceWithoutTransaction {
         type Event = CounterEvent;
-        type Unit = cqrs::Autocommit;
+        type Unit = cqrs::command::Autocommit;
         async fn handle(
             &self,
             command: &Add,
@@ -376,10 +384,10 @@ fn several_entities_without_a_transaction_are_refused() {
     block_on(Gateway::new(&counters).send(Open(1))).unwrap();
     let handler = TwiceWithoutTransaction(Arc::clone(&counters));
     assert!(matches!(
-        block_on(cqrs::dispatch_command(
+        block_on(cqrs::command::dispatch_command(
             &handler,
             Add { id: 1, n: 1 },
-            cqrs::Metadata::new(),
+            cqrs::event::Metadata::new(),
             &counters
         )),
         Err(Error::Store(StoreError::Backend(_)))
@@ -404,7 +412,7 @@ fn forgetting_to_save_panics_in_debug_builds() {
 #[test]
 fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
     let counters = counters();
-    let correlation = cqrs::Metadata::from([("correlation_id".to_owned(), "req-42".to_owned())]);
+    let correlation = cqrs::event::Metadata::from([("correlation_id".to_owned(), "req-42".to_owned())]);
 
     let gateway = Gateway::new(&counters);
     block_on(gateway.send_with(Open(1), correlation.clone())).unwrap();
@@ -413,7 +421,7 @@ fn the_metadata_a_command_is_sent_with_is_stored_with_its_events() {
         racing: true,
         ..Gateway::new(&counters)
     };
-    block_on(cqrs::dispatch_command(
+    block_on(cqrs::command::dispatch_command(
         &racing,
         Add { id: 1, n: 5 },
         correlation.clone(),

@@ -12,7 +12,7 @@
 //!     commit. No runtime needed; what the domain and flow tests use.
 //!   - [`start`]: the asynchronous one the server runs. Commands return once
 //!     committed, projections follow on their own Tokio tasks
-//!     ([`TrackingProcessor`](cqrs::TrackingProcessor)), and
+//!     ([`TrackingProcessor`](cqrs::processing::TrackingProcessor)), and
 //!     subscriptions stream the committed events.
 //!
 //! The doctests below are the negative half of the study: each one must
@@ -23,7 +23,7 @@
 //!
 //! ```compile_fail,E0594
 //! use blog::domain::{PostError, PostEvent};
-//! use cqrs::EventAppender;
+//! use cqrs::aggregate::EventAppender;
 //!
 //! struct Draft { published: bool }
 //!
@@ -50,7 +50,7 @@
 //!
 //! ```compile_fail,E0277
 //! use blog::application::BlogError;
-//! use cqrs::CommandGateway;
+//! use cqrs::command::CommandGateway;
 //!
 //! #[cqrs::command(error = BlogError)]
 //! struct DeletePost;
@@ -63,7 +63,7 @@
 //!
 //! ```compile_fail,E0277
 //! use blog::{application::queries::FindPost, domain::PostId};
-//! use cqrs::CommandGateway;
+//! use cqrs::command::CommandGateway;
 //!
 //! let (blog, _, _) = blog::in_memory();
 //! let _ = blog.commands().send(FindPost { id: PostId(1) });
@@ -74,7 +74,7 @@
 //!
 //! ```compile_fail,E0277
 //! use blog::{application::{BlogError, commands::{CreatePost, PublishPost}}, domain::{PostEvent, PostId}};
-//! use cqrs::{CommandContext, CommandHandler};
+//! use cqrs::command::{CommandContext, CommandHandler};
 //!
 //! #[cqrs::command_gateway(handles(CreatePost, PublishPost))]
 //! struct OnlyCreates<P> {

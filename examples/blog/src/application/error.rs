@@ -1,6 +1,6 @@
 use std::fmt;
 
-use cqrs::{NotFound, StoreError};
+use cqrs::{aggregate::NotFound, store::StoreError};
 
 use crate::domain::{PostError, PostId};
 

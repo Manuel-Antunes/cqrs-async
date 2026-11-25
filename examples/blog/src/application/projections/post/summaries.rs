@@ -1,6 +1,10 @@
 //! The `summaries` namespace: the read model the queries answer from.
 
-use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext, QueryUpdateEmitter};
+use cqrs::{
+    event::EventEnvelope,
+    processing::{EventHandler, HandlerError, ProcessingContext},
+    query::QueryUpdateEmitter,
+};
 
 use super::PostProjection;
 use crate::{

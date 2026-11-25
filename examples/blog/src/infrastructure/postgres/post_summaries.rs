@@ -1,4 +1,4 @@
-use cqrs::StoreError;
+use cqrs::store::StoreError;
 use cqrs_postgres::{PgTransaction, sqlx::PgPool};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,

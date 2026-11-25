@@ -1,4 +1,4 @@
-use cqrs::QueryHandler;
+use cqrs::query::QueryHandler;
 
 use super::{PostQueryGateway, PostSummary, PostSummaryRepository};
 use crate::application::BlogError;

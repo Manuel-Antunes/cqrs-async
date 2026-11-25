@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use cqrs::{DeadLetter, DeadLetterQueue, StoreError, Upcaster};
+use cqrs::{
+    processing::{DeadLetter, DeadLetterQueue},
+    store::{StoreError, Upcaster},
+};
 use serde::de::DeserializeOwned;
 
 use crate::{PgTransaction, PostgresEventStore, backend};

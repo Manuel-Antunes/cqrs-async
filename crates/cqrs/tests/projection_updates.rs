@@ -11,8 +11,11 @@ use std::{
 };
 
 use cqrs::{
-    AppendEvents, Cqrs, EventEnvelope, EventHandler, Events, ExpectedVersion, HandlerError, InMemoryEventStore,
-    Metadata, ProcessingContext, QueryHandler, QueryUpdateEmitter, StreamId,
+    Cqrs,
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{EventHandler, Events, HandlerError, ProcessingContext},
+    query::{QueryHandler, QueryUpdateEmitter},
+    store::{AppendEvents, ExpectedVersion, InMemoryEventStore},
 };
 use futures_util::StreamExt;
 
@@ -110,7 +113,7 @@ async fn within<T>(future: impl Future<Output = T>) -> T {
 
 #[tokio::test]
 async fn a_projection_emits_its_updates_to_the_units_subscriptions() {
-    use cqrs::QuerySubscriptions;
+    use cqrs::query::QuerySubscriptions;
 
     let projection = Arc::new(ClockProjection::default());
     let events = Events::new(InMemoryEventStore::new());

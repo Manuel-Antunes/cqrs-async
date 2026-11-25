@@ -8,9 +8,11 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    AggregateLoader, AppendEvents, CommandContext, CommandGateway, CommandHandler, EventAppender, EventEnvelope,
-    EventHandler, Events, ExpectedVersion, HandlerError, Loaded, Metadata, New, ProcessingContext, ProcessorHandle,
-    ReadLog, SnapshotStore, StoreError, StreamId, TrackingOptions,
+    aggregate::{AggregateLoader, EventAppender, Loaded, New, SnapshotStore},
+    command::{CommandContext, CommandGateway, CommandHandler},
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{EventHandler, Events, HandlerError, ProcessingContext, ProcessorHandle, TrackingOptions},
+    store::{AppendEvents, ExpectedVersion, ReadLog, StoreError},
 };
 use cqrs_postgres::{
     PgTransaction, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore, PostgresTransactions,

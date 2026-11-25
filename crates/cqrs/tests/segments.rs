@@ -13,9 +13,14 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, DeadLetter, DeadLetterQueue, EventEnvelope, EventHandler, EventPublisher, Events,
-    HandlerError, InMemoryDeadLetters, InMemoryEventStore, InMemoryTokenStore, Pending, ProcessingContext, StoreError,
-    StreamId, TrackingOptions, retry_dead_letters, segment_of,
+    aggregate::{Aggregate, AggregateLoader},
+    command::{EventPublisher, Pending},
+    event::{EventEnvelope, StreamId},
+    processing::{
+        DeadLetter, DeadLetterQueue, EventHandler, Events, HandlerError, InMemoryDeadLetters, InMemoryTokenStore,
+        ProcessingContext, TrackingOptions, retry_dead_letters, segment_of,
+    },
+    store::{InMemoryEventStore, StoreError},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -68,7 +73,7 @@ impl World {
     async fn tick(&self, id: u32) -> u64 {
         let clock = match self.clocks.load(&id).await.unwrap() {
             Some(clock) => clock,
-            None => cqrs::New(id).into(),
+            None => cqrs::aggregate::New(id).into(),
         };
         let next = clock.ticks + 1;
         let committed = self

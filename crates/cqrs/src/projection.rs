@@ -5,7 +5,7 @@
 //!
 //! ```
 //! # use std::sync::Mutex;
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created, Published }
 //! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts", "notifications"))]
 //! #[derive(Default)]
@@ -39,7 +39,7 @@
 //!     }
 //! }
 //!
-//! # use cqrs::Projection;
+//! # use cqrs::processing::Projection;
 //! assert_eq!(PostProjection::NAMESPACES, ["counts", "notifications"]);
 //! // Cqrs::new(events).projection(PostProjection::default()) runs both.
 //! ```
@@ -47,7 +47,7 @@
 //! The compiler checks both ways. A namespace listed without its handler:
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
 //! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts", "notifications"))]
 //! struct PostProjection;
@@ -57,7 +57,7 @@
 //!     async fn handle(&self, _: &EventEnvelope<PostEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> { Ok(()) }
 //! }
 //!
-//! fn runs<P: cqrs::Route<()>>(_: P) {}
+//! fn runs<P: cqrs::processing::Route<()>>(_: P) {}
 //! runs(PostProjection); // "notifications" has no handler
 //! ```
 //!
@@ -65,7 +65,7 @@
 //! options):
 //!
 //! ```compile_fail
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
 //! struct Counts;
 //!
@@ -78,7 +78,7 @@
 //! and a handler for a namespace the projection does not list:
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
 //! #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"))]
 //! struct PostProjection;
@@ -116,7 +116,7 @@
 //! Emitting a query the projection does not list does not compile:
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext, QueryUpdateEmitter};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}, query::QueryUpdateEmitter};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
 //! # #[cqrs::query(output = u64, error = ())] #[derive(Clone)] struct Count;
 //! # #[cqrs::query(output = u64, error = ())] #[derive(Clone)] struct Total;
@@ -138,7 +138,7 @@
 //! projection to emit through):
 //!
 //! ```compile_fail
-//! # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+//! # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 //! # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created }
 //! struct Counts;
 //!

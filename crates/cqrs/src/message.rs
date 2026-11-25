@@ -164,7 +164,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 ///
 /// ```
 /// # use std::sync::Mutex;
-/// # use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+/// # use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 /// # #[derive(Clone, cqrs::DomainEvent)] enum PostEvent { Created, Published }
 /// #[derive(Default)]
 /// struct PublishedCount {

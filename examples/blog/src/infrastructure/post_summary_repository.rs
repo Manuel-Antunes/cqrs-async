@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
-use cqrs::StoreError;
+use cqrs::store::StoreError;
 
 use crate::{
     application::queries::{PostSummary, PostSummaryRepository, PostSummaryStore},

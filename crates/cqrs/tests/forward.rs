@@ -10,8 +10,9 @@ use std::{
 };
 
 use cqrs::{
-    AppendEvents, Codec, CodecError, Events, ExpectedVersion, Forward, InMemoryEventStore, Metadata, Outgoing, Publish,
-    StreamId,
+    event::{Metadata, StreamId},
+    processing::{Events, Forward, Outgoing, Publish},
+    store::{AppendEvents, Codec, CodecError, ExpectedVersion, InMemoryEventStore},
 };
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
@@ -115,7 +116,7 @@ async fn committed_events_reach_the_broker_in_order_even_after_it_was_down() {
 async fn a_routed_forwarder_picks_the_topic_per_event() {
     let events = Events::new(InMemoryEventStore::new());
     let broker = Broker::default();
-    let forward = Forward::routed(broker.clone(), Plain, |event: &cqrs::EventEnvelope<Shipped>| {
+    let forward = Forward::routed(broker.clone(), Plain, |event: &cqrs::event::EventEnvelope<Shipped>| {
         event.event_type.replace('.', "-")
     });
     let outbox = events.track("outbox", forward);

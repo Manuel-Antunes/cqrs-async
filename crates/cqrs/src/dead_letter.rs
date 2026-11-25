@@ -46,7 +46,7 @@ impl<E> Clone for DeadLetter<E> {
 /// would be lost on restart with the tokens already past them.
 ///
 /// ```compile_fail,E0277
-/// use cqrs::{DeadLetterQueue, InMemoryDeadLetters};
+/// use cqrs::processing::{DeadLetterQueue, InMemoryDeadLetters};
 /// /// A database's unit of work.
 /// struct SqlTransaction;
 /// fn parks_in<Q: DeadLetterQueue<u8, SqlTransaction>>(_: Q) {}

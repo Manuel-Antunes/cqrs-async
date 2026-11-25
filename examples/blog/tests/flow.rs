@@ -9,7 +9,13 @@ use blog::{
     in_memory, in_memory_with,
     infrastructure::EventSourcedPostRepository,
 };
-use cqrs::{CommandGateway, EventPublisher, InlinePublisher, Pending, QueryGateway, StoreError, testing::block_on};
+use cqrs::{
+    command::{CommandGateway, EventPublisher, Pending},
+    processing::InlinePublisher,
+    query::QueryGateway,
+    store::StoreError,
+    testing::block_on,
+};
 use std::sync::Arc;
 
 fn assert_send<T: Send>(value: T) -> T {
@@ -144,7 +150,7 @@ fn a_failing_policy_behind_the_gateway_does_not_fail_the_command() {
 #[test]
 fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
     use blog::{application::projections::PostProjection, infrastructure::InMemoryNotifier};
-    use cqrs::{ProcessingContext, Route};
+    use cqrs::processing::{ProcessingContext, Route};
     use std::sync::Arc;
     block_on(async {
         let store = PostStore::default();
@@ -174,7 +180,11 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
-    use cqrs::{CommandContext, CommandHandler, InMemoryEventStore, Metadata, dispatch_command};
+    use cqrs::{
+        command::{CommandContext, CommandHandler, dispatch_command},
+        event::Metadata,
+        store::InMemoryEventStore,
+    };
 
     block_on(async {
         // A handler is a method of the gateway: called with an appender, it
@@ -218,7 +228,7 @@ fn a_gateway_can_be_written_by_hand_without_the_attribute() {
         domain::PostId,
         infrastructure::{InMemoryNotifier, InMemoryPostSummaryRepository},
     };
-    use cqrs::{Dispatch, InMemoryEventStore, Metadata, QueryHandler, dispatch_command};
+    use cqrs::{Dispatch, command::dispatch_command, event::Metadata, query::QueryHandler, store::InMemoryEventStore};
 
     /// What `#[command_gateway]` / `#[query_gateway]` write, one `Dispatch`
     /// impl per message: here commands and queries in one gateway, over the
@@ -232,7 +242,7 @@ fn a_gateway_can_be_written_by_hand_without_the_attribute() {
     impl<R, U> Dispatch<CreatePost> for ByHand<R, U>
     where
         R: PostRepository,
-        U: cqrs::UnitOfWork<blog::domain::PostEvent, cqrs::InTransaction<R::Tx>>,
+        U: cqrs::command::UnitOfWork<blog::domain::PostEvent, cqrs::command::InTransaction<R::Tx>>,
     {
         async fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> Result<PostId, BlogError> {
             dispatch_command(&self.commands, message, metadata, &self.unit).await
@@ -242,7 +252,7 @@ fn a_gateway_can_be_written_by_hand_without_the_attribute() {
     impl<R, U> Dispatch<PublishPost> for ByHand<R, U>
     where
         R: PostRepository,
-        U: cqrs::UnitOfWork<blog::domain::PostEvent, cqrs::InTransaction<R::Tx>>,
+        U: cqrs::command::UnitOfWork<blog::domain::PostEvent, cqrs::command::InTransaction<R::Tx>>,
     {
         async fn dispatch_with(&self, message: PublishPost, metadata: Metadata) -> Result<(), BlogError> {
             dispatch_command(&self.commands, message, metadata, &self.unit).await

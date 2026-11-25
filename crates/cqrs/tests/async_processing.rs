@@ -15,9 +15,16 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, AggregateLoader, AppendEvents, EventEnvelope, EventHandler, EventPublisher, ExpectedVersion,
-    HandlerError, InMemoryEventStore, InMemoryTokenStore, InlinePublisher, LiveEvents, LoadStream, Metadata, Pending,
-    ProcessingContext, StreamId, SubscriptionOptions, TokenStore, TrackingProcessor, subscribe,
+    aggregate::{Aggregate, AggregateLoader},
+    command::{EventPublisher, Pending},
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{
+        EventHandler, HandlerError, InMemoryTokenStore, InlinePublisher, ProcessingContext, TokenStore,
+        TrackingProcessor,
+    },
+    store::{
+        AppendEvents, ExpectedVersion, InMemoryEventStore, LiveEvents, LoadStream, SubscriptionOptions, subscribe,
+    },
 };
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
@@ -76,7 +83,7 @@ impl World {
     async fn tick(&self, n: u32) {
         let clock = match self.clocks.load(&1).await.unwrap() {
             Some(clock) => clock,
-            None => cqrs::New(1).into(),
+            None => cqrs::aggregate::New(1).into(),
         };
         let ticks: Vec<_> = (1..=n).map(|i| Ticked(clock.ticks + i)).collect();
         self.publisher.commit(clock, Pending::new(ticks)).await.unwrap();

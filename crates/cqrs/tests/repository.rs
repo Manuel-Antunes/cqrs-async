@@ -4,8 +4,10 @@
 //! gateway (see `stateful.rs`).
 
 use cqrs::{
-    Aggregate, AggregateLoader, EventAppender, EventPublisher, InMemoryEventStore, InlinePublisher, Loaded, Pending,
-    StoreError,
+    aggregate::{Aggregate, AggregateLoader, EventAppender, Loaded},
+    command::{EventPublisher, Pending},
+    processing::InlinePublisher,
+    store::{InMemoryEventStore, StoreError},
     testing::{AggregateFixture, block_on},
 };
 
@@ -78,7 +80,7 @@ impl Sums {
 
     fn with_total(total: u64) -> Self {
         let sums = sums();
-        sums.add(cqrs::New::<Sum>(1).into(), total).unwrap();
+        sums.add(cqrs::aggregate::New::<Sum>(1).into(), total).unwrap();
         sums
     }
 
@@ -122,7 +124,7 @@ fn an_aggregate_loaded_before_another_commit_is_refused_with_the_actual_version(
 #[test]
 fn committing_a_new_aggregate_twice_is_a_conflict() {
     let sums = Sums::with_total(10);
-    let refused = sums.add(cqrs::New::<Sum>(1).into(), 1);
+    let refused = sums.add(cqrs::aggregate::New::<Sum>(1).into(), 1);
     assert!(matches!(refused, Err(StoreError::Conflict { .. })), "{refused:?}");
     assert_eq!(sums.total(), 10);
 }

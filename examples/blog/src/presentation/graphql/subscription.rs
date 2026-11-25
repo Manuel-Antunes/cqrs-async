@@ -1,7 +1,7 @@
 use std::{future::ready, marker::PhantomData};
 
 use async_graphql::{Context, ID, Result, Subscription};
-use cqrs::{EventFeed, QuerySubscriptions};
+use cqrs::{query::QuerySubscriptions, store::EventFeed};
 use futures_core::Stream;
 use futures_util::{StreamExt, TryStreamExt};
 

@@ -49,7 +49,7 @@ impl AccountEvent {
 /// cqrs-es names events with `String`s.
 impl cqrs_es::DomainEvent for AccountEvent {
     fn event_type(&self) -> String {
-        cqrs::DomainEvent::event_type(self).to_owned()
+        cqrs::event::DomainEvent::event_type(self).to_owned()
     }
 
     fn event_version(&self) -> String {

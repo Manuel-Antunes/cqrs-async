@@ -5,8 +5,11 @@ use std::{
 };
 
 use cqrs::{
-    AppendCondition, AppendEvents, Cursor, DomainEvent, EventCriteria, EventEnvelope, ExpectedVersion, Gap, Horizon,
-    LoadStream, LogPage, Metadata, ReadLog, Recorded, SourceEvents, StoreError, StreamId, TaggedEvent,
+    event::{AppendCondition, DomainEvent, EventCriteria, EventEnvelope, Metadata, StreamId},
+    store::{
+        AppendEvents, Cursor, ExpectedVersion, Gap, Horizon, LoadStream, LogPage, ReadLog, Recorded, SourceEvents,
+        StoreError, TaggedEvent,
+    },
 };
 use futures_util::TryStreamExt;
 use serde::{Serialize, de::DeserializeOwned};
@@ -332,7 +335,7 @@ where
     ///
     /// The positions skipped up to the last event read that **no log**
     /// committed in that snapshot come back as
-    /// [`missing`](cqrs::LogPage::missing): only those can still be filled.
+    /// [`missing`](cqrs::store::LogPage::missing): only those can still be filled.
     /// The other logs' positions, missing from this log's rows, are not
     /// taken for gaps (risk 1.2 of the migration plan: with two logs under
     /// load, a processor's cursor carried a hundred gaps or more).
@@ -723,7 +726,7 @@ fn criteria_keys(log: &str, criteria: &EventCriteria) -> Result<Vec<i64>, StoreE
 }
 
 /// A criterion as the queries bind it: its distinct tags and its types.
-fn bind_criterion(criterion: &cqrs::Criterion) -> (Vec<String>, Vec<String>) {
+fn bind_criterion(criterion: &cqrs::event::Criterion) -> (Vec<String>, Vec<String>) {
     let mut tags: Vec<String> = criterion.tags.iter().map(ToString::to_string).collect();
     tags.sort_unstable();
     tags.dedup();
@@ -811,7 +814,7 @@ fn from_micros(micros: i64) -> SystemTime {
 
 #[cfg(test)]
 mod tests {
-    use cqrs::Tag;
+    use cqrs::event::Tag;
 
     use super::*;
 
@@ -823,7 +826,7 @@ mod tests {
         }
     }
 
-    impl cqrs::TagResolver for Tagged {
+    impl cqrs::event::TagResolver for Tagged {
         fn tags(&self) -> Vec<Tag> {
             self.0.clone()
         }
@@ -863,11 +866,11 @@ mod tests {
         assert_ne!(write_keys("other", &batch), expected, "logs never share a lock key");
         let criteria = EventCriteria {
             criteria: vec![
-                cqrs::Criterion {
+                cqrs::event::Criterion {
                     types: vec![],
                     tags: vec![Tag::new("room", 1), Tag::new("floor", 2)],
                 },
-                cqrs::Criterion {
+                cqrs::event::Criterion {
                     types: vec!["a", "b"],
                     tags: vec![],
                 },
@@ -879,7 +882,7 @@ mod tests {
             criteria_keys(
                 "log",
                 &EventCriteria {
-                    criteria: vec![cqrs::Criterion::default()]
+                    criteria: vec![cqrs::event::Criterion::default()]
                 }
             )
             .is_err()

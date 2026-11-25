@@ -119,7 +119,7 @@ impl<A: Aggregate> Loaded<A> {
 /// for `New`, which expects the stream not to exist:
 ///
 /// ```
-/// # use cqrs::{CommandContext, Autocommit, EventAppender, InMemoryEventStore, InlinePublisher, New, StoreError, append_writes, testing::block_on};
+/// # use cqrs::{aggregate::{EventAppender, New}, command::{CommandContext, Autocommit, append_writes}, processing::InlinePublisher, store::{InMemoryEventStore, StoreError}, testing::block_on};
 /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 /// # enum DoorEvent { Installed { id: u32 } }
 /// # #[cqrs::aggregate(event = DoorEvent)]

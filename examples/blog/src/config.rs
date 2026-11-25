@@ -5,7 +5,7 @@
 //!   commit. No runtime needed; what the domain and flow tests use.
 //! - [`start_in_memory`]: asynchronous and in memory. Commands return once
 //!   committed; the projections follow on their own Tokio tasks
-//!   ([`TrackingProcessor`](cqrs::TrackingProcessor)s), and queries can be
+//!   ([`TrackingProcessor`](cqrs::processing::TrackingProcessor)s), and queries can be
 //!   subscribed to.
 //! - [`start`]: the same on PostgreSQL, with SeaORM as the blog's own
 //!   infrastructure: posts keep their state in a table, saved with their
@@ -21,7 +21,12 @@
 
 use std::sync::Arc;
 
-use cqrs::{Cqrs, Events, InMemoryEventStore, InMemorySnapshots, InlinePublisher, Intercepted};
+use cqrs::{
+    Cqrs, Intercepted,
+    aggregate::InMemorySnapshots,
+    processing::{Events, InlinePublisher},
+    store::InMemoryEventStore,
+};
 use cqrs_postgres::sqlx::PgPool;
 use sea_orm::{DbErr, SqlxPostgresConnector};
 use sea_orm_migration::MigratorTrait;
@@ -111,8 +116,8 @@ pub struct Running<C, Q, R, E> {
 
 impl<C, Q, R, Ev, S, T, M> Running<C, Q, R, Events<Ev, S, T, M>>
 where
-    Ev: cqrs::DomainEvent,
-    S: cqrs::ReadLog<Ev> + Clone + 'static,
+    Ev: cqrs::event::DomainEvent,
+    S: cqrs::store::ReadLog<Ev> + Clone + 'static,
     T: Send + Sync,
     M: Send + Sync,
 {

@@ -1,6 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cqrs::{AggregateLoader, LoadStream, Loaded, SnapshotStore, SourceEvents, StoreError};
+use cqrs::{
+    aggregate::{AggregateLoader, Loaded, SnapshotStore},
+    store::{LoadStream, SourceEvents, StoreError},
+};
 
 use crate::{
     application::commands::PostRepository,

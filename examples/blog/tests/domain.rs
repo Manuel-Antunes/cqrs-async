@@ -5,7 +5,10 @@ use std::marker::PhantomData;
 
 use blog::domain::{Post, PostError, PostEvent, PostId};
 use cqrs::{
-    Aggregate, AggregateLoader, EventPublisher, InMemoryEventStore, InlinePublisher, Pending,
+    aggregate::{Aggregate, AggregateLoader},
+    command::{EventPublisher, Pending},
+    processing::InlinePublisher,
+    store::InMemoryEventStore,
     testing::{AggregateFixture, block_on},
 };
 
@@ -140,7 +143,7 @@ fn framework_free_decisions_work_with_the_repository() {
     let click = || async {
         let counter = match loader.load(&1).await.unwrap() {
             Some(counter) => counter,
-            None => cqrs::New(1).into(),
+            None => cqrs::aggregate::New(1).into(),
         };
         let mut events = Vec::new();
         counter.increment(2, &mut events)?;
@@ -157,7 +160,7 @@ fn framework_free_decisions_work_with_the_repository() {
 
 #[test]
 fn event_types_come_from_the_derive() {
-    use cqrs::DomainEvent;
+    use cqrs::event::DomainEvent;
     assert_eq!(created().event_type(), "post.created");
     assert_eq!(CounterEvent::Incremented.event_type(), "Incremented");
 }

@@ -276,8 +276,8 @@ tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
 /// # #[derive(Clone, cqrs::DomainEvent)] struct Ticked;
 /// # struct Counter;
 /// # #[cqrs::event_handler]
-/// # impl cqrs::EventHandler for Counter {
-/// #     async fn handle(&self, _: &cqrs::EventEnvelope<Ticked>, _: &mut cqrs::ProcessingContext<'_>) -> Result<(), cqrs::HandlerError> { Ok(()) }
+/// # impl cqrs::processing::EventHandler for Counter {
+/// #     async fn handle(&self, _: &cqrs::event::EventEnvelope<Ticked>, _: &mut cqrs::processing::ProcessingContext<'_>) -> Result<(), cqrs::processing::HandlerError> { Ok(()) }
 /// # }
 /// let _ = cqrs::Cqrs::from_publisher(()).projection(Counter);
 /// ```

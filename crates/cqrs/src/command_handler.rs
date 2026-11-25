@@ -11,7 +11,7 @@
 //!
 //! ```
 //! use std::future::Future;
-//! use cqrs::{CommandContext, AggregateLoader, CommandGateway, CommandHandler, EventAppender, InlinePublisher, InMemoryEventStore, Loaded, New, StoreError, testing::block_on};
+//! use cqrs::{aggregate::{AggregateLoader, EventAppender, Loaded, New}, command::{CommandContext, CommandGateway, CommandHandler}, processing::InlinePublisher, store::{InMemoryEventStore, StoreError}, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 //! enum CounterEvent { Added(u64) }
@@ -95,7 +95,7 @@
 //! The command is taken by reference, as the handler may run again:
 //!
 //! ```compile_fail
-//! # use cqrs::{CommandContext, CommandHandler};
+//! # use cqrs::command::{CommandContext, CommandHandler};
 //! # #[cqrs::command(error = ())] struct Ping;
 //! struct PingHandler;
 //! #[cqrs::command_handler]
@@ -107,7 +107,7 @@
 //! and an entity is recorded with events of its own type only:
 //!
 //! ```compile_fail,E0271
-//! # use cqrs::{CommandContext, CommandHandler, New, StoreError};
+//! # use cqrs::{aggregate::New, command::{CommandContext, CommandHandler}, store::StoreError};
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Rang { Once }
 //! # #[cqrs::aggregate(event = Rang)] struct Bell { id: u32 }
@@ -128,7 +128,7 @@
 //! gateway is declared,
 //!
 //! ```compile_fail,E0277
-//! # use cqrs::{CommandContext, CommandHandler, StoreError};
+//! # use cqrs::{command::{CommandContext, CommandHandler}, store::StoreError};
 //! # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum Ticked { Once }
 //! # #[cqrs::command(error = StoreError)] struct Tick;
 //! # #[cqrs::command(error = StoreError)] struct Ring;
@@ -148,7 +148,7 @@
 //! and a command gateway needs the unit of work its commands run in:
 //!
 //! ```compile_fail
-//! # #[cqrs::command(error = cqrs::StoreError)] struct Tick;
+//! # #[cqrs::command(error = cqrs::store::StoreError)] struct Tick;
 //! #[cqrs::command_gateway(handles(Tick))]
 //! struct Clock; // no `#[gateway(unit)]` field
 //! ```

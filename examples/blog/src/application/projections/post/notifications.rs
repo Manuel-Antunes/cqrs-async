@@ -3,7 +3,10 @@
 
 use std::{fmt, future::Future};
 
-use cqrs::{EventEnvelope, EventHandler, HandlerError, ProcessingContext};
+use cqrs::{
+    event::EventEnvelope,
+    processing::{EventHandler, HandlerError, ProcessingContext},
+};
 
 use super::PostProjection;
 use crate::domain::PostEvent;

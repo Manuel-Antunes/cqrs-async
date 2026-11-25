@@ -1,6 +1,10 @@
 use std::marker::PhantomData;
 
-use cqrs::{Aggregate, SnapshotStore, StoreError, StreamId};
+use cqrs::{
+    aggregate::{Aggregate, SnapshotStore},
+    event::StreamId,
+    store::StoreError,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::PgPool;
 

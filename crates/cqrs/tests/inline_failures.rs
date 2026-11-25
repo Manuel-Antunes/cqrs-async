@@ -8,8 +8,11 @@ use std::sync::{
 };
 
 use cqrs::{
-    Aggregate, CommandContext, CommandGateway, CommandHandler, EventAppender, EventEnvelope, EventHandler,
-    HandlerError, InMemoryEventStore, InlinePublisher, ProcessingContext, ProcessingFailure, ReadLog, StoreError,
+    aggregate::{Aggregate, EventAppender},
+    command::{CommandContext, CommandGateway, CommandHandler},
+    event::EventEnvelope,
+    processing::{EventHandler, HandlerError, InlinePublisher, ProcessingContext, ProcessingFailure},
+    store::{InMemoryEventStore, ReadLog, StoreError},
     testing::block_on,
 };
 use tracing::{
@@ -56,7 +59,7 @@ struct Commands<P> {
 impl<P> CommandHandler<Tick> for Commands<P> {
     async fn handle(&self, command: &Tick, events: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
         events.append(Ticked(1));
-        events.record(cqrs::New::<Clock>(command.id));
+        events.record(cqrs::aggregate::New::<Clock>(command.id));
         Ok(())
     }
 }
@@ -187,8 +190,12 @@ impl Counting {
     }
 }
 
-impl cqrs::EventHandler<Ticked> for Counting {
-    async fn handle(&self, _: &cqrs::EventEnvelope<Ticked>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+impl cqrs::processing::EventHandler<Ticked> for Counting {
+    async fn handle(
+        &self,
+        _: &cqrs::event::EventEnvelope<Ticked>,
+        _: &mut ProcessingContext<'_>,
+    ) -> Result<(), HandlerError> {
         self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fails {
             return Err(HandlerError::msg("down"));
@@ -201,15 +208,15 @@ impl cqrs::EventHandler<Ticked> for Counting {
 /// ones after it. `Isolated` gives each member every event.
 #[test]
 fn a_tuple_is_a_group_and_isolated_members_each_see_every_event() {
-    use cqrs::{EventProcessor, Isolated};
+    use cqrs::processing::{EventProcessor, Isolated};
     let store = InMemoryEventStore::new();
-    let events = block_on(cqrs::AppendEvents::append(
+    let events = block_on(cqrs::store::AppendEvents::append(
         &store,
         &mut (),
-        &cqrs::StreamId::new("clock", "1"),
-        cqrs::ExpectedVersion::NoStream,
+        &cqrs::event::StreamId::new("clock", "1"),
+        cqrs::store::ExpectedVersion::NoStream,
         vec![Ticked(1), Ticked(2)],
-        &cqrs::Metadata::new(),
+        &cqrs::event::Metadata::new(),
     ))
     .unwrap();
 

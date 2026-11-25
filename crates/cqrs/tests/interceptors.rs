@@ -3,8 +3,13 @@
 use std::sync::Mutex;
 
 use cqrs::{
-    Command, CommandContext, CommandGateway, CommandHandler, InMemoryEventStore, InlinePublisher, Intercepted,
-    Interceptor, Message, Metadata, QueryGateway, QueryHandler, StoreError, testing::block_on,
+    Intercepted, Interceptor, Message,
+    command::{Command, CommandContext, CommandGateway, CommandHandler},
+    event::Metadata,
+    processing::InlinePublisher,
+    query::{QueryGateway, QueryHandler},
+    store::{InMemoryEventStore, StoreError},
+    testing::block_on,
 };
 
 #[derive(Debug, PartialEq)]

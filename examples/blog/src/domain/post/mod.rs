@@ -8,7 +8,7 @@ mod event;
 /// The post's identity.
 mod id;
 
-use cqrs::EventAppender;
+use cqrs::aggregate::EventAppender;
 use serde::{Deserialize, Serialize};
 
 pub use error::PostError;
@@ -23,7 +23,7 @@ pub use id::PostId;
 /// struct holds no buffer, so derives, literals and serialization work as for
 /// any struct.
 ///
-/// The derive writes the [`Aggregate`](cqrs::Aggregate) impl: stream `post`,
+/// The derive writes the [`Aggregate`](cqrs::aggregate::Aggregate) impl: stream `post`,
 /// id from the `id` field, initial state with the other fields at their
 /// default, and `evolve` calling `apply`.
 #[cqrs::aggregate(name = "post", event = PostEvent)]
@@ -50,7 +50,7 @@ impl Post {
     }
 
     /// Drafts the post `id`, unpublished. The title is trimmed. There is no
-    /// post yet, so this takes none: commit it to `cqrs::New`, which expects
+    /// post yet, so this takes none: commit it to `cqrs::aggregate::New`, which expects
     /// the post's stream not to exist.
     ///
     /// # Errors

@@ -17,12 +17,19 @@ use std::{
     time::Duration,
 };
 
-use cqrs::SnapshotStore;
+use cqrs::aggregate::SnapshotStore;
 use cqrs::{
-    Aggregate, AppendEvents, Cursor, DeadLetter, DeadLetterQueue, EventEnvelope, EventFeed, EventHandler,
-    EventPublisher, Events, ExpectedVersion, Gap, HandlerError, LoadStream, Metadata, Pending, ProcessingContext,
-    ReadLog, SourceEvents, StoreError, StreamId, SubscriptionOptions, TokenStore, TrackingOptions, TrackingToken,
-    TransactionManager, retry_dead_letters,
+    aggregate::Aggregate,
+    command::{EventPublisher, Pending},
+    event::{EventEnvelope, Metadata, StreamId},
+    processing::{
+        DeadLetter, DeadLetterQueue, EventHandler, Events, HandlerError, ProcessingContext, TokenStore,
+        TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
+    },
+    store::{
+        AppendEvents, Cursor, EventFeed, ExpectedVersion, Gap, LoadStream, ReadLog, SourceEvents, StoreError,
+        SubscriptionOptions,
+    },
 };
 use cqrs_postgres::{
     PgTransaction, PostgresDeadLetters, PostgresEventStore, PostgresSnapshotStore, PostgresTokenStore,
@@ -105,7 +112,7 @@ where
     P: EventPublisher<A::Event>,
 {
     publisher
-        .commit(cqrs::New::<A>(id).into(), Pending::new(events))
+        .commit(cqrs::aggregate::New::<A>(id).into(), Pending::new(events))
         .await
         .unwrap()
         .expect("events were committed")
@@ -710,7 +717,7 @@ async fn parked_events_survive_the_process_and_are_retried_from_the_database() {
     let events = Events::new(store.clone())
         .with_tokens(PostgresTokenStore::new(pool.clone()))
         .with_transactions(PostgresTransactions::new(pool.clone()));
-    let clocks = cqrs::AggregateLoader::<Clock, _>::new(store.clone());
+    let clocks = cqrs::aggregate::AggregateLoader::<Clock, _>::new(store.clone());
     let handler = Poisoned::new(&stream(1));
     let processor = events
         .processor("parking", Arc::clone(&handler))
@@ -1035,12 +1042,12 @@ async fn snapshots_are_kept_per_aggregate_and_revision() {
     let pool = database_or_skip!();
     let snapshots = PostgresSnapshotStore::<Tally>::new(pool.clone());
     let store = PostgresEventStore::new(pool.clone(), "clocks");
-    let tallies = cqrs::AggregateLoader::new(store.clone()).with_snapshots(snapshots.clone(), 2);
-    let publisher = cqrs::InlinePublisher::new(store);
+    let tallies = cqrs::aggregate::AggregateLoader::new(store.clone()).with_snapshots(snapshots.clone(), 2);
+    let publisher = cqrs::processing::InlinePublisher::new(store);
     for n in 1..=3 {
         let tally = match tallies.load(&1).await.unwrap() {
             Some(tally) => tally,
-            None => cqrs::New(1).into(),
+            None => cqrs::aggregate::New(1).into(),
         };
         publisher
             .commit(tally, Pending::new(vec![ClockEvent::Ticked { n }]))
@@ -1104,7 +1111,7 @@ async fn a_conditional_append_lets_exactly_one_of_racing_deciders_win() {
     // in its own stream, on the condition that nothing about room 1 changed.
     let (free, head) = store.source(&room(1)).await.unwrap();
     assert!(free.is_empty());
-    let condition = cqrs::AppendCondition {
+    let condition = cqrs::event::AppendCondition {
         criteria: room(1),
         after: head,
     };
@@ -1211,7 +1218,7 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<SeatEvent>::new(pool, "seats");
     let none = Metadata::new();
-    let room_1_floor_2 = cqrs::AppendCondition {
+    let room_1_floor_2 = cqrs::event::AppendCondition {
         criteria: cqrs::criteria![room = 1, floor = 2],
         after: 0,
     };
@@ -1258,7 +1265,7 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
     assert!(matches!(refused, Err(StoreError::ConditionFailed)));
     // A condition read after it holds again.
     let (stream, events) = take("d", 1, 2);
-    let fresh = cqrs::AppendCondition {
+    let fresh = cqrs::event::AppendCondition {
         after: 3,
         ..room_1_floor_2
     };
@@ -1277,7 +1284,7 @@ struct Totals {
     fail_once_at: Option<u64>,
     failed: std::sync::atomic::AtomicBool,
     /// Announces each applied position, once committed.
-    applied: Arc<cqrs::QueryUpdateChannel<Applied, u64>>,
+    applied: Arc<cqrs::query::QueryUpdateChannel<Applied, u64>>,
 }
 
 /// Subscribed to by the test, to see what the projection announced.
@@ -1466,16 +1473,16 @@ enum Parity {
     Ticked { n: u64 },
 }
 
-impl cqrs::DomainEvent for Parity {
+impl cqrs::event::DomainEvent for Parity {
     fn event_type(&self) -> &'static str {
         "Ticked"
     }
 }
 
-impl cqrs::TagResolver for Parity {
-    fn tags(&self) -> Vec<cqrs::Tag> {
+impl cqrs::event::TagResolver for Parity {
+    fn tags(&self) -> Vec<cqrs::event::Tag> {
         let Self::Ticked { n } = self;
-        vec![cqrs::Tag::new("parity", if n % 2 == 0 { "even" } else { "odd" })]
+        vec![cqrs::event::Tag::new("parity", if n % 2 == 0 { "even" } else { "odd" })]
     }
 }
 
@@ -1497,7 +1504,7 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
     assert_eq!(read, [Parity::Ticked { n: 2 }, Parity::Ticked { n: 4 }]);
 
     // Only an even tick since the read refuses a decision on the even ones.
-    let condition = cqrs::AppendCondition {
+    let condition = cqrs::event::AppendCondition {
         criteria: even,
         after: head,
     };
@@ -1549,8 +1556,8 @@ async fn hand_written_tags_are_indexed_and_guard_conditions() {
 /// write rolls back with the token.
 struct FailsOnce(std::sync::atomic::AtomicBool);
 
-impl<E: cqrs::DomainEvent, Tx: Send> cqrs::EventInterceptor<E, Tx> for FailsOnce {
-    async fn intercept<N: cqrs::EventChain<Tx>>(
+impl<E: cqrs::event::DomainEvent, Tx: Send> cqrs::processing::EventInterceptor<E, Tx> for FailsOnce {
+    async fn intercept<N: cqrs::processing::EventChain<Tx>>(
         &self,
         _: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
@@ -1568,8 +1575,8 @@ impl<E: cqrs::DomainEvent, Tx: Send> cqrs::EventInterceptor<E, Tx> for FailsOnce
 /// the projection: it commits or rolls back with it.
 struct AuditRows;
 
-impl cqrs::EventInterceptor<ClockEvent, PgTransaction> for AuditRows {
-    async fn intercept<N: cqrs::EventChain<PgTransaction>>(
+impl cqrs::processing::EventInterceptor<ClockEvent, PgTransaction> for AuditRows {
+    async fn intercept<N: cqrs::processing::EventChain<PgTransaction>>(
         &self,
         event: &EventEnvelope<ClockEvent>,
         context: &mut ProcessingContext<'_, PgTransaction>,
@@ -1700,14 +1707,14 @@ impl Aggregate for KeptClock {
 }
 
 /// The application's repository: loads the state it kept, with its version.
-async fn find_kept(pool: &PgPool, id: u32) -> Option<cqrs::Loaded<KeptClock>> {
+async fn find_kept(pool: &PgPool, id: u32) -> Option<cqrs::aggregate::Loaded<KeptClock>> {
     let row: Option<(i64, i64)> = sqlx::query_as("SELECT ticks, version FROM clock_state WHERE id = $1")
         .bind(i64::from(id))
         .fetch_optional(pool)
         .await
         .unwrap();
     row.map(|(ticks, version)| {
-        cqrs::Loaded::at(
+        cqrs::aggregate::Loaded::at(
             KeptClock {
                 id,
                 ticks: ticks as u64,
@@ -1718,7 +1725,7 @@ async fn find_kept(pool: &PgPool, id: u32) -> Option<cqrs::Loaded<KeptClock>> {
 }
 
 /// Saves the state `committed` left, in the caller's transaction.
-async fn save_kept(tx: &mut PgTransaction, clock: &cqrs::Loaded<KeptClock>) {
+async fn save_kept(tx: &mut PgTransaction, clock: &cqrs::aggregate::Loaded<KeptClock>) {
     sqlx::query(
         "INSERT INTO clock_state (id, ticks, version) VALUES ($1, $2, $3) \
          ON CONFLICT (id) DO UPDATE SET ticks = $2, version = $3",
@@ -1746,16 +1753,18 @@ struct TickKept {
 struct TickKeptHandler;
 
 #[cqrs::command_handler]
-impl cqrs::CommandHandler for TickKeptHandler {
+impl cqrs::command::CommandHandler for TickKeptHandler {
     async fn handle(
         &self,
         command: &TickKept,
-        events: &mut cqrs::CommandContext<ClockEvent>,
+        events: &mut cqrs::command::CommandContext<ClockEvent>,
         tx: &mut PgTransaction,
     ) -> Result<(), StoreError> {
         let clock = match command.stale {
-            Some(version) => cqrs::Loaded::at(KeptClock { id: 1, ticks: version }, version),
-            None => find_kept_in(tx, 1).await.unwrap_or_else(|| cqrs::New(1).into()),
+            Some(version) => cqrs::aggregate::Loaded::at(KeptClock { id: 1, ticks: version }, version),
+            None => find_kept_in(tx, 1)
+                .await
+                .unwrap_or_else(|| cqrs::aggregate::New(1).into()),
         };
         let from = clock.ticks + 1;
         events.extend(ticks(from, command.ticks));
@@ -1774,14 +1783,14 @@ impl cqrs::CommandHandler for TickKeptHandler {
 }
 
 /// The kept state, read in the unit's transaction.
-async fn find_kept_in(tx: &mut PgTransaction, id: u32) -> Option<cqrs::Loaded<KeptClock>> {
+async fn find_kept_in(tx: &mut PgTransaction, id: u32) -> Option<cqrs::aggregate::Loaded<KeptClock>> {
     let row: Option<(i64, i64)> = sqlx::query_as("SELECT ticks, version FROM clock_state WHERE id = $1")
         .bind(i64::from(id))
         .fetch_optional(&mut **tx)
         .await
         .unwrap();
     row.map(|(ticks, version)| {
-        cqrs::Loaded::at(
+        cqrs::aggregate::Loaded::at(
             KeptClock {
                 id,
                 ticks: ticks as u64,
@@ -1806,7 +1815,7 @@ async fn state_and_events_commit_and_roll_back_together() {
     let events = Events::new(store.clone()).with_transactions(PostgresTransactions::new(pool.clone()));
     let mut feed = std::pin::pin!(events.subscribe(0));
     let stream = StreamId::of::<KeptClock>(&1);
-    let send = |command: TickKept| cqrs::dispatch_command(&TickKeptHandler, command, Metadata::new(), &events);
+    let send = |command: TickKept| cqrs::command::dispatch_command(&TickKeptHandler, command, Metadata::new(), &events);
 
     // Failed after saving: no state, no events.
     let failed = send(TickKept {

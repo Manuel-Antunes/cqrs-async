@@ -12,9 +12,12 @@ use std::{
 };
 
 use cqrs::{
-    Aggregate, EmitUpdates, EventEnvelope, EventHandler, EventPublisher, Events, HandlerError, InMemoryEventStore,
-    ProcessingContext, ProcessorProgress, QuerySubscriptions, QueryUpdateChannel, StoreError, SubscriptionQueries,
-    emit_updates, head_of,
+    aggregate::Aggregate,
+    command::EventPublisher,
+    event::EventEnvelope,
+    processing::{EventHandler, Events, HandlerError, ProcessingContext, ProcessorProgress},
+    query::{EmitUpdates, QuerySubscriptions, QueryUpdateChannel, SubscriptionQueries, emit_updates, head_of},
+    store::{InMemoryEventStore, StoreError},
 };
 use futures_util::{Stream, StreamExt};
 
@@ -75,7 +78,7 @@ struct TicksOf(u32);
 struct ClockQueries(Arc<Ticks>);
 
 #[cqrs::query_handler]
-impl cqrs::QueryHandler<TicksOf> for ClockQueries {
+impl cqrs::query::QueryHandler<TicksOf> for ClockQueries {
     async fn handle(&self, TicksOf(id): TicksOf) -> Result<u64, StoreError> {
         Ok(self.0.of(&id.to_string()))
     }
@@ -109,15 +112,19 @@ struct Instance {
     queries: SubscriptionQueries<
         ClockQueries,
         ClockUpdates,
-        cqrs::Projected<Events<ClockEvent, Store>, ProcessorProgress, ClockEvent>,
+        cqrs::query::Projected<Events<ClockEvent, Store>, ProcessorProgress, ClockEvent>,
     >,
-    projection: cqrs::ProcessorHandle,
+    projection: cqrs::processing::ProcessorHandle,
     emitting: tokio::task::JoinHandle<()>,
 }
 
 impl Instance {
     /// Its emitter starts at the head, before it serves subscriptions.
-    async fn new(events: &Events<ClockEvent, Store>, ticks: &Arc<Ticks>, options: cqrs::TrackingOptions) -> Self {
+    async fn new(
+        events: &Events<ClockEvent, Store>,
+        ticks: &Arc<Ticks>,
+        options: cqrs::processing::TrackingOptions,
+    ) -> Self {
         let projection = events
             .processor("ticks", Arc::clone(ticks))
             .with_options(options)
@@ -151,7 +158,7 @@ impl Instance {
 }
 
 struct World {
-    clocks: cqrs::AggregateLoader<Clock, Store>,
+    clocks: cqrs::aggregate::AggregateLoader<Clock, Store>,
     events: Events<ClockEvent, Store>,
     instance: Instance,
 }
@@ -160,9 +167,9 @@ impl World {
     async fn new() -> Self {
         let events = Events::new(InMemoryEventStore::new());
         let ticks = Arc::new(Ticks::default());
-        let instance = Instance::new(&events, &ticks, cqrs::TrackingOptions::default()).await;
+        let instance = Instance::new(&events, &ticks, cqrs::processing::TrackingOptions::default()).await;
         Self {
-            clocks: cqrs::AggregateLoader::new(events.store().clone()),
+            clocks: cqrs::aggregate::AggregateLoader::new(events.store().clone()),
             events,
             instance,
         }
@@ -174,16 +181,19 @@ impl World {
 }
 
 async fn record(
-    clocks: &cqrs::AggregateLoader<Clock, Store>,
+    clocks: &cqrs::aggregate::AggregateLoader<Clock, Store>,
     events: &Events<ClockEvent, Store>,
     id: u32,
     event: ClockEvent,
 ) {
     let clock = match clocks.load(&id).await.unwrap() {
         Some(clock) => clock,
-        None => cqrs::New(id).into(),
+        None => cqrs::aggregate::New(id).into(),
     };
-    events.commit(clock, cqrs::Pending::new(vec![event])).await.unwrap();
+    events
+        .commit(clock, cqrs::command::Pending::new(vec![event]))
+        .await
+        .unwrap();
 }
 
 async fn next<T>(stream: &mut (impl Stream<Item = Result<T, StoreError>> + Unpin)) -> T {
@@ -250,7 +260,7 @@ async fn each_subscriber_gets_its_own_query_and_pipeline() {
 
 #[tokio::test(start_paused = true)]
 async fn plain_queries_still_work_through_the_same_gateway() {
-    use cqrs::QueryGateway;
+    use cqrs::query::QueryGateway;
     let world = World::new().await;
     world.record(1, ClockEvent::Ticked).await;
     world.instance.projection.caught_up(1).await;
@@ -260,10 +270,10 @@ async fn plain_queries_still_work_through_the_same_gateway() {
 
 #[tokio::test(start_paused = true)]
 async fn global_progress_waits_for_every_segment_of_every_instance() {
-    use cqrs::{GlobalProgress, InMemoryTokenStore, ProjectionProgress, TokenStore, TrackingToken};
+    use cqrs::processing::{GlobalProgress, InMemoryTokenStore, ProjectionProgress, TokenStore, TrackingToken};
     // Moves `segment`'s token to `position`, as its owner's processor would.
     async fn store(tokens: &InMemoryTokenStore, segment: u32, owner: &str, position: u64) {
-        let cursor = cqrs::Cursor::at(position);
+        let cursor = cqrs::store::Cursor::at(position);
         let token = TrackingToken {
             processor: "p",
             segment,
@@ -299,7 +309,10 @@ async fn global_progress_waits_for_every_segment_of_every_instance() {
 /// projected it (the other one sees it in the shared tokens).
 #[tokio::test(start_paused = true)]
 async fn subscribers_of_every_instance_get_changes_projected_by_another() {
-    use cqrs::{StreamId, TrackingOptions, segment_of};
+    use cqrs::{
+        event::StreamId,
+        processing::{TrackingOptions, segment_of},
+    };
     let events: Events<ClockEvent, Store> = Events::new(InMemoryEventStore::new());
     let ticks = Arc::new(Ticks::default());
     let options = TrackingOptions {
@@ -326,7 +339,7 @@ async fn subscribers_of_every_instance_get_changes_projected_by_another() {
     assert_eq!(next(&mut watched_on_b).await, 0);
     assert_eq!(next(&mut watched_on_a).await, 0);
 
-    let clocks = cqrs::AggregateLoader::<Clock, _>::new(events.store().clone());
+    let clocks = cqrs::aggregate::AggregateLoader::<Clock, _>::new(events.store().clone());
     record(&clocks, &events, from_a, ClockEvent::Ticked).await;
     record(&clocks, &events, from_b, ClockEvent::Ticked).await;
     assert_eq!(next(&mut watched_on_b).await, 1, "projected by a, emitted on b");

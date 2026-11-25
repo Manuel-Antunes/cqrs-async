@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use async_graphql::{Context, ID, Object, Result};
-use cqrs::{CommandGateway, Metadata};
+use cqrs::{command::CommandGateway, event::Metadata};
 
 use super::error::{from_blog, post_id};
 use crate::{

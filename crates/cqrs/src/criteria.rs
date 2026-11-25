@@ -44,7 +44,7 @@ impl fmt::Display for Tag {
 ///   (then `DomainEvent` is written by hand too):
 ///
 /// ```
-/// use cqrs::{DomainEvent, Tag, TagResolver};
+/// use cqrs::event::{DomainEvent, Tag, TagResolver};
 ///
 /// #[derive(Clone)]
 /// enum OrderEvent {
@@ -88,7 +88,7 @@ pub struct Criterion {
 /// criteria.
 ///
 /// ```
-/// # use cqrs::{EventCriteria, Tag};
+/// # use cqrs::event::{EventCriteria, Tag};
 /// // Everything about course 42, plus the subscriptions of student 7.
 /// let criteria = EventCriteria::tagged([Tag::new("course", 42)])
 ///     .or(EventCriteria::tagged([Tag::new("student", 7)]).of_types(["student.subscribed"]));
@@ -161,13 +161,13 @@ impl AppendCondition {
 /// `tags![course = 42, student = id]`.
 ///
 /// ```
-/// # use cqrs::{Tag, tags};
+/// # use cqrs::{event::Tag, tags};
 /// assert_eq!(tags![course = 42, student = "ana"], [Tag::new("course", 42), Tag::new("student", "ana")]);
 /// ```
 #[macro_export]
 macro_rules! tags {
     ($($key:ident = $value:expr),* $(,)?) => {
-        [$($crate::Tag::new(::core::stringify!($key), $value)),*]
+        [$($crate::event::Tag::new(::core::stringify!($key), $value)),*]
     };
 }
 
@@ -175,7 +175,7 @@ macro_rules! tags {
 /// must all carry, optionally narrowed to some event types after `=>`.
 ///
 /// ```
-/// # use cqrs::{EventCriteria, Tag, criteria};
+/// # use cqrs::{event::{EventCriteria, Tag}, criteria};
 /// let course = 42;
 /// let student = 7;
 /// // Everything about the course, or the student's subscriptions.
@@ -189,9 +189,9 @@ macro_rules! tags {
 #[macro_export]
 macro_rules! criteria {
     ($($($key:ident = $value:expr),+ $(=> [$($kind:expr),* $(,)?])?);+ $(;)?) => {
-        $crate::EventCriteria {
+        $crate::event::EventCriteria {
             criteria: ::std::vec![$(
-                $crate::Criterion {
+                $crate::event::Criterion {
                     types: ::std::vec![$($($kind),*)?],
                     tags: ::std::vec::Vec::from($crate::tags![$($key = $value),+]),
                 }
