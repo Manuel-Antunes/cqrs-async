@@ -1,0 +1,23 @@
+[package]
+name = "bank"
+description = "PoC example: a bank whose accounts' log reaches another service through RabbitMQ, and a portfolio projected from two logs (fan-in)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cqrs = { workspace = true, features = ["derive", "tokio", "json"] }
+cqrs-amqp.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The REST APIs.
+axum = "0.8"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Requests to the routers, without a socket.
+tower = { version = "0.5", features = ["util"] }

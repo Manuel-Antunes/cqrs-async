@@ -725,6 +725,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bank"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "axum",
+ "cqrs-async",
+ "cqrs-async-amqp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

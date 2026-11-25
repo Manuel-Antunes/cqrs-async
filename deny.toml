@@ -3,9 +3,9 @@
 
 [graph]
 all-features = true
-# The published crates only: the blog example and the benchmarks are not
+# The published crates only: the examples and the benchmarks are not
 # shipped (the example's GraphQL stack brings MPL-2.0 crates).
-exclude = ["blog", "cqrs-benchmarks", "cqrs-versus"]
+exclude = ["blog", "bank", "cqrs-benchmarks", "cqrs-versus"]
 
 [advisories]
 # A vulnerability or an unmaintained crate fails the check; yanked versions

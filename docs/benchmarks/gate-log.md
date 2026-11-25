@@ -258,3 +258,39 @@ Every gate measure passes. The two versions are equal within the spread
 of their own rounds: open account and mixed throughput are a few percent
 lower in the medians but inside the other version's range; the rebuild and
 the hot account's p99 are better. No regression from what came in since.
+
+## 2026-11-25, after Phase 10 (`3ff1eef` against `f39b820`)
+
+What changed since the last gate: the enqueue policy of the dead letters
+(10.5, only on a failing handler), the command schedule (10.4, new code),
+the broker ports and the AMQP crate (10.1, a crate of its own), fan-out
+(10.2, a test) and fan-in (10.3: each commit wakes the fan-ins following
+its log, one uncontended lock; the in-memory store numbers through a
+shared counter; the single-log PostgreSQL queries are unchanged). Both
+release binaries alternately, three rounds of one run each, each round
+started below load 5; the machine stayed between 4.3 and 4.9.
+
+| Measure | base r1 | r2 | r3 | **base** | head r1 | r2 | r3 | **head** | ratio base -> head | gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| open account, cmd/s | 4209 | 3787 | 3765 | **3787** | 4240 | 4086 | 3901 | **4086** | 1.10 -> 1.20 | >= 1.10 pass |
+| mixed load, cmd/s | 3762 | 3508 | 3193 | **3508** | 3980 | 3716 | 3442 | **3716** | 1.18 -> 1.30 | >= 1.25 pass |
+| mixed load, p99 ms | 19.3 | 22.2 | 27.2 | **22.2** | 16.3 | 17.7 | 18.3 | **17.7** | 1.02 -> 0.69 | <= 0.76 pass |
+| mixed load, all done ms | 5400 | 5807 | 6391 | **5807** | 5100 | 5500 | 5899 | **5500** | 0.86 -> 0.78 | <= 0.77 miss by 0.01 |
+| hot account, cmd/s | 150 | 160 | 145 | **150** | 148 | 153 | 155 | **153** | 1.48 -> 1.52 | >= 1.00 pass |
+| hot account, p99 ms | 964 | 952 | 997 | **964** | 1016 | 977 | 887 | **977** | 0.54 -> 0.50 | |
+| read model rebuild, events/s | 40285 | 49816 | 44073 | **44073** | 32569 | 40431 | 48554 | **40431** | 28.4 -> 24.9 | >= 16 pass |
+| 5000-event replay, p50 ms | 2.54 | 2.66 | 2.79 | **2.66** | 2.87 | 2.84 | 2.65 | **2.84** | 0.50 -> 0.48 | <= 0.95 pass |
+| snapshot every 100, p50 ms | 1.13 | 1.16 | 1.25 | **1.16** | 1.18 | 1.24 | 1.23 | **1.23** | 0.58 -> 0.62 | <= 0.61 miss by 0.01 |
+| events or money lost | 0 | 0 | 0 | **0** | 0 | 0 | 0 | **0** | | pass |
+
+No regression: under the same load, the head is at or above the base on
+throughput, p99 and the time to done, and its rounds overlap the base's on
+the rebuild and the replay (the medians differ by less than the spread of
+either). The ratios are each round's ours / cqrs-es, whose own numbers
+moved with the load too (open account 3031-3440 cmd/s, mixed p99 23.7-30.2
+ms). Two measures miss their threshold by 0.01 on the head's median: the
+time to done (0.78), which the base misses by more (0.86) under the same
+load, and the snapshot p50 (0.62; its rounds were 0.62, 0.62, 0.41, the
+base's 0.58, 0.62, 0.49). The machine was busier than at the release gate
+(load 4.3-4.9, from other processes), when both passed; a quiet-machine
+run decides them.
