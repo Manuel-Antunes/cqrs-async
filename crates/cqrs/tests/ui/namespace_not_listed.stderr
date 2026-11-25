@@ -1,0 +1,21 @@
+error[E0277]: `PostProjection` does not list this namespace
+  --> tests/ui/namespace_not_listed.rs:12:23
+   |
+12 | impl EventHandler for PostProjection {
+   |                       ^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = note: add it to `namespaces(...)` in the `#[cqrs::projection]` of `PostProjection` (check its spelling)
+help: the trait `HasNamespace<15759238113854190190>` is not implemented for `PostProjection`
+      but trait `HasNamespace<14069806804400755173>` is implemented for it
+  --> tests/ui/namespace_not_listed.rs:8:1
+   |
+ 8 | #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `cqrs::__private::NamespaceHandler`
+  --> src/projection.rs
+   |
+   | pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>:
+   |           ---------------- required by a bound in this trait
+   |     HasNamespace<ID> + HasUpdates + Send + Sync
+   |     ^^^^^^^^^^^^^^^^ required by this bound in `NamespaceHandler`
+   = note: this error originates in the attribute macro `cqrs::projection` (in Nightly builds, run with -Z macro-backtrace for more info)

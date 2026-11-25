@@ -51,6 +51,34 @@ fn krate() -> TokenStream2 {
 /// #[cqrs::command_handler]
 /// impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> { .. }
 /// ```
+///
+/// Written by hand, the gateway above is (the macros name these traits
+/// through a hidden path, so they never depend on your imports):
+///
+/// ```text
+/// // Each command listed has its handler impl: checked where the gateway is declared.
+/// const _: () = {
+///     trait HandlesAll: Handles<CreatePost> + Handles<PublishPost> {}
+///     impl<R, P> HandlesAll for PostCommandGateway<R, P> {}
+/// };
+///
+/// // One route per command, in a unit of work of the `#[gateway(unit)]` field.
+/// impl<R, P> Dispatch<CreatePost> for PostCommandGateway<R, P>
+/// where
+///     Self: CommandHandler<CreatePost>,
+///     P: UnitOfWork<<Self as CommandHandler<CreatePost>>::Event, <Self as CommandHandler<CreatePost>>::Unit>,
+///     BlogError: From<StoreError>,
+/// {
+///     fn dispatch_with(&self, message: CreatePost, metadata: Metadata) -> impl Future<..> + Send {
+///         dispatch_command(self, message, metadata, &self.events)
+///     }
+/// }
+/// // ... the same for PublishPost
+///
+/// // `commands = PostCommands`:
+/// pub trait PostCommands: CommandGateway<CreatePost> + CommandGateway<PublishPost> {}
+/// impl<T: ?Sized + CommandGateway<CreatePost> + CommandGateway<PublishPost>> PostCommands for T {}
+/// ```
 #[proc_macro_attribute]
 pub fn command_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
     let parser = |input: syn::parse::ParseStream| gateway::GatewayArguments::parse(gateway::Kind::Commands, input);
@@ -67,6 +95,16 @@ pub fn command_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream
 /// the trait of every gateway answering them. Subscribing is the
 /// projection's (`#[cqrs::projection(.., updates(..), subscriptions =
 /// Name)]`): it pushes the updates.
+///
+/// Written by hand, each query listed is a route to the struct's handler:
+///
+/// ```text
+/// impl<M> Dispatch<FindPost> for PostQueryGateway<M> where Self: QueryHandler<FindPost> {
+///     fn dispatch_with(&self, message: FindPost, metadata: Metadata) -> impl Future<..> + Send {
+///         <Self as QueryHandler<FindPost>>::handle_with(self, message, metadata)
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn query_gateway(arguments: TokenStream, item: TokenStream) -> TokenStream {
     let parser = |input: syn::parse::ParseStream| gateway::GatewayArguments::parse(gateway::Kind::Queries, input);
@@ -111,6 +149,13 @@ pub fn derive_query_updates(input: TokenStream) -> TokenStream {
 ///         -> Result<(), HandlerError> { .. }
 /// }
 /// ```
+///
+/// Written by hand, an impl without a namespace names the event and the unit
+/// of work (`impl<Tx: Send> EventHandler<PostEvent, Tx> for H` when the
+/// context names no `Tx`); with `namespace = "summaries"`, it implements the
+/// hidden `NamespaceHandler<{ namespace_id("summaries") }, PostEvent, Tx>`
+/// instead, which only the projection's macro routes to (`batch = N` sets its
+/// `BATCH_SIZE`, an `updated` method its `EMITS`).
 #[proc_macro_attribute]
 pub fn event_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(projection::event_handler(
@@ -132,6 +177,14 @@ pub fn event_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {
 /// emits through, and which the unit's subscriptions listen to.
 /// `subscriptions = Name` also generates the trait of whatever subscribes to
 /// them all.
+///
+/// Written by hand, it implements `Projection` (`NAME`, `Event`,
+/// `NAMESPACES`), a hidden `HasNamespace` per namespace (which a namespace's
+/// handler requires, so a namespace not listed does not compile), and
+/// `Route<Tx>`: a `match` on the namespace's index calling its handler, for
+/// every unit of work its handlers all accept. With `updates(..)`, a struct
+/// `{Name}Updates` with a `QueryUpdateChannel` per query, its
+/// `UpdatesOf<Query>` impls and its `emit`.
 #[proc_macro_attribute]
 pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(projection::projection(
@@ -156,6 +209,22 @@ pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
 ///     async fn handle(&self, command: &PublishPost, events: &mut CommandContext<PostEvent>, tx: &mut R::Tx)
 ///         -> Result<(), BlogError> { ... }
 /// }
+/// ```
+///
+/// Written by hand, the impl above is:
+///
+/// ```text
+/// impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P>
+/// where
+///     PostCommandGateway<R, P>: Send + Sync,
+/// {
+///     type Event = PostEvent;
+///     type Unit = InTransaction<R::Tx>; // `Autocommit` without a `tx` argument
+///     async fn handle(&self, command: &PublishPost, ctx: &mut CommandContext<PostEvent>, tx: &mut R::Tx)
+///         -> Result<(), BlogError> { ... }
+/// }
+/// // For the gateway that lists `PublishPost`.
+/// impl<R, P> Handles<PublishPost> for PostCommandGateway<R, P> {}
 /// ```
 #[proc_macro_attribute]
 pub fn command_handler(arguments: TokenStream, item: TokenStream) -> TokenStream {

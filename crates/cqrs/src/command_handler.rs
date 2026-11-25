@@ -239,6 +239,14 @@ impl<E> CommandContext<E> {
         }
     }
 
+    /// Appends `event` to the decision, until [`record`](Self::record)
+    /// assigns it to an entity. The same as
+    /// [`EventAppender::append`](crate::EventAppender::append), without
+    /// importing the trait (domain methods take `&mut impl EventAppender<E>`).
+    pub fn append(&mut self, event: E) {
+        self.events.push(event);
+    }
+
     /// The metadata the command was sent with.
     pub fn metadata(&self) -> &Metadata {
         &self.metadata

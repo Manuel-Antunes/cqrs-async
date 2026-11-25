@@ -1,0 +1,20 @@
+error[E0277]: `Clock<P>` lists `Ring` in `handles(...)` but has no handler for it
+  --> tests/ui/gateway_missing_handler.rs:15:8
+   |
+15 | struct Clock<P> {
+   |        ^^^^^^^^ no `#[cqrs::command_handler]` / `#[cqrs::query_handler]` impl for `Ring`
+   |
+   = note: write `#[cqrs::command_handler] impl CommandHandler<Ring> for ...` (or `QueryHandler<Ring>`), or remove `Ring` from `handles(...)`
+help: the trait `Handles<Ring>` is not implemented for `Clock<P>`
+      but trait `Handles<Tick>` is implemented for it
+  --> tests/ui/gateway_missing_handler.rs:20:1
+   |
+20 | #[cqrs::command_handler]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `Tick`, found `Ring`
+note: required by a bound in `__CqrsHandlesAll`
+  --> tests/ui/gateway_missing_handler.rs:14:1
+   |
+14 | #[cqrs::command_gateway(handles(Tick, Ring))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__CqrsHandlesAll`
+   = note: this error originates in the attribute macro `cqrs::command_handler` which comes from the expansion of the attribute macro `cqrs::command_gateway` (in Nightly builds, run with -Z macro-backtrace for more info)

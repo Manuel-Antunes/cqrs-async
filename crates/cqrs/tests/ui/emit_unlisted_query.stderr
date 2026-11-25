@@ -1,0 +1,26 @@
+error[E0277]: `PostProjectionUpdates` has no channel for `Total`
+  --> tests/ui/emit_unlisted_query.rs:34:17
+   |
+34 |         updates.emit(|_: &Total| true, 1);
+   |                 ^^^^ unsatisfied trait bound
+   |
+help: the trait `UpdatesOf<Total>` is not implemented for `PostProjectionUpdates`
+  --> tests/ui/emit_unlisted_query.rs:24:1
+   |
+24 | #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"), updates(Count, Max))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: add `Total` to the projection's `updates(..)` (or a `QueryUpdateChannel<Total>` field to a `#[derive(QueryUpdates)]` struct)
+help: `PostProjectionUpdates` implements trait `UpdatesOf<Q>`
+  --> tests/ui/emit_unlisted_query.rs:24:1
+   |
+24 | #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"), updates(Count, Max))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | `UpdatesOf<Count>`
+   | `UpdatesOf<Max>`
+note: required by a bound in `PostProjectionUpdates::emit`
+  --> tests/ui/emit_unlisted_query.rs:24:1
+   |
+24 | #[cqrs::projection(name = "post", events = PostEvent, namespaces("counts"), updates(Count, Max))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `PostProjectionUpdates::emit`
+   = note: this error originates in the attribute macro `cqrs::projection` (in Nightly builds, run with -Z macro-backtrace for more info)

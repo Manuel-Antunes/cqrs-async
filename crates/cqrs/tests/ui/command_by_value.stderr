@@ -1,0 +1,13 @@
+error: expected `&Command`: the handler may run again after a lost race
+  --> tests/ui/command_by_value.rs:15:31
+   |
+15 |     async fn handle(&self, _: Tick, _: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
+   |                               ^^^^
+
+warning: unused imports: `CommandContext` and `CommandHandler`
+ --> tests/ui/command_by_value.rs:1:22
+  |
+1 | use cqrs::{command::{CommandContext, CommandHandler}, store::StoreError};
+  |                      ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

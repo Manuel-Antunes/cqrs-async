@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use cqrs::{
-    aggregate::{Aggregate, EventAppender},
+    aggregate::Aggregate,
     command::{CommandContext, CommandGateway, CommandHandler},
     event::EventEnvelope,
     processing::{EventHandler, HandlerError, InlinePublisher, ProcessingContext, ProcessingFailure},

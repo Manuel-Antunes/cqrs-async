@@ -1,0 +1,5 @@
+error: this message is listed twice
+ --> tests/ui/gateway_listed_twice.rs:4:39
+  |
+4 | #[cqrs::command_gateway(handles(Tick, Tick))]
+  |                                       ^^^^

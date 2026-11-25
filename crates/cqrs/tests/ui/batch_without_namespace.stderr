@@ -1,0 +1,13 @@
+error: `batch` is a namespace's: a handler run on its own gets it from its processor's options
+  --> tests/ui/batch_without_namespace.rs:10:31
+   |
+10 | #[cqrs::event_handler(batch = 8)]
+   |                               ^
+
+warning: unused imports: `EventHandler`, `HandlerError`, `ProcessingContext`, and `event::EventEnvelope`
+ --> tests/ui/batch_without_namespace.rs:1:12
+  |
+1 | use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
+  |            ^^^^^^^^^^^^^^^^^^^^               ^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

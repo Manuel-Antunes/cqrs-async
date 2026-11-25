@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Arc};
 
 use cqrs::{
-    aggregate::{AggregateLoader, EventAppender, Loaded, New, SnapshotStore},
+    aggregate::{AggregateLoader, Loaded, New, SnapshotStore},
     command::{CommandContext, CommandGateway, CommandHandler},
     event::{EventEnvelope, Metadata, StreamId},
     processing::{EventHandler, Events, HandlerError, ProcessingContext, ProcessorHandle, TrackingOptions},

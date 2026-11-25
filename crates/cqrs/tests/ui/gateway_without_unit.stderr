@@ -1,0 +1,5 @@
+error: a command gateway needs the unit of work its commands run in: a field marked `#[gateway(unit)]` (e.g. the unit's `Events`, or an `InlinePublisher`)
+ --> tests/ui/gateway_without_unit.rs:5:8
+  |
+5 | struct Clock;
+  |        ^^^^^
