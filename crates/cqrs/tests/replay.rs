@@ -1,4 +1,4 @@
-//! Replaying a tracking processor (Axon's `resetTokens`): the projection is
+//! Replaying a tracking processor: the projection is
 //! cleared and rebuilt, a side-effect handler skips the replayed events.
 
 #![cfg(feature = "tokio")]

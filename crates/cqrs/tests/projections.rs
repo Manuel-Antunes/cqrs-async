@@ -1,5 +1,5 @@
 //! Projections in the token store's unit of work, and subscription queries
-//! pushed by them (Axon's `QueryUpdateEmitter`).
+//! pushed by them.
 
 #![cfg(feature = "tokio")]
 

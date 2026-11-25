@@ -1,4 +1,4 @@
-//! Pooled streaming (Axon 5): segments by aggregate, claims shared between
+//! Pooled streaming: segments by aggregate, claims shared between
 //! instances, takeover after a crash, and the sequenced dead-letter queue.
 
 #![cfg(feature = "tokio")]

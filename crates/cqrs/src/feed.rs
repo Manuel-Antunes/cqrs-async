@@ -34,7 +34,7 @@ pub trait EventFeed<E: DomainEvent>: Send + Sync {
     fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send;
 }
 
-/// Subscription queries (Axon 5): the query's current result, then a new
+/// Subscription queries: the query's current result, then a new
 /// one each time it changes. The client subscribes to the **same shape** it
 /// queries, so no event-to-API conversion is needed.
 ///

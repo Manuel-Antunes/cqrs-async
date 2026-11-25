@@ -269,7 +269,7 @@ fn into_stream(result: Result<TokenStream2>) -> TokenStream {
 /// Rust name, so renaming a variant would otherwise break old events.
 ///
 /// It implements the event's tags too (`TagResolver`, which every
-/// `DomainEvent` has), from the fields marked `#[tag]` (Axon's `@EventTag`):
+/// `DomainEvent` has), from the fields marked `#[tag]`:
 /// each becomes a tag keyed by the field name, valued by its `Display`;
 /// `#[tag = "key"]` names the key, and is required on tuple fields. Without
 /// any, the event has no tags. To resolve them by hand, implement both

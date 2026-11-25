@@ -1,4 +1,4 @@
-//! Subscription queries pushed by projections (Axon's `QueryUpdateEmitter`):
+//! Subscription queries pushed by projections:
 //! a subscriber gets the query's current result, then every update a
 //! projection emits for a query like its own.
 //!
@@ -41,7 +41,7 @@ use crate::{Dispatch, DomainEvent, EventEnvelope, EventFeed, Message, Metadata, 
 const BUFFER: usize = 256;
 
 /// The subscription queries' channels of projection `P`, one per query in
-/// its `updates(..)` (Axon's `QueryUpdateEmitter`): what its namespaces'
+/// its `updates(..)`: what its namespaces'
 /// `updated` emits through (`updates.emit(|query: &FindPost| .., result)`),
 /// and what the unit's subscriptions listen to.
 pub type QueryUpdateEmitter<P> = <P as crate::HasUpdates>::Updates;
@@ -199,8 +199,7 @@ where
 }
 
 /// A query gateway `G` whose queries can also be subscribed to: the current
-/// result from `G`, then the updates projections emit through `U` (Axon's
-/// subscription queries).
+/// result from `G`, then the updates projections emit through `U`.
 ///
 /// Updates are local to the process: every instance emits them for every
 /// event ([`emit_updates`]), so a subscriber connected to any instance sees
@@ -324,8 +323,7 @@ fn distinct<T: Clone + PartialEq + Send, E: Send>(
 }
 
 /// Pushes the new results of the queries an event changed, once the read
-/// models are up to date with it (Axon's `QueryUpdateEmitter` calls, kept
-/// out of the projection's unit of work): typically a query on the read
+/// models are up to date with it: typically a query on the read
 /// model, then [`QueryUpdateChannel::emit`]. What a projection namespace's
 /// `updated` is, for updates assembled by hand.
 ///

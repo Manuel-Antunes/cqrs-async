@@ -73,7 +73,7 @@ pub struct TrackingOptions {
     /// never holds the others back. Default 1 s.
     pub segment_stall_timeout: Duration,
     /// Events of a segment handled in one unit of work, with one token
-    /// update (Axon's `batchSize`). A worker takes what is already queued
+    /// update. A worker takes what is already queued
     /// for it, up to this many, and never waits to fill a batch, so it adds
     /// no latency. If a batch fails it is rolled back and its events are
     /// handled one at a time, with the usual retries and dead letters.
@@ -199,8 +199,7 @@ impl Default for TrackingOptions {
 ///   always land in the same segment (see [`segment_of`]); each segment is
 ///   handled by its own worker, in position order.
 /// - **One read per instance.** A single reader reads the log once and hands
-///   each event to its segment's queue (Axon's coordinator and work
-///   packages). A segment that falls behind (its queue fills, or it was taken
+///   each event to its segment's queue. A segment that falls behind (its queue fills, or it was taken
 ///   over from another instance behind the reader) reads on its own from its
 ///   position, so a slow segment never blocks the others.
 /// - **Shared between instances.** Segments are claimed in the
@@ -373,7 +372,7 @@ where
         }
     }
 
-    /// Replays the processor from the start (Axon's `resetTokens`): moves
+    /// Replays the processor from the start: moves
     /// its tokens back to position 0, then lets the handler clear what it
     /// built ([`EventHandler::reset`]). Every instance must be stopped
     /// first; [`spawn`](Self::spawn) then replays. The events stored so far
@@ -399,8 +398,7 @@ where
         Ok(self.transactions.commit(tx).await?)
     }
 
-    /// Retries the events this processor parked (Axon's dead-letter
-    /// processor), each in a unit of work of its own: see
+    /// Retries the events this processor parked, each in a unit of work of its own: see
     /// [`retry_dead_letters`](crate::retry_dead_letters). Run it once the
     /// cause is fixed; running instances may keep parking meanwhile.
     ///

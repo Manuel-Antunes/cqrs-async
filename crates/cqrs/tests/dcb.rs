@@ -1,4 +1,4 @@
-//! Dynamic consistency boundaries (Axon 5's DCB), with the classic example:
+//! Dynamic consistency boundaries, with the classic example:
 //! a course has a capacity and a student a limit of courses. Both are
 //! aggregate roots built from tags (`#[aggregate(tag = ...)]`), so a
 //! subscription, tagged with both, counts for both, and a decision is

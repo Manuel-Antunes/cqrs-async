@@ -1,5 +1,5 @@
 //! Interceptors around event handlers and projections in tracking
-//! processors (Axon's handler interceptors on event processors): order,
+//! processors: order,
 //! skipping an event, failing it inside the projection's transaction.
 
 #![cfg(feature = "tokio")]

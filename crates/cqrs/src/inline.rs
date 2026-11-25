@@ -227,8 +227,10 @@ impl<F: Fn(&ProcessingFailure) + Send + Sync> OnFailure for F {
 /// [`on_failure`](Self::on_failure) says otherwise.
 ///
 /// ```text
-/// let events = InlinePublisher::new(store).with_processor(Isolated((projection, notifier)));
-/// let unit = Cqrs::from_publisher(events).commands(gateway).build();
+/// let events = InlinePublisher::new(store).with_projection(post_projection);
+/// let unit = Cqrs::from_publisher(events)
+///     .commands(|events| PostCommandGateway::new(posts, events))
+///     .build();
 /// ```
 pub struct InlinePublisher<E, S, P = (), F = LogFailures> {
     /// Where the event streams live.

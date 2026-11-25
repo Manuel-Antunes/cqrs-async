@@ -1,4 +1,4 @@
-//! How far a reader of the whole log got (Axon's `GapAwareTrackingToken`).
+//! How far a reader of the whole log got.
 //!
 //! A store whose appends run in parallel commits positions out of order: 11
 //! may be visible while 10 is still being written. A reader keeps going past

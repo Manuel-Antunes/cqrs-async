@@ -6,6 +6,138 @@
 //! A library, not a framework: the application owns its repositories, its
 //! database and its transactions, and lends them to the handlers.
 //!
+//! # Quickstart
+//!
+//! An account opened and credited through commands; its balance, a read
+//! model kept by a projection, answered by a query. In memory and without
+//! a runtime: the projection runs inline, right after each commit.
+//!
+//! ```
+//! use std::{collections::HashMap, sync::{Arc, Mutex}};
+//!
+//! use cqrs::{
+//!     Cqrs, aggregate::AggregateLoader, prelude::*, processing::InlinePublisher,
+//!     store::{InMemoryEventStore, StoreError}, testing::block_on,
+//! };
+//!
+//! // The domain: what happened to an account, and the account deciding.
+//! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+//! enum AccountEvent {
+//!     Opened,
+//!     Deposited { amount: u64 },
+//! }
+//!
+//! #[cqrs::aggregate(name = "account", event = AccountEvent)]
+//! struct Account { id: u32, balance: u64 }
+//!
+//! impl Account {
+//!     fn apply(&mut self, event: &AccountEvent) {
+//!         if let AccountEvent::Deposited { amount } = event {
+//!             self.balance += amount;
+//!         }
+//!     }
+//!
+//!     fn deposit(&self, amount: u64, events: &mut impl EventAppender<AccountEvent>) -> Result<(), BankError> {
+//!         if amount == 0 {
+//!             return Err(BankError::NothingToDeposit);
+//!         }
+//!         events.append(AccountEvent::Deposited { amount });
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[derive(Debug, PartialEq)]
+//! enum BankError { NothingToDeposit, NoSuchAccount, Store(String) }
+//!
+//! impl From<StoreError> for BankError {
+//!     fn from(error: StoreError) -> Self { Self::Store(error.to_string()) }
+//! }
+//!
+//! // The commands, and the gateway handling them, one impl each.
+//! #[cqrs::command(error = BankError)]
+//! struct Open { id: u32 }
+//!
+//! #[cqrs::command(error = BankError)]
+//! struct Deposit { id: u32, amount: u64 }
+//!
+//! #[cqrs::command_gateway(handles(Open, Deposit))]
+//! struct Bank<P> {
+//!     accounts: AggregateLoader<Account, InMemoryEventStore<AccountEvent>>,
+//!     #[gateway(unit)]
+//!     events: P,
+//! }
+//!
+//! #[cqrs::command_handler]
+//! impl<P> CommandHandler<Open> for Bank<P> {
+//!     async fn handle(&self, command: &Open, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
+//!         ctx.append(AccountEvent::Opened);
+//!         ctx.record(New::<Account>(command.id)); // a new stream: fails if it exists
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[cqrs::command_handler]
+//! impl<P> CommandHandler<Deposit> for Bank<P> {
+//!     async fn handle(&self, command: &Deposit, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
+//!         let account = self.accounts.load(&command.id).await?.ok_or(BankError::NoSuchAccount)?;
+//!         account.deposit(command.amount, ctx)?;
+//!         ctx.record(account); // appended and committed once the handler returns
+//!         Ok(())
+//!     }
+//! }
+//!
+//! // The read side: a projection keeps the balances, a query reads them.
+//! type Balances = Arc<Mutex<HashMap<u32, u64>>>;
+//!
+//! #[cqrs::projection(name = "account", events = AccountEvent, namespaces("balances"))]
+//! struct AccountProjection { balances: Balances }
+//!
+//! #[cqrs::event_handler(namespace = "balances")]
+//! impl EventHandler for AccountProjection {
+//!     async fn handle(&self, event: &EventEnvelope<AccountEvent>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
+//!         let id = event.aggregate_id::<Account>().ok_or_else(|| HandlerError::msg("not an account"))?;
+//!         let mut balances = self.balances.lock().unwrap();
+//!         let balance = balances.entry(id).or_default();
+//!         if let AccountEvent::Deposited { amount } = event.payload {
+//!             *balance += amount;
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[cqrs::query(output = Option<u64>, error = BankError)]
+//! struct Balance { id: u32 }
+//!
+//! #[cqrs::query_gateway(handles(Balance))]
+//! struct Accounts { balances: Balances }
+//!
+//! #[cqrs::query_handler]
+//! impl QueryHandler<Balance> for Accounts {
+//!     async fn handle(&self, query: Balance) -> Result<Option<u64>, BankError> {
+//!         Ok(self.balances.lock().unwrap().get(&query.id).copied())
+//!     }
+//! }
+//!
+//! // Wiring: the store, the publisher running the projection inline, the unit.
+//! let store = InMemoryEventStore::new();
+//! let balances = Balances::default();
+//! let publisher = InlinePublisher::new(store.clone())
+//!     .with_projection(AccountProjection { balances: Arc::clone(&balances) });
+//! let bank = Cqrs::from_publisher(publisher)
+//!     .commands(|events| Bank { accounts: AggregateLoader::new(store), events })
+//!     .queries(Accounts { balances })
+//!     .build();
+//!
+//! block_on(async {
+//!     bank.commands().send(Open { id: 1 }).await?;
+//!     bank.commands().send(Deposit { id: 1, amount: 30 }).await?;
+//!     assert_eq!(bank.commands().send(Deposit { id: 1, amount: 0 }).await, Err(BankError::NothingToDeposit));
+//!     assert_eq!(bank.queries().query(Balance { id: 1 }).await?, Some(30));
+//!     Ok::<(), BankError>(())
+//! })?;
+//! # Ok::<(), BankError>(())
+//! ```
+//!
 //! # Modules
 //!
 //! - [`aggregate`](mod@aggregate): the domain side. An [`Aggregate`]

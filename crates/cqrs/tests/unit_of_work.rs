@@ -1,4 +1,4 @@
-//! The unit of work around event handling (Axon 5's `ProcessingContext`):
+//! The unit of work around event handling:
 //! per event, `begin` → interceptors → `handle` → token → `commit` →
 //! `committed`; a failure rolls back everything written in it, interceptors
 //! included. The same unit runs dead-letter retries; inline handlers get

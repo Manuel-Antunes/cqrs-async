@@ -1,5 +1,4 @@
-//! Units of work: the [`TransactionManager`] port (Axon's transaction
-//! manager). It is the only component that opens and commits a transaction;
+//! Units of work: the [`TransactionManager`] port. It is the only component that opens and commits a transaction;
 //! token stores, dead-letter queues and event handlers take part in one by
 //! borrowing it (`&mut Tx`), so none of them can commit it, keep it, or
 //! choose its type.
@@ -13,8 +12,7 @@ use crate::StoreError;
 ///
 /// Ownership is the protocol: [`begin`](Self::begin) hands a transaction
 /// out, the participants borrow it, and [`commit`](Self::commit) consumes
-/// it. A transaction dropped without a commit is rolled back (Axon's
-/// on-error phase), and an event handler's
+/// it. A transaction dropped without a commit is rolled back, and an event handler's
 /// [`committed`](crate::EventHandler::committed) runs once the commit
 /// returned (its after-commit phase).
 ///

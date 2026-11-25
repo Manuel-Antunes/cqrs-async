@@ -1,5 +1,4 @@
-//! Progress of event processors: the [`TokenStore`] port (Axon's token
-//! store). Per processor, the event log is split into segments; each segment
+//! Progress of event processors: the [`TokenStore`] port. Per processor, the event log is split into segments; each segment
 //! has a token and is claimed by at most one owner at a time, so several
 //! instances share the work without handling an event twice. A token is a
 //! [`Cursor`]: how far the segment got, and the positions it skipped because

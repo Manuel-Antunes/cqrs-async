@@ -1,4 +1,4 @@
-//! Command handlers (Axon 5 style): the gateway hands in an appender with
+//! Command handlers: the gateway hands in an appender with
 //! its publisher, the handler loads, decides and commits through it.
 
 use std::sync::{

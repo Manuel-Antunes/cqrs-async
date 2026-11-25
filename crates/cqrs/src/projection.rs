@@ -1,4 +1,4 @@
-//! Projections (Axon 5's event handling components, grouped by namespace):
+//! Projections:
 //! one per aggregate root, a struct holding what its handlers need, with
 //! one event handler per namespace. Each namespace runs in a processor of
 //! its own (its token, its unit of work), named `"{projection}.{namespace}"`.
@@ -91,8 +91,7 @@
 //!
 //! # Subscription queries
 //!
-//! `updates(..)` lists the queries the projection's changes are pushed to
-//! (Axon's subscription queries): it gets a channel per query, named
+//! `updates(..)` lists the queries the projection's changes are pushed to: it gets a channel per query, named
 //! `QueryUpdateEmitter<Self>`, and a namespace emits through them in its
 //! `updated`, on every instance, once it handled the event. The unit's
 //! queries subscribe to them (`app.queries().subscribe(FindPost { id })`),

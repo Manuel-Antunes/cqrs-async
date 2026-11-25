@@ -13,7 +13,7 @@ use crate::{backend, unsigned};
 /// Snapshots of aggregates `A` in PostgreSQL, as JSON (`serde`): the newest
 /// one per aggregate, in `cqrs_snapshots`.
 ///
-/// Snapshots are tagged with a revision of `A`'s shape (Axon's `@Revision`):
+/// Snapshots are tagged with a revision of `A`'s shape:
 /// bump it with [`with_revision`](Self::with_revision) when the shape
 /// changes, and older snapshots are ignored (the aggregate is replayed from
 /// its events, then snapshotted again). A snapshot that fails to decode is

@@ -1,5 +1,4 @@
-//! Command handlers and their unit of work (Axon 5's command handling with
-//! its `ProcessingContext`): the handler decides, records what it decided,
+//! Command handlers and their unit of work: the handler decides, records what it decided,
 //! and the gateway commits.
 //!
 //! The gateway is the handler: one struct holding the services its commands
@@ -160,12 +159,11 @@ use crate::{
     Metadata, OutputOf, SourceEvents, StoreError, StreamId,
 };
 
-/// The context of one run of a command handler, handed in by the gateway
-/// (Axon 5's `EventAppender` with its processing context): the events the
+/// The context of one run of a command handler, handed in by the gateway: the events the
 /// domain decides on, until [`record`](Self::record) assigns them to an
 /// entity; the metadata the command was sent with, which every event
-/// carries (Axon's correlation data); and the [`AppendCondition`] of what
-/// the run read with [`source`](Self::source) (Axon 5's DCB). The unit of
+/// carries; and the [`AppendCondition`] of what
+/// the run read with [`source`](Self::source). The unit of
 /// work appends what was recorded once the handler returned.
 ///
 /// It is an [`EventAppender`](crate::EventAppender), so domain methods take
@@ -295,8 +293,7 @@ impl<E> CommandContext<E> {
         self.condition = AppendCondition::both(self.condition.take(), Some(condition));
     }
 
-    /// Records the events appended since the last call as `entity`'s
-    /// (Axon 5's `EventAppender` with its entity): they are appended to its
+    /// Records the events appended since the last call as `entity`'s: they are appended to its
     /// stream by the unit of work, expecting the version it was loaded at
     /// (or, for a [`New`](crate::New) one, that it does not exist), with the
     /// command's metadata and the conditions of what the run read.

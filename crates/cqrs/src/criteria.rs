@@ -1,4 +1,4 @@
-//! Dynamic consistency boundaries (Axon 5's DCB): events carry [`Tag`]s,
+//! Dynamic consistency boundaries: events carry [`Tag`]s,
 //! a decision reads the events matching [`EventCriteria`] wherever they are
 //! stored, and its events are appended only if nothing matching was
 //! appended since ([`AppendCondition`]).
@@ -34,7 +34,7 @@ impl fmt::Display for Tag {
     }
 }
 
-/// The tags an event carries (Axon's `TagResolver`): what criteria select
+/// The tags an event carries: what criteria select
 /// it by, and what a conditional append locks. Implemented on the event
 /// itself, two ways, as in Axon:
 ///

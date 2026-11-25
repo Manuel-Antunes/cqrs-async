@@ -36,8 +36,7 @@ pub trait Command: Message {}
 )]
 pub trait Query: Message {}
 
-/// Answers one query type `Q`: the read side's use case (Axon's
-/// `@QueryHandler`). A struct answers several queries with one impl per
+/// Answers one query type `Q`: the read side's use case. A struct answers several queries with one impl per
 /// query, sharing its dependencies (usually the read model): it is the query
 /// gateway itself (`#[cqrs::query_gateway]`).
 ///
@@ -102,8 +101,7 @@ impl<Q: Query, H: QueryHandler<Q>> QueryHandler<Q> for Arc<H> {
 )]
 pub trait Handles<M> {}
 
-/// What a processor hands an event handler with each event (Axon's
-/// `ProcessingContext`): the unit of work it runs in, and whether the event
+/// What a processor hands an event handler with each event: the unit of work it runs in, and whether the event
 /// is replayed. Built by the processor; handlers only read it.
 pub struct ProcessingContext<'a, Tx = ()> {
     /// The unit of work: a database transaction, or `()` in memory.
@@ -140,8 +138,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
         }
     }
 
-    /// The processor handling the event (Axon's processing context knows
-    /// it too): for a projection, `"{projection}.{namespace}"`; `""` outside
+    /// The processor handling the event: for a projection, `"{projection}.{namespace}"`; `""` outside
     /// a processor. What an interceptor around a whole projection tells its
     /// namespaces apart by.
     pub fn processor(&self) -> &str {
@@ -154,7 +151,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
         self.transaction
     }
 
-    /// Whether the event is replayed (Axon's `ReplayStatus`).
+    /// Whether the event is replayed.
     pub fn replay(&self) -> bool {
         self.replay
     }
@@ -207,8 +204,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 /// write there is generic over `Tx` and runs with any store (the macro
 /// makes it so when the context names no `Tx`).
 pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
-    /// Whether it sees the events of a replay (Axon's `@DisallowReplay`
-    /// when `false`): a projection rebuilds from them, a side effect (an
+    /// Whether it sees the events of a replay: a projection rebuilds from them, a side effect (an
     /// e-mail) must not happen twice. Default: `true`.
     const REPLAY: bool = true;
 
@@ -231,8 +227,7 @@ pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
         async {}
     }
 
-    /// Clears what it built before a replay rebuilds it (Axon's
-    /// `@ResetHandler`), in its own unit of work, called by
+    /// Clears what it built before a replay rebuilds it, in its own unit of work, called by
     /// [`TrackingProcessor::reset`](crate::TrackingProcessor::reset).
     /// Default: nothing to clear.
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
@@ -316,7 +311,7 @@ impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventHandler<E, Tx> for A
     }
 }
 
-/// Implements [`EventHandler`] for a tuple: a processing group (Axon), its
+/// Implements [`EventHandler`] for a tuple: a processing group, its
 /// members fed in order, the first failure stopping the rest. Run by one
 /// processor, they share its unit of work and its token: they commit all or
 /// none. In a replay, members that do not [`REPLAY`](EventHandler::REPLAY)

@@ -18,7 +18,7 @@
 //! [`Postgres`] is only a shortcut: the same by hand is
 //! `Events::new(PostgresEventStore::new(pool, "posts")).with_tokens(PostgresTokenStore::new(pool)).with_transactions(PostgresTransactions::new(pool))`.
 //!
-//! # Global order (Axon's JDBC design)
+//! # Global order
 //!
 //! Appends run in parallel: positions come from a sequence, so a commit may
 //! become visible before an older one, leaving a temporary gap, and an
@@ -34,7 +34,7 @@
 //! snapshot's `xmax`, so once the oldest running transaction is newer, the
 //! gap is given up, never earlier.
 //!
-//! # Criteria (Axon 5's DCB)
+//! # Criteria
 //!
 //! Tags live in `cqrs_event_tags (tag, position)`, so reading the events of
 //! a criterion is an index range per tag, not a scan of the log.

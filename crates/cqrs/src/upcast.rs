@@ -1,5 +1,5 @@
 //! Events as stores keep them, and reading ones written in an older shape
-//! (Axon's upcasters). Shared by every store that keeps JSON (the `json`
+//!. Shared by every store that keeps JSON (the `json`
 //! feature).
 //!
 //! An event's payload is stored as JSON with its type and version. When the
@@ -144,7 +144,7 @@ tuple_upcaster!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
 tuple_upcaster!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 
 /// One step: events of one type at one version are converted to the next
-/// version (Axon's `SingleEventUpcaster`). Built by [`upcast`].
+/// version. Built by [`upcast`].
 pub struct Upcast<F> {
     /// The type converted.
     event_type: &'static str,

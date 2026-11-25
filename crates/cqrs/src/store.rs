@@ -249,7 +249,7 @@ pub trait AppendEvents<E: DomainEvent, Tx: Send = ()>: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Recorded>, StoreError>> + Send;
 }
 
-/// Reads by criteria, from any stream (Axon 5's DCB): what a decision
+/// Reads by criteria, from any stream: what a decision
 /// spanning several aggregates, or an aggregate built from tags, reads.
 pub trait SourceEvents<E>: Send + Sync {
     /// Every event matching `criteria`, from any stream, in position order,

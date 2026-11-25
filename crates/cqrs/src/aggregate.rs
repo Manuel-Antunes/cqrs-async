@@ -1,6 +1,5 @@
 //! Domain side of event sourcing: the [`Aggregate`] contract, and the
-//! [`EventAppender`] its decisions record events into (Axon 5's
-//! `EventAppender`, passed in rather than held by the aggregate).
+//! [`EventAppender`] its decisions record events into.
 
 use std::fmt;
 
@@ -41,7 +40,7 @@ use crate::DomainEvent;
 ///
 /// Creating one is the exception: there is no instance to decide on yet, so
 /// the creation is an associated function, committed to
-/// [`New`](crate::New) (Axon 5's static creational command handler):
+/// [`New`](crate::New):
 ///
 /// ```
 /// # use cqrs::aggregate::EventAppender;
@@ -71,8 +70,7 @@ pub trait Aggregate: Send + Sync + Sized + 'static {
     /// kind of change.
     type Event: DomainEvent;
 
-    /// The state before any event: what replay starts from (Axon 5's entity
-    /// creator, from the identifier). A creation is not decided on it: it is
+    /// The state before any event: what replay starts from. A creation is not decided on it: it is
     /// an associated function of the aggregate, committed to
     /// [`New`](crate::New).
     fn initial(id: &Self::Id) -> Self;

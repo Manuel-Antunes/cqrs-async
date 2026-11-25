@@ -1,10 +1,10 @@
-//! Interceptors (Axon's dispatch and handler interceptors): logging,
+//! Interceptors: logging,
 //! metrics, tracing, authorization, enriching metadata. One wrapper,
 //! [`Intercepted`], for every kind of handler:
 //!
 //! ```text
 //! // Commands and queries: around a whole gateway.
-//! let commands = Intercepted::new(PostCommandGateway::new(posts), (Timing, RequireUser));
+//! let commands = Intercepted::new(PostCommandGateway::new(posts, events), (Timing, RequireUser));
 //! commands.send_with(PublishPost { id }, metadata).await
 //!
 //! // Events: around an event handler or a projection, inside its unit of
@@ -85,7 +85,7 @@ tuple_interceptor!(A 0, B 1, C 2, D 3, E 4, F5 5, G 6);
 tuple_interceptor!(A 0, B 1, C 2, D 3, E 4, F5 5, G 6, H 7);
 
 /// Runs around the handling of each event of type `E` by an event handler
-/// or a projection (Axon's handler interceptors on event processors),
+/// or a projection,
 /// inside its unit of work: it gets the handler's [`ProcessingContext`], so
 /// what it writes in `context.transaction()` commits or rolls back with the
 /// handler's changes and the processor's token. It may look at the event,
@@ -127,8 +127,7 @@ pub trait EventInterceptor<E: DomainEvent, Tx = ()>: Send + Sync {
     ) -> impl Future<Output = Result<(), HandlerError>> + Send;
 }
 
-/// The rest of the chain an [`EventInterceptor`] runs around (Axon's
-/// interceptor chain): the next interceptors, then the handler. Consumed by
+/// The rest of the chain an [`EventInterceptor`] runs around: the next interceptors, then the handler. Consumed by
 /// [`proceed`](Self::proceed), so the handler runs at most once.
 ///
 /// Sealed: the chains are this crate's; an interceptor only calls

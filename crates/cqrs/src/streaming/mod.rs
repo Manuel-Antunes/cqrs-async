@@ -8,7 +8,7 @@
 //! - [`subscribe`]: the catch-up subscription itself, a `Stream` of every
 //!   event after a position, never missing one.
 //! - [`TrackingProcessor`]: one event handler over the log split into
-//!   segments by aggregate (Axon's pooled streaming processor): claims shared
+//!   segments by aggregate: claims shared
 //!   between instances, retries, and a sequenced dead-letter queue.
 //! - [`LiveEvents`]: the in-memory live feed underneath, plain Tokio
 //!   `broadcast` (a latency hint; the store stays the source of truth).
@@ -70,9 +70,10 @@ impl<E: DomainEvent + Clone, Tx: Send> EventHandler<E, Tx> for LiveEvents<E> {
 ///
 /// ```text
 /// let events = Events::new(InMemoryEventStore::new());
-/// let commands = PostGateway::new(posts, events.clone()); // handlers commit through it
-/// let handle = events.track("post-view", post_view); // tracking processor
-/// let stream = events.subscribe(0);                  // EventFeed
+/// let commands = PostCommandGateway::new(posts, events.clone()); // its unit of work
+/// let handle = events.track("post-view", post_view);            // a tracking processor
+/// let running = events.projection(post_projection).spawn();     // a processor per namespace
+/// let stream = events.subscribe(0);                             // the log, as a Stream
 /// ```
 ///
 /// The blog example wires its whole asynchronous side this way.

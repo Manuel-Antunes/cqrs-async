@@ -1,5 +1,4 @@
-//! Events that kept failing: the [`DeadLetterQueue`] port (Axon's sequenced
-//! dead-letter queue). Parking an event also parks the later events of its
+//! Events that kept failing: the [`DeadLetterQueue`] port. Parking an event also parks the later events of its
 //! sequence (its aggregate), so they are never handled out of order, while
 //! the other sequences keep flowing.
 

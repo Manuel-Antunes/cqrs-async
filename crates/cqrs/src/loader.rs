@@ -116,7 +116,7 @@ impl<A: Aggregate> Loaded<A> {
 /// The aggregate `id`, not stored yet: what a creation commits to.
 ///
 /// A creation is decided without an instance, by an associated function of
-/// the aggregate (Axon 5's static creational command handler), and recorded
+/// the aggregate, and recorded
 /// for `New`, which expects the stream not to exist:
 ///
 /// ```
