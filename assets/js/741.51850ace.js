@@ -1,0 +1,1 @@
+(Array.isArray(globalThis.webpackChunkcqrs_async_docs)?globalThis.webpackChunkcqrs_async_docs:globalThis.webpackChunkcqrs_async_docs=[]).push([[741],{5741(){}}]);

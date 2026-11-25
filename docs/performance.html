@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-docs/performance" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">Performance | cqrs_async</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://manuel-antunes.github.io/cqrs-async/docs/performance"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Performance | cqrs_async"><meta data-rh="true" name="description" content="Against cqrs-es"><meta data-rh="true" property="og:description" content="Against cqrs-es"><link data-rh="true" rel="icon" href="/cqrs-async/img/favicon.svg"><link data-rh="true" rel="canonical" href="https://manuel-antunes.github.io/cqrs-async/docs/performance"><link data-rh="true" rel="alternate" href="https://manuel-antunes.github.io/cqrs-async/docs/performance" hreflang="en"><link data-rh="true" rel="alternate" href="https://manuel-antunes.github.io/cqrs-async/docs/performance" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Performance","item":"https://manuel-antunes.github.io/cqrs-async/docs/performance"}]}</script><link rel="stylesheet" href="/cqrs-async/assets/css/styles.e62a7922.css">
+<script src="/cqrs-async/assets/js/runtime~main.e83117d3.js" defer="defer"></script>
+<script src="/cqrs-async/assets/js/main.8c9acfc3.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/cqrs-async/"><div class="navbar__logo"><img src="/cqrs-async/img/logo.svg" alt="cqrs_async" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/cqrs-async/img/logo.svg" alt="cqrs_async" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate">cqrs_async</b></a><a class="navbar__item navbar__link" href="/cqrs-async/guide">Guide</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/cqrs-async/docs/introduction">Docs</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/cqrs-async/docs/performance">Performance</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/Manuel-Antunes/cqrs-async" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"><div class="navbar__search searchBarContainer_NW3z" dir="ltr"><svg aria-hidden="true" class="searchIcon_T3tP" focusable="false" viewBox="0 0 16 16"><path fill="currentColor" d="M6.02945 10.20327a4.17382 4.17382 0 1 1 4.17382-4.17382 4.15609 4.15609 0 0 1-4.17382 4.17382Zm9.69195 4.2199-4.8225-4.82338A5.88021 5.88021 0 0 0 12.058 6.02856 6.00467 6.00467 0 1 0 9.59979 10.8989l4.82338 4.82338a.89729.89729 0 0 0 1.29912 0 .89749.89749 0 0 0-.00087-1.29909Z"></path></svg><input placeholder="Search" aria-label="Search" class="navbar__search-input searchInput_YFbd" value=""><div class="loadingRing_RJI3 searchBarLoadingRing_YnHq"><div></div><div></div><div></div><div></div></div></div></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/cqrs-async/docs/introduction"><span class="categoryLinkLabel_W154">Start here</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/introduction"><span class="linkLabel_WmDU">Introduction</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/architecture"><span class="linkLabel_WmDU">Architecture</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/cqrs-async/docs/patterns"><span class="categoryLinkLabel_W154">Concepts</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/patterns"><span class="linkLabel_WmDU">Patterns</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/cqrs-async/docs/unit-of-work"><span class="categoryLinkLabel_W154">Reference</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/unit-of-work"><span class="linkLabel_WmDU">Unit of work</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/event-processing"><span class="linkLabel_WmDU">Event processing</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/cqrs-async/docs/storage"><span class="linkLabel_WmDU">Storage</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/cqrs-async/docs/performance"><span class="linkLabel_WmDU">Performance</span></a></li></ul></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/cqrs-async/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Reference</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Performance</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Performance</h1></header><h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="against-cqrs-es">Against cqrs-es<a href="#against-cqrs-es" class="hash-link" aria-label="Direct link to Against cqrs-es" title="Direct link to Against cqrs-es" translate="no">​</a></h2>
+<p><code>benchmarks/versus</code> runs the same bank on this library and on cqrs-es 0.5
+with postgres-es 0.5, against the same PostgreSQL: open, deposit, withdraw
+and transfer, one aggregate per account, a balance read model, and a
+transfer policy crediting the target account. The business rules live in
+one shared module (<code>bank.rs</code>); each library only wraps them, wired the way
+its docs recommend. Here, the read model and the transfers are tracking
+processors with 8 segments and batches of up to 100 events
+(<code>CQRS_VERSUS_BATCH</code>, default 100); in cqrs-es they run inline after each
+commit.</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#F8F8F2"><span class="token plain">CQRS_POSTGRES_URL=postgres://cqrs:cqrs@127.0.0.1:55432/cqrs cargo run --release -p cqrs-versus -- 3</span><br></div></code></pre></div></div>
+<p>32 clients and a 32-connection pool per system, a fresh schema per system,
+the median of the runs.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="current-numbers">Current numbers<a href="#current-numbers" class="hash-link" aria-label="Direct link to Current numbers" title="Direct link to Current numbers" translate="no">​</a></h3>
+<p>The run after Phase 10 (<code>docs/benchmarks/gate-log.md</code>, &quot;after Phase 10&quot;):
+three rounds, median of the rounds, alternating with the code of the
+release gate under the same load. Absolute values are ours; the ratio is
+ours divided by cqrs-es&#x27;s, with the threshold the gate holds it to.</p>
+<table><thead><tr><th>Measure</th><th style="text-align:right">Ours</th><th style="text-align:right">Ours / cqrs-es</th><th>Gate passes if</th></tr></thead><tbody><tr><td>open account</td><td style="text-align:right">4086 cmd/s</td><td style="text-align:right">1.20</td><td>≥ 1.10</td></tr><tr><td>mixed load (1k accounts)</td><td style="text-align:right">3716 cmd/s</td><td style="text-align:right">1.30</td><td>≥ 1.25</td></tr><tr><td>mixed load, p99</td><td style="text-align:right">17.7 ms</td><td style="text-align:right">0.69</td><td>≤ 0.76</td></tr><tr><td>mixed load: done, read model and transfers included</td><td style="text-align:right">5500 ms</td><td style="text-align:right">0.78</td><td>≤ 0.77</td></tr><tr><td>hot account (32 writers, one aggregate)</td><td style="text-align:right">153 cmd/s</td><td style="text-align:right">1.52</td><td>≥ 1.00</td></tr><tr><td>hot account, p99</td><td style="text-align:right">977 ms</td><td style="text-align:right">0.50</td><td></td></tr><tr><td>read model rebuild</td><td style="text-align:right">40431 events/s</td><td style="text-align:right">24.9</td><td>≥ 16</td></tr><tr><td>5000-event aggregate, full replay, p50</td><td style="text-align:right">2.84 ms</td><td style="text-align:right">0.48</td><td>≤ 0.95</td></tr><tr><td>5000-event aggregate, snapshot every 100, p50</td><td style="text-align:right">1.23 ms</td><td style="text-align:right">0.62</td><td>≤ 0.61</td></tr><tr><td>events or money lost by the read model</td><td style="text-align:right">0</td><td style="text-align:right"></td><td>0</td></tr></tbody></table>
+<p>The machine was busier than at the release gate (load 4.3-4.9). Two
+measures miss their threshold by 0.01: the time to done, which the
+release&#x27;s code missed by more under the same load (0.86), and the
+snapshot p50, whose rounds spread from 0.41 to 0.62. Against that code,
+nothing regressed. At the release gate, on a quieter machine, every
+measure passed (open account 1.14, mixed 1.35, p99 0.70, done 0.76, hot
+account 1.44, rebuild 25.5, replay 0.49, snapshot 0.50). cqrs-es&#x27;s read
+model loses events in every run (about 170 in each): concurrent commands
+on one account race in its inline view updates.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="how-the-numbers-got-here">How the numbers got here<a href="#how-the-numbers-got-here" class="hash-link" aria-label="Direct link to How the numbers got here" title="Direct link to How the numbers got here" translate="no">​</a></h3>
+<p>Three A/B runs decide the current state, all in <code>gate-log.md</code>:</p>
+<ol>
+<li class=""><strong>After the command&#x27;s unit of work, the gateways as handlers and the
+query updates in the projection</strong> (head <code>768ac7d</code> against <code>5437e6e</code>, the
+code before those changes). Head and base are equal within the spread of their own
+rounds on every measure: the redesign costs nothing measurable on
+PostgreSQL. Mixed p99 missed its threshold on both codes by the same
+amount (0.80 and 0.81).</li>
+<li class=""><strong>PostgreSQL path optimizations</strong> (against <code>263f8cd</code>), four changes, none
+to the semantics: a conflict returns the stream&#x27;s version in the append&#x27;s
+own statement (no second read); the batch and its metadata are serialized
+straight to JSON text (no <code>serde_json::Value</code>); an aggregate is rebuilt
+through <code>LoadStream::replay</code>, which reads and decodes only what
+rebuilding uses; a page read probes the index only for the positions the
+page does not hold. Replay p50 went from 4.23 to 2.47 ms (-42%), mixed p99
+from 18.6 to 15.1 ms (-19%), hot account from 131 to 158 cmd/s (+21%);
+those three do not overlap between the two sets of rounds.</li>
+<li class=""><strong>Before the first release</strong> (<code>c315a04</code> against the optimized code):
+the public modules, the envelope without per-event copies, the wake-up
+between instances in the readers&#x27; loop and the packaging changed nothing
+measurable; every gate measure passes.</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="how-the-gate-is-run">How the gate is run<a href="#how-the-gate-is-run" class="hash-link" aria-label="Direct link to How the gate is run" title="Direct link to How the gate is run" translate="no">​</a></h3>
+<p>The rule is not to fall behind cqrs-es. The gate runs at the end of each
+phase of work, and after any commit that introduces <code>dyn</code> or touches the
+append path:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#F8F8F2"><span class="token plain">CQRS_POSTGRES_URL=postgres://cqrs:cqrs@127.0.0.1:55432/cqrs cargo run --release -p cqrs-versus -- 3</span><br></div><div class="token-line" style="color:#F8F8F2"><span class="token plain">cargo bench -p cqrs-benchmarks --bench micro</span><br></div></code></pre></div></div>
+<p>The thresholds are in the table above. To compare two versions of the
+code, one run of each is not enough: build both release binaries and run
+them alternately (base, head, base, head, base, head) under the same load,
+then compare the medians and whether the rounds overlap. The
+micro-benchmarks are informative: a regression there needs an explanation
+in the commit, but the table decides.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="noise-on-this-machine">Noise on this machine<a href="#noise-on-this-machine" class="hash-link" aria-label="Direct link to Noise on this machine" title="Direct link to Noise on this machine" translate="no">​</a></h3>
+<p>All numbers come from one laptop (Apple M4 Pro, 14 cores) with PostgreSQL
+17 in Docker on the same machine, so the benchmark&#x27;s 32 clients per system,
+both libraries and the database share the CPU. What that means for reading
+them:</p>
+<ul>
+<li class=""><strong>Load moves everything.</strong> Load average was 6.7–12.5 during the latest
+run (the &quot;after&quot; rounds started under slightly more load) and 10–13
+during the A/B before it, mostly the benchmark itself. Earlier, with
+other processes running (load 10–22), the same binary moved between 2700
+and 4500 cmd/s on open account, and the measures that failed changed from
+one run to the next with the code unchanged.</li>
+<li class=""><strong>Ratios move with cqrs-es&#x27;s noise too.</strong> A ratio can drop because
+cqrs-es had a fast run, not because ours was slow. Treat single-run
+differences under about 20% as noise; trust only A/B rounds that do not
+overlap.</li>
+<li class=""><strong>Measures on their limit.</strong> The snapshot replay sits exactly on its
+threshold (0.61) in the latest run, as it did in the baseline: a run
+landing slightly above needs a second run before it is called a
+regression. The mixed p99 threshold comes from a ratio (0.63) this
+machine did not reproduce, with any code, until the PostgreSQL
+optimizations.</li>
+<li class=""><strong>A quiet machine is the only absolute gate.</strong> The thresholds were
+written for one; on a loaded one, use the A/B method.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="why">Why<a href="#why" class="hash-link" aria-label="Direct link to Why" title="Direct link to Why" translate="no">​</a></h3>
+<ul>
+<li class=""><strong>Writes.</strong> One statement per append; positions from a sequence, so
+appends never wait for each other; locks only where the domain overlaps
+(<a class="" href="/cqrs-async/docs/storage#locks-derived-from-the-domain">Storage § Locks</a>). Static
+dispatch adds nothing measurable on top of the database round trips.</li>
+<li class=""><strong>Replays.</strong> <code>LoadStream::replay</code> reads only the sequence, type, version
+and payload, and decodes each row as it arrives; events are stored as
+<code>json</code> and decoded straight into their type unless an upcaster applies
+(<a class="" href="/cqrs-async/docs/storage#upcasting">Storage § Upcasting</a>).</li>
+<li class=""><strong>Correctness of the read model.</strong> cqrs-es updates views inline, after
+the commit, with a separate read-modify-write per view: concurrent
+commands on the same account race and lose updates. Here the projection
+runs in a tracking processor, each event once, in order per aggregate, in
+a transaction with its token.</li>
+<li class=""><strong>Rebuild and catching up.</strong> One shared reader per processor routes
+events to 8 segments in parallel, and each segment handles what is
+waiting in batches of up to 100, one commit per batch. Measured on the
+same build (<code>benchmarks/results/versus.md</code>), batches took the time until
+everything is done from 9287 to 4870 ms, and a rebuild from 6050 to 41420
+events/s.</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="micro-benchmarks">Micro-benchmarks<a href="#micro-benchmarks" class="hash-link" aria-label="Direct link to Micro-benchmarks" title="Direct link to Micro-benchmarks" translate="no">​</a></h2>
+<p><code>benchmarks/benches/micro.rs</code> (divan): single operations, in memory, no
+runtime.</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#F8F8F2"><span class="token plain">cargo bench -p cqrs-benchmarks --bench micro</span><br></div><div class="token-line" style="color:#F8F8F2"><span class="token plain">cargo bench -p cqrs-benchmarks --bench micro -- interceptors</span><br></div></code></pre></div></div>
+<table><thead><tr><th>Benchmark</th><th>What it measures</th><th style="text-align:right">Median</th></tr></thead><tbody><tr><td><code>unit/command_gateway</code></td><td>a command through its gateway and its unit of work</td><td style="text-align:right">29.4 ns</td></tr><tr><td><code>persistence/command_cycle</code></td><td>load a 10-event aggregate, decide, commit, in memory</td><td style="text-align:right">1.02 µs</td></tr><tr><td><code>interceptors/command_plain</code></td><td>a query through its gateway</td><td style="text-align:right">3.4 ns</td></tr><tr><td><code>interceptors/command_intercepted_4</code></td><td>the same through four pass-through interceptors</td><td style="text-align:right">13.6 ns</td></tr></tbody></table>
+<p>(<code>gate-log.md</code>, run of <code>768ac7d</code>.) Since commands always run in a unit of
+work, <code>dispatch/*</code> and <code>interceptors/command_*</code> route a query (<code>Echo</code>), to
+keep measuring the routing alone. <code>unit/command_gateway</code> was 14.3 ns before
+the command&#x27;s unit of work: the 15 ns more are its begin, append, commit,
+announce and retry loop, against a command of about 1 ms on PostgreSQL.</p>
+<p>An interceptor chain compiles to nested calls: one that does nothing costs
+nothing measurable; four cost about 3 ns each. What an interceptor does is
+what it costs. The event benchmarks (<code>interceptors/event_plain</code>,
+<code>event_intercepted</code>, <code>event_measured</code>: the blog&#x27;s projection, alone,
+through a pass-through interceptor, through <code>Measured</code>) were last recorded
+in <code>docs/benchmarks/baseline.md</code> (16, 11.5 and 50 ns); the other benchmarks
+(aggregate, loading with and without snapshots, reading a page of the log)
+are listed there too.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="guidelines">Guidelines<a href="#guidelines" class="hash-link" aria-label="Direct link to Guidelines" title="Direct link to Guidelines" translate="no">​</a></h2>
+<ul>
+<li class="">Projections: write in the unit of work&#x27;s transaction, and update rows in
+place instead of find-clone-save.</li>
+<li class="">Do not check sequences in projections: the processor already delivers
+each aggregate&#x27;s events once and in order.</li>
+<li class="">Give the namespaces that write a read model a batch (<code>batch = 64</code> on the
+handler): one commit per batch of waiting events instead of one per
+event. Keep side effects at 1.</li>
+<li class="">Raise <code>segments</code> for read models with many aggregates; it is fixed by the
+first instance that initializes the processor&#x27;s tokens.</li>
+<li class="">Snapshot aggregates with long streams (<code>with_snapshots(store, 100)</code>).</li>
+<li class="">Keep side effects in their own namespace, so a slow external call never
+holds the read model back.</li>
+</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href="https://github.com/Manuel-Antunes/cqrs-async/edit/main/docs/content/docs/performance.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/cqrs-async/docs/storage"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Storage</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#against-cqrs-es" class="table-of-contents__link toc-highlight">Against cqrs-es</a><ul><li><a href="#current-numbers" class="table-of-contents__link toc-highlight">Current numbers</a></li><li><a href="#how-the-numbers-got-here" class="table-of-contents__link toc-highlight">How the numbers got here</a></li><li><a href="#how-the-gate-is-run" class="table-of-contents__link toc-highlight">How the gate is run</a></li><li><a href="#noise-on-this-machine" class="table-of-contents__link toc-highlight">Noise on this machine</a></li><li><a href="#why" class="table-of-contents__link toc-highlight">Why</a></li></ul></li><li><a href="#micro-benchmarks" class="table-of-contents__link toc-highlight">Micro-benchmarks</a></li><li><a href="#guidelines" class="table-of-contents__link toc-highlight">Guidelines</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Learn</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/guide">Build a blog</a></li><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/architecture">Architecture</a></li><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/patterns">Patterns</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Reference</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/unit-of-work">Unit of work</a></li><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/event-processing">Event processing</a></li><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/storage">Storage</a></li><li class="footer__item"><a class="footer__link-item" href="/cqrs-async/docs/performance">Performance</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/Manuel-Antunes/cqrs-async" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">cqrs_async contributors. MIT license. Rust 1.89+, edition 2024.</div></div></div></footer></div>
+</body>
+</html>
