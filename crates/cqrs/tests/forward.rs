@@ -135,3 +135,43 @@ async fn a_routed_forwarder_picks_the_topic_per_event() {
     outbox.stop().await;
     assert_eq!(broker.sent.lock().unwrap()[0].0, "parcel-shipped");
 }
+
+#[tokio::test(start_paused = true)]
+async fn fan_out_is_a_forwarder_per_destination_each_at_its_own_pace() {
+    let events = Events::new(InMemoryEventStore::new());
+    let (search, mail) = (Broker::default(), Broker::default());
+    // The mail broker is down for a while; search must not wait for it.
+    *mail.failures.lock().unwrap() = 5;
+    let to_search = events.track("search", Forward::new(search.clone(), Plain, "parcels"));
+    let to_mail = events.track("mail", Forward::new(mail.clone(), Plain, "parcels"));
+
+    let committed = events
+        .store()
+        .append(
+            &mut (),
+            &StreamId::new("parcel", "3"),
+            ExpectedVersion::NoStream,
+            vec![Shipped::Parcel(1), Shipped::Parcel(2)],
+            &Metadata::new(),
+        )
+        .await
+        .unwrap();
+    let last = committed.last().unwrap().position;
+    to_search.caught_up(last).await;
+    assert_eq!(search.sent.lock().unwrap().len(), 2, "search is caught up");
+    assert!(
+        mail.sent.lock().unwrap().len() < 2,
+        "mail is still retrying behind its own token"
+    );
+
+    to_mail.caught_up(last).await;
+    let payloads =
+        |broker: &Broker| -> Vec<String> { broker.sent.lock().unwrap().iter().map(|sent| sent.2.clone()).collect() };
+    assert_eq!(
+        payloads(&mail),
+        payloads(&search),
+        "each destination gets every event, in order"
+    );
+    to_search.stop().await;
+    to_mail.stop().await;
+}
