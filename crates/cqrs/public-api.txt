@@ -700,6 +700,18 @@ pub async fn cqrs::processing::InMemoryTokenStore::release(&self, &str, u32, &st
 pub async fn cqrs::processing::InMemoryTokenStore::replay_until(&self, &str) -> core::result::Result<u64, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryTokenStore::reset(&self, &str, u64, u64) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryTokenStore::store(&self, &mut (), cqrs::processing::TrackingToken<'_>) -> core::result::Result<bool, cqrs::store::StoreError>
+#[non_exhaustive] pub struct cqrs::processing::Incoming
+pub cqrs::processing::Incoming::event_type: core::option::Option<alloc::string::String>
+pub cqrs::processing::Incoming::event_version: u32
+pub cqrs::processing::Incoming::key: core::option::Option<alloc::string::String>
+pub cqrs::processing::Incoming::metadata: cqrs::event::Metadata
+pub cqrs::processing::Incoming::payload: alloc::vec::Vec<u8>
+pub cqrs::processing::Incoming::position: core::option::Option<u64>
+pub cqrs::processing::Incoming::redelivered: bool
+pub cqrs::processing::Incoming::topic: alloc::string::String
+impl cqrs::processing::Incoming
+pub fn cqrs::processing::Incoming::decode<T>(&self, &impl cqrs::store::Codec<T>) -> core::result::Result<T, cqrs::store::CodecError>
+pub fn cqrs::processing::Incoming::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<u8>) -> Self
 pub struct cqrs::processing::InlineProjection<P>(_)
 impl<P: cqrs::processing::Route<()>> cqrs::processing::EventProcessor<<P as cqrs::processing::Projection>::Event> for cqrs::processing::InlineProjection<P>
 pub async fn cqrs::processing::InlineProjection<P>::process(&self, &[cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>]) -> core::result::Result<(), cqrs::processing::ProcessingFailure>
@@ -878,6 +890,12 @@ pub cqrs::processing::TrackingToken::owner: &'a str
 pub cqrs::processing::TrackingToken::processor: &'a str
 pub cqrs::processing::TrackingToken::replay: bool
 pub cqrs::processing::TrackingToken::segment: u32
+pub trait cqrs::processing::Consume: core::marker::Send + core::marker::Sync
+pub fn cqrs::processing::Consume::consume(&self, &[cqrs::processing::Incoming]) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
+impl<C: cqrs::processing::Consume> cqrs::processing::Consume for &C
+pub fn &C::consume(&self, &[cqrs::processing::Incoming]) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
+impl<C: cqrs::processing::Consume> cqrs::processing::Consume for alloc::rcs::arc::Arc<C>
+pub fn alloc::rcs::arc::Arc<C>::consume(&self, &[cqrs::processing::Incoming]) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub trait cqrs::processing::DeadLetterQueue<E, Tx>: core::marker::Send + core::marker::Sync
 pub fn cqrs::processing::DeadLetterQueue::contains(&self, &str, &str) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::DeadLetterQueue::enqueue_in(&self, &mut Tx, &str, cqrs::processing::DeadLetter<E>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
@@ -1086,6 +1104,9 @@ pub fn cqrs::Intercepted<P, I>::handle(&self, usize, &cqrs::event::EventEnvelope
 pub fn cqrs::Intercepted<P, I>::replays(usize) -> bool
 pub fn cqrs::Intercepted<P, I>::reset(&self, usize, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<P, I>::updated(&self, usize, &cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>, &<P as >::Updates) -> impl core::future::future::Future<Output = ()> + core::marker::Send
+pub trait cqrs::processing::Subscribe: core::marker::Send + core::marker::Sync
+pub type cqrs::processing::Subscribe::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub fn cqrs::processing::Subscribe::subscribe<C: cqrs::processing::Consume>(&self, C, impl core::future::future::Future<Output = ()> + core::marker::Send) -> impl core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send
 pub trait cqrs::processing::TokenStore: core::marker::Send + core::marker::Sync
 pub type cqrs::processing::TokenStore::Tx: core::marker::Send
 pub fn cqrs::processing::TokenStore::claim(&self, &str, u32, &str, u64, u64) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::store::Cursor>, cqrs::store::StoreError>> + core::marker::Send

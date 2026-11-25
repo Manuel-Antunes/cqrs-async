@@ -204,6 +204,7 @@ mod schedule;
 mod snapshot;
 #[cfg(feature = "tokio")]
 mod streaming;
+mod subscribe;
 mod sync;
 pub mod testing;
 mod token;
@@ -330,6 +331,7 @@ pub mod processing {
         Events, GlobalProgress, ProcessorHandle, ProcessorProgress, ProcessorStatus, ProjectionHandle,
         ProjectionProcessors, ProjectionProgress, ResetError, TrackingOptions, TrackingProcessor,
     };
+    pub use crate::subscribe::{Consume, Incoming, Subscribe};
     pub use crate::token::{InMemoryTokenStore, TokenStore, TrackingToken, segment_of};
     pub use crate::transaction::TransactionManager;
 }

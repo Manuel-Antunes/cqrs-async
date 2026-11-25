@@ -1,0 +1,38 @@
+pub mod cqrs_amqp
+pub use cqrs_amqp::lapin
+#[non_exhaustive] pub enum cqrs_amqp::AmqpError
+pub cqrs_amqp::AmqpError::Broker(lapin::error::Error)
+pub cqrs_amqp::AmqpError::Refused
+pub cqrs_amqp::AmqpError::Refused::topic: alloc::string::String
+impl core::convert::From<lapin::error::Error> for cqrs_amqp::AmqpError
+pub fn cqrs_amqp::AmqpError::from(lapin::error::Error) -> Self
+impl core::error::Error for cqrs_amqp::AmqpError
+pub fn cqrs_amqp::AmqpError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Display for cqrs_amqp::AmqpError
+pub fn cqrs_amqp::AmqpError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs_amqp::Amqp
+impl cqrs_amqp::Amqp
+pub async fn cqrs_amqp::Amqp::connect(&str) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+pub fn cqrs_amqp::Amqp::connection(&self) -> &lapin::connection::Connection
+pub fn cqrs_amqp::Amqp::new(lapin::connection::Connection) -> Self
+impl core::fmt::Debug for cqrs_amqp::Amqp
+pub fn cqrs_amqp::Amqp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs_amqp::AmqpPublisher
+impl cqrs_amqp::AmqpPublisher
+pub async fn cqrs_amqp::AmqpPublisher::fanout(&cqrs_amqp::Amqp) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+pub async fn cqrs_amqp::AmqpPublisher::queue(&cqrs_amqp::Amqp) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+pub async fn cqrs_amqp::AmqpPublisher::topic(&cqrs_amqp::Amqp, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+impl cqrs::forward::Publish for cqrs_amqp::AmqpPublisher
+pub type cqrs_amqp::AmqpPublisher::Error = cqrs_amqp::AmqpError
+pub async fn cqrs_amqp::AmqpPublisher::publish(&self, cqrs::forward::Outgoing<'_>) -> core::result::Result<(), cqrs_amqp::AmqpError>
+pub struct cqrs_amqp::AmqpSubscriber
+impl cqrs_amqp::AmqpSubscriber
+pub fn cqrs_amqp::AmqpSubscriber::dead_letter_failures(self) -> Self
+pub async fn cqrs_amqp::AmqpSubscriber::fanout(&cqrs_amqp::Amqp, &str, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+pub fn cqrs_amqp::AmqpSubscriber::prefetch(self, u16) -> Self
+pub async fn cqrs_amqp::AmqpSubscriber::queue(&cqrs_amqp::Amqp, &str) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+pub fn cqrs_amqp::AmqpSubscriber::queue_name(&self) -> &str
+pub async fn cqrs_amqp::AmqpSubscriber::topic(&cqrs_amqp::Amqp, &str, &str, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, cqrs_amqp::AmqpError>
+impl cqrs::subscribe::Subscribe for cqrs_amqp::AmqpSubscriber
+pub type cqrs_amqp::AmqpSubscriber::Error = cqrs_amqp::AmqpError
+pub async fn cqrs_amqp::AmqpSubscriber::subscribe<C: cqrs::subscribe::Consume>(&self, C, impl core::future::future::Future<Output = ()> + core::marker::Send) -> core::result::Result<(), cqrs_amqp::AmqpError>

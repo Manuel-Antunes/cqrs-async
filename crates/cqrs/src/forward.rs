@@ -9,8 +9,9 @@
 //!
 //! The broker is a port of one method ([`Publish`]): an adapter for SQS,
 //! AMQP, Kafka or anything else implements it, in the application or in a
-//! crate of its own. Coming the other way, the application's consumer sends
-//! commands through its gateway: no subscriber port is needed.
+//! crate of its own. Coming the other way, a [`Subscribe`](crate::processing::Subscribe)
+//! port hands messages to a [`Consume`](crate::processing::Consume)r, which
+//! usually sends commands through its gateway.
 
 use std::{borrow::Cow, future::Future};
 

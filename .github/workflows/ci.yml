@@ -48,15 +48,25 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4-alpine
+        ports:
+          - 55672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 20
     env:
       CQRS_POSTGRES_URL: postgres://cqrs:cqrs@127.0.0.1:55432/cqrs
+      CQRS_AMQP_URL: amqp://127.0.0.1:55672/%2f
       SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Unit, integration and doc tests; the cqrs-postgres tests run for real
-      # because CQRS_POSTGRES_URL is set.
+      # Unit, integration and doc tests; the cqrs-postgres and cqrs-amqp
+      # tests run for real because CQRS_POSTGRES_URL and CQRS_AMQP_URL are set.
       - run: cargo test --workspace
       # The macros' error messages, which only stable's diagnostics match.
       - run: cargo test -p cqrs-async --all-features --test ui -- --ignored
@@ -84,15 +94,15 @@ jobs:
       - run: cargo check -p cqrs-async --no-default-features --features json
       - run: cargo test -p cqrs-async --no-default-features --lib
 
-  # Each crate on its own MSRV: the core and its macros on 1.89; the
-  # PostgreSQL crates on 1.94, the one of sqlx 0.9.
+  # Each crate on its own MSRV: the core, its macros and the AMQP crate on
+  # 1.89 (lapin's too); the PostgreSQL crates on 1.94, the one of sqlx 0.9.
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cqrs-async -p cqrs-async-macros --all-features
+      - run: cargo check -p cqrs-async -p cqrs-async-macros -p cqrs-async-amqp --all-features
       - run: cargo check -p cqrs-async --no-default-features
       - run: cargo test -p cqrs-async --all-features
 
@@ -113,7 +123,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
 
-  # The four library crates as they would be published: packaged, then
+  # The five library crates as they would be published: packaged, then
   # built from the packages alone, without a database (the sqlx cache and
   # the migrations are in the PostgreSQL crate's package).
   package:
@@ -136,7 +146,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-public-api --locked
       - run: |
-          for pair in cqrs-async:cqrs cqrs-async-postgres:cqrs-postgres cqrs-async-sea-orm:cqrs-sea-orm; do
+          for pair in cqrs-async:cqrs cqrs-async-postgres:cqrs-postgres cqrs-async-sea-orm:cqrs-sea-orm cqrs-async-amqp:cqrs-amqp; do
             cargo public-api -p "${pair%%:*}" --all-features -sss | diff -u "crates/${pair##*:}/public-api.txt" -
           done
 
@@ -158,8 +168,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4-alpine
+        ports:
+          - 55672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 20
     env:
       CQRS_POSTGRES_URL: postgres://cqrs:cqrs@127.0.0.1:55432/cqrs
+      CQRS_AMQP_URL: amqp://127.0.0.1:55672/%2f
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

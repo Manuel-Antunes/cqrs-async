@@ -1,0 +1,38 @@
+[package]
+name = "cqrs-async-amqp"
+description = "AMQP (RabbitMQ) for cqrs-async, over lapin: the log forwarded to exchanges and queues, and messages consumed back"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = true
+readme = "../../README.md"
+keywords = ["cqrs", "event-sourcing", "amqp", "rabbitmq", "lapin"]
+categories = ["asynchronous", "network-programming"]
+exclude = ["public-api.txt"]
+
+# Published as `cqrs-async-amqp`, written `cqrs_amqp::` in code.
+[lib]
+name = "cqrs_amqp"
+
+[features]
+# TLS for `amqps://` brokers, through lapin: rustls (with its default
+# crypto, aws-lc) or the platform's (OpenSSL, Secure Transport, SChannel).
+rustls = ["lapin/rustls"]
+native-tls = ["lapin/native-tls"]
+
+[dependencies]
+cqrs = { workspace = true, features = ["tokio"] }
+futures-util.workspace = true
+# Without TLS by default (`amqp://`): `amqps://` needs one of the features.
+lapin = { version = "4.13", default-features = false, features = ["tokio"] }
+tokio = { workspace = true, features = ["macros", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+cqrs = { workspace = true, features = ["derive", "tokio", "json"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[package.metadata.docs.rs]
+all-features = true

@@ -21,6 +21,12 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "BSL-1.0",
+    # The AMQP crate: lapin's protocol crates, and the TLS stack behind its
+    # `rustls` feature (with the root certificates' data license).
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

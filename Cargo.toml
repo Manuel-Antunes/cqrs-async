@@ -5,6 +5,7 @@ members = [
     "crates/cqrs-derive",
     "crates/cqrs-postgres",
     "crates/cqrs-sea-orm",
+    "crates/cqrs-amqp",
     "examples/blog",
     "benchmarks",
     "benchmarks/versus",
