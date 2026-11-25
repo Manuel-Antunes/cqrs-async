@@ -219,7 +219,7 @@ impl<F: Fn(&ProcessingFailure) + Send + Sync> OnFailure for F {
 
 /// Appends what command handlers commit to the store `S`, with optimistic
 /// concurrency and the commit's condition, then hands the committed events to
-/// its processing group `P` in the caller's task. One publisher serves every
+/// its processing group `H` in the caller's task. One publisher serves every
 /// aggregate of the event type `E`.
 ///
 /// A processing failure never undoes the commit (the events are stored): it
@@ -232,18 +232,18 @@ impl<F: Fn(&ProcessingFailure) + Send + Sync> OnFailure for F {
 ///     .commands(|events| PostCommandGateway::new(posts, events))
 ///     .build();
 /// ```
-pub struct InlinePublisher<E, S, P = (), F = LogFailures> {
+pub struct InlinePublisher<E, S, H = (), F = LogFailures> {
     /// Where the event streams live.
     store: S,
     /// Who receives the events after each commit.
-    processor: P,
+    processor: H,
     /// What happens when a handler of `processor` fails.
     on_failure: F,
     /// Ties the publisher to one event type without storing one.
     event: PhantomData<fn() -> E>,
 }
 
-impl<E, S, P, F> ::std::fmt::Debug for InlinePublisher<E, S, P, F> {
+impl<E, S, H, F> ::std::fmt::Debug for InlinePublisher<E, S, H, F> {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.debug_struct("InlinePublisher").finish_non_exhaustive()
     }
@@ -261,7 +261,7 @@ impl<E, S> InlinePublisher<E, S> {
     }
 }
 
-impl<E, S, P, F> InlinePublisher<E, S, P, F> {
+impl<E, S, H, F> InlinePublisher<E, S, H, F> {
     /// Hands every commit to `processor` (an [`EventProcessor`], e.g. a tuple
     /// of event handlers).
     pub fn with_processor<P2>(self, processor: P2) -> InlinePublisher<E, S, P2, F> {
@@ -285,7 +285,7 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
     /// the command's sender would tell it the command failed. So the failure
     /// goes to `policy`. The default, [`LogFailures`], logs it at error level;
     /// any `Fn(&ProcessingFailure)` can replace it.
-    pub fn on_failure<F2>(self, policy: F2) -> InlinePublisher<E, S, P, F2> {
+    pub fn on_failure<F2>(self, policy: F2) -> InlinePublisher<E, S, H, F2> {
         InlinePublisher {
             store: self.store,
             processor: self.processor,
@@ -300,7 +300,7 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
     }
 
     /// The processing group fed after each commit.
-    pub fn processor(&self) -> &P {
+    pub fn processor(&self) -> &H {
         &self.processor
     }
 }
@@ -308,11 +308,11 @@ impl<E, S, P, F> InlinePublisher<E, S, P, F> {
 /// Commands run in memory: the store appends on its own (an
 /// [`Autocommit`](crate::Autocommit) handler), then the processing group sees
 /// the commit.
-impl<E, S, P, F> crate::UnitOfWork<E, crate::Autocommit> for InlinePublisher<E, S, P, F>
+impl<E, S, H, F> crate::UnitOfWork<E, crate::Autocommit> for InlinePublisher<E, S, H, F>
 where
     E: DomainEvent,
     S: AppendEvents<E>,
-    P: EventProcessor<E>,
+    H: EventProcessor<E>,
     F: OnFailure,
 {
     fn begin(&self) -> impl Future<Output = Result<(), StoreError>> + Send {
@@ -341,11 +341,11 @@ where
 /// Commands whose handler takes the (empty) transaction of memory: several
 /// entities per command, appended one after the other (memory cannot roll
 /// back), then the processing group sees them.
-impl<E, S, P, F> crate::UnitOfWork<E, crate::InTransaction<()>> for InlinePublisher<E, S, P, F>
+impl<E, S, H, F> crate::UnitOfWork<E, crate::InTransaction<()>> for InlinePublisher<E, S, H, F>
 where
     E: DomainEvent,
     S: AppendEvents<E>,
-    P: EventProcessor<E>,
+    H: EventProcessor<E>,
     F: OnFailure,
 {
     const ROLLS_BACK: bool = false;
@@ -373,11 +373,11 @@ where
     }
 }
 
-impl<E, S, P, F> EventPublisher<E> for InlinePublisher<E, S, P, F>
+impl<E, S, H, F> EventPublisher<E> for InlinePublisher<E, S, H, F>
 where
     E: DomainEvent,
     S: AppendEvents<E>,
-    P: EventProcessor<E>,
+    H: EventProcessor<E>,
     F: OnFailure,
 {
     fn commit<A: Aggregate<Event = E>>(
@@ -392,9 +392,9 @@ where
 /// Appends `pending` to `entity`'s stream in `store`, expecting the version
 /// it was loaded at, then hands the commit to `processor`: what every
 /// publisher does. The last position, if anything was appended.
-pub(crate) async fn publish<E, A, S, P, F>(
+pub(crate) async fn publish<E, A, S, H, F>(
     store: &S,
-    processor: &P,
+    processor: &H,
     on_failure: &F,
     entity: Loaded<A>,
     pending: Pending<E>,
@@ -403,7 +403,7 @@ where
     E: DomainEvent,
     A: Aggregate<Event = E>,
     S: AppendEvents<E>,
-    P: EventProcessor<E>,
+    H: EventProcessor<E>,
     F: OnFailure,
 {
     let (stream, expected, loaded_condition) = entity.into_commit();
