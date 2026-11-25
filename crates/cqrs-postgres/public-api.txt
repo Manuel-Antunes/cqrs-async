@@ -36,6 +36,7 @@ pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::contains(&self, &str, &st
 pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::enqueue_in(&self, &mut cqrs_postgres::PgTransaction, &str, cqrs::dead_letter::DeadLetter<E>) -> core::result::Result<(), cqrs::event_store::StoreError>
 pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::first(&self, &str, &str) -> core::result::Result<core::option::Option<cqrs::dead_letter::DeadLetter<E>>, cqrs::event_store::StoreError>
 pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::remove_in(&self, &mut cqrs_postgres::PgTransaction, &str, &cqrs::dead_letter::DeadLetter<E>) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::requeue_in(&self, &mut cqrs_postgres::PgTransaction, &str, &cqrs::dead_letter::DeadLetter<E>) -> core::result::Result<bool, cqrs::event_store::StoreError>
 pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::event_store::StoreError>
 pub struct cqrs_postgres::PostgresEventStore<E, U>
 impl<E, U> cqrs_postgres::PostgresEventStore<E, U>

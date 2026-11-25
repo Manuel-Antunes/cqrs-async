@@ -844,7 +844,7 @@ fn to_i64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn from_micros(micros: i64) -> SystemTime {
+pub(crate) fn from_micros(micros: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_micros(u64::try_from(micros).unwrap_or(0))
 }
 

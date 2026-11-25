@@ -6,10 +6,11 @@ use cqrs::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::{PgTransaction, PostgresEventStore, backend};
+use crate::{PgTransaction, PostgresEventStore, backend, event_store::from_micros};
 
 /// The dead-letter queue in PostgreSQL: events a processor gave up on,
-/// parked in `cqrs_dead_letters` (processor, sequence, position, cause).
+/// parked in `cqrs_dead_letters` (processor, sequence, position, cause, and
+/// what the enqueue policy keeps: attempts, last touched, diagnostics).
 ///
 /// A letter records the event's position and is read back from the event
 /// store's log, so the event is neither copied nor decoded twice: give the
@@ -78,8 +79,12 @@ where
 
     async fn first(&self, processor: &str, sequence: &str) -> Result<Option<DeadLetter<E>>, StoreError> {
         let Some(row) = sqlx::query!(
-            "SELECT position, cause FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2 \
-             ORDER BY position LIMIT 1",
+            r#"SELECT position, cause, attempts,
+                      (extract(epoch FROM parked_at) * 1000000)::bigint AS "parked_us!",
+                      (extract(epoch FROM last_touched) * 1000000)::bigint AS "touched_us?",
+                      diagnostics::text AS "diagnostics!"
+               FROM cqrs_dead_letters WHERE processor = $1 AND sequence = $2
+               ORDER BY position LIMIT 1"#,
             processor,
             sequence,
         )
@@ -95,11 +100,12 @@ where
                 "the event at position {position}, parked by {processor}, is not in the log"
             ))
         })?;
-        Ok(Some(DeadLetter {
-            sequence: sequence.to_owned(),
-            event: Arc::new(event),
-            cause: row.cause,
-        }))
+        let mut letter = DeadLetter::new(sequence, Arc::new(event), row.cause);
+        letter.attempts = u32::try_from(row.attempts).map_err(backend)?;
+        letter.parked_at = Some(from_micros(row.parked_us));
+        letter.last_touched = row.touched_us.map(from_micros);
+        letter.diagnostics = serde_json::from_str(&row.diagnostics).map_err(backend)?;
+        Ok(Some(letter))
     }
 
     async fn enqueue_in(
@@ -109,17 +115,41 @@ where
         letter: DeadLetter<E>,
     ) -> Result<(), StoreError> {
         sqlx::query!(
-            "INSERT INTO cqrs_dead_letters (processor, sequence, position, cause) VALUES ($1, $2, $3, $4) \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO cqrs_dead_letters (processor, sequence, position, cause, attempts, diagnostics) \
+             VALUES ($1, $2, $3, $4, $5, $6::text::json) ON CONFLICT DO NOTHING",
             processor,
             letter.sequence,
             i64::try_from(letter.event.position).map_err(backend)?,
             letter.cause,
+            i32::try_from(letter.attempts).unwrap_or(i32::MAX),
+            serde_json::to_string(&letter.diagnostics).map_err(backend)?,
         )
         .execute(&mut **tx)
         .await
         .map_err(backend)?;
         Ok(())
+    }
+
+    async fn requeue_in(
+        &self,
+        tx: &mut PgTransaction,
+        processor: &str,
+        letter: &DeadLetter<E>,
+    ) -> Result<bool, StoreError> {
+        let requeued = sqlx::query!(
+            "UPDATE cqrs_dead_letters SET cause = $4, attempts = $5, last_touched = now(), \
+             diagnostics = $6::text::json WHERE processor = $1 AND sequence = $2 AND position = $3",
+            processor,
+            letter.sequence,
+            i64::try_from(letter.event.position).map_err(backend)?,
+            letter.cause,
+            i32::try_from(letter.attempts).unwrap_or(i32::MAX),
+            serde_json::to_string(&letter.diagnostics).map_err(backend)?,
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(backend)?;
+        Ok(requeued.rows_affected() == 1)
     }
 
     /// Waits for a concurrent removal of the same letter to commit or roll

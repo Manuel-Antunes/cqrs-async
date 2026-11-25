@@ -24,8 +24,8 @@ use cqrs::{
     event::{DomainEvent, EventEnvelope, Metadata, StreamId},
     processing::{
         DeadLetter, DeadLetterQueue, EventChain, EventHandler, EventInterceptor, Events, HandlerError,
-        InMemoryDeadLetters, InMemoryTokenStore, InlinePublisher, ProcessingContext, TokenStore, TrackingOptions,
-        TrackingToken, TransactionManager, retry_dead_letters,
+        InMemoryDeadLetters, InMemoryTokenStore, InlinePublisher, ParkAfter, ProcessingContext, TokenStore,
+        TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
     },
     store::{AppendEvents, Cursor, ExpectedVersion, InMemoryEventStore, StoreError},
 };
@@ -325,6 +325,15 @@ impl DeadLetterQueue<Ticked, Vec<String>> for JournaledLetters {
         Ok(())
     }
 
+    async fn requeue_in(
+        &self,
+        _: &mut Vec<String>,
+        processor: &str,
+        letter: &DeadLetter<Ticked>,
+    ) -> Result<bool, StoreError> {
+        self.letters.requeue_in(&mut (), processor, letter).await
+    }
+
     async fn remove_in(
         &self,
         rows: &mut Vec<String>,
@@ -350,18 +359,18 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
         phases: Arc::clone(&journal.phases),
     };
     for event in tick(&store, [1, 2]).await {
-        let letter = DeadLetter {
-            sequence: event.stream.to_string(),
-            event: Arc::new(event),
-            cause: "down".into(),
-        };
+        let letter = DeadLetter::new(event.stream.to_string(), Arc::new(event), "down");
         queue.letters.enqueue("rows", letter);
     }
     let handler = rows(&journal, 2); // tick 2 fails its first retry
 
-    let outcome = retry_dead_letters(&queue, "rows", &journal, &handler).await.unwrap();
+    let outcome = retry_dead_letters(&queue, "rows", &journal, &handler, &ParkAfter(1))
+        .await
+        .unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (1, 1));
-    let outcome = retry_dead_letters(&queue, "rows", &journal, &handler).await.unwrap();
+    let outcome = retry_dead_letters(&queue, "rows", &journal, &handler, &ParkAfter(1))
+        .await
+        .unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (1, 0));
 
     assert_eq!(
@@ -374,6 +383,8 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
             "committed 1",
             "begin",
             "handle 2", // failed: rolled back, still parked
+            "begin",    // the letter requeued (attempts, cause, diagnostics)
+            "commit",
             "begin",
             "handle 2",
             "unpark 2",

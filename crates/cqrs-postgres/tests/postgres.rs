@@ -791,11 +791,7 @@ async fn letters_are_parked_and_removed_with_their_unit_of_work() {
         .await
         .unwrap();
     let all = store.read_all(0, 10).await.unwrap();
-    let letter = |index: usize| DeadLetter {
-        sequence: stream(1).to_string(),
-        event: Arc::new(all[index].clone()),
-        cause: "down".to_owned(),
-    };
+    let letter = |index: usize| DeadLetter::new(stream(1).to_string(), Arc::new(all[index].clone()), "down");
     let sequence = stream(1).to_string();
 
     let mut unit = transactions.begin().await.unwrap();
@@ -893,11 +889,7 @@ async fn racing_retries_apply_each_parked_event_once() {
         .unwrap();
     let mut unit = transactions.begin().await.unwrap();
     for event in store.read_all(0, 10).await.unwrap() {
-        let letter = DeadLetter {
-            sequence: stream(1).to_string(),
-            event: Arc::new(event),
-            cause: "down".to_owned(),
-        };
+        let letter = DeadLetter::new(stream(1).to_string(), Arc::new(event), "down");
         queue.enqueue_in(&mut unit, "p", letter).await.unwrap();
     }
     transactions.commit(unit).await.unwrap();
@@ -909,8 +901,8 @@ async fn racing_retries_apply_each_parked_event_once() {
     };
     let (one, other) = tokio::time::timeout(Duration::from_secs(20), async {
         tokio::join!(
-            retry_dead_letters(&queue, "p", &transactions, &handler),
-            retry_dead_letters(&queue, "p", &transactions, &handler),
+            retry_dead_letters(&queue, "p", &transactions, &handler, &cqrs::processing::ParkAfter(1)),
+            retry_dead_letters(&queue, "p", &transactions, &handler, &cqrs::processing::ParkAfter(1)),
         )
     })
     .await
@@ -2091,4 +2083,51 @@ async fn listening_instances_see_each_others_commits_at_once() {
         .unwrap();
     assert_eq!(event.stream.id(), "2");
     assert!(started.elapsed() < Duration::from_secs(2), "long before the 30 s poll");
+}
+
+/// What the enqueue policy keeps with a letter survives in the table: the
+/// diagnostics given when parking, then the attempts, cause and last touch
+/// of a requeue.
+#[tokio::test]
+async fn a_letters_diagnostics_and_requeues_are_stored() {
+    let pool = database_or_skip!();
+    let store = PostgresEventStore::<ClockEvent>::new(pool.clone(), "clocks");
+    let queue = PostgresDeadLetters::new(store.clone());
+    let transactions = PostgresTransactions::new(pool);
+    store
+        .append(
+            &mut (),
+            &stream(1),
+            ExpectedVersion::NoStream,
+            ticks(1, 1),
+            &Metadata::new(),
+        )
+        .await
+        .unwrap();
+    let event = store.read_all(0, 10).await.unwrap().remove(0);
+
+    let mut letter = DeadLetter::new(stream(1).to_string(), Arc::new(event), "refused");
+    letter.attempts = 1;
+    letter.diagnostics = Metadata::from([("target", "alerts")]);
+    let mut unit = transactions.begin().await.unwrap();
+    queue.enqueue_in(&mut unit, "p", letter).await.unwrap();
+    transactions.commit(unit).await.unwrap();
+
+    let parked = queue.first("p", &stream(1).to_string()).await.unwrap().unwrap();
+    assert!(parked.is_parked() && parked.last_touched.is_none());
+    assert_eq!((parked.attempts, parked.cause.as_str()), (1, "refused"));
+    assert_eq!(parked.diagnostics.get("target").map(String::as_str), Some("alerts"));
+
+    let mut requeued = parked.clone();
+    requeued.attempts = 2;
+    requeued.cause = "refused again".to_owned();
+    requeued.diagnostics.insert("code".to_owned(), "422".to_owned());
+    let mut unit = transactions.begin().await.unwrap();
+    assert!(queue.requeue_in(&mut unit, "p", &requeued).await.unwrap());
+    transactions.commit(unit).await.unwrap();
+
+    let parked = queue.first("p", &stream(1).to_string()).await.unwrap().unwrap();
+    assert_eq!((parked.attempts, parked.cause.as_str()), (2, "refused again"));
+    assert!(parked.last_touched.is_some());
+    assert_eq!(parked.diagnostics.get("code").map(String::as_str), Some("422"));
 }

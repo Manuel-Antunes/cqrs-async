@@ -236,6 +236,9 @@ pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     transactions: Arc<M>,
     /// Parked events.
     dead_letters: Arc<D>,
+    /// What to do with a failing event, when it has a queue (`None`:
+    /// [`ParkAfter`](crate::ParkAfter) the options' `dead_letter_after`).
+    policy: Option<Arc<dyn crate::EnqueuePolicy<E>>>,
     /// Splitting, claiming, reading and retry settings.
     options: TrackingOptions,
     /// Events up to here are a replay (read from the tokens at start).
@@ -324,6 +327,7 @@ where
             tokens: Arc::new(tokens),
             transactions: Arc::new(transactions),
             dead_letters: Arc::new(()),
+            policy: None,
             options: TrackingOptions::default(),
             replay_until: AtomicU64::new(0),
             status: watch::channel(ProcessorStatus::default()).0,
@@ -374,6 +378,7 @@ where
             tokens: self.tokens,
             transactions: self.transactions,
             dead_letters: Arc::new(queue),
+            policy: self.policy,
             options: TrackingOptions {
                 dead_letter_after: Some(after.max(1)),
                 ..self.options
@@ -381,6 +386,21 @@ where
             replay_until: self.replay_until,
             status: self.status,
         }
+    }
+
+    /// Decides with `policy` what happens to a failing event (park it,
+    /// retry it, skip it) and to a parked one failing again at a retry
+    /// (keep it, evict it), instead of parking after the attempts given to
+    /// [`with_dead_letters`](Self::with_dead_letters). Needs a queue.
+    pub fn with_enqueue_policy(mut self, policy: impl crate::EnqueuePolicy<E> + 'static) -> Self {
+        self.policy = Some(Arc::new(policy));
+        self
+    }
+
+    /// Shares `policy` (what a projection hands each namespace).
+    pub(crate) fn with_shared_policy(mut self, policy: Arc<dyn crate::EnqueuePolicy<E>>) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// Replays the processor from the start: moves
@@ -417,7 +437,19 @@ where
     ///
     /// The queue's, or a unit of work that cannot begin or commit.
     pub async fn retry_dead_letters(&self) -> Result<crate::RetryOutcome, StoreError> {
-        crate::retry_dead_letters(&*self.dead_letters, &self.name, &*self.transactions, &*self.handler).await
+        let default = crate::ParkAfter(self.options.dead_letter_after.unwrap_or(1));
+        let policy: &dyn crate::EnqueuePolicy<E> = match &self.policy {
+            Some(policy) => &**policy,
+            None => &default,
+        };
+        crate::retry_dead_letters(
+            &*self.dead_letters,
+            &self.name,
+            &*self.transactions,
+            &*self.handler,
+            policy,
+        )
+        .await
     }
 
     /// Follows the progress of this processor once it runs, e.g. to wait
@@ -1048,8 +1080,12 @@ where
         };
         let parking = self.options.dead_letter_after.is_some();
         if parking && self.is_parked(&sequence, stop).await? {
-            let cause = "an earlier event of this aggregate is parked".to_owned();
-            return self.park(event, sequence, cause, token, stop).await;
+            let letter = DeadLetter::new(
+                sequence,
+                Arc::clone(event),
+                "an earlier event of this aggregate is parked",
+            );
+            return self.park(letter, token, stop).await;
         }
 
         let mut backoff = Backoff::new(&self.options);
@@ -1064,9 +1100,27 @@ where
                     attempts += 1;
                     let cause = error.to_string();
                     tracing::warn!(processor = %self.name, position = event.position, attempts, %cause, "event handler failed");
-                    if self.options.dead_letter_after.is_some_and(|after| attempts >= after) {
-                        progress.fail(segment, None);
-                        return self.park(event, sequence, cause, token, stop).await;
+                    if let Some(after) = self.options.dead_letter_after {
+                        let mut letter = DeadLetter::new(sequence.clone(), Arc::clone(event), cause.clone());
+                        letter.attempts = attempts;
+                        let decision = match &self.policy {
+                            Some(policy) => policy.decide(&letter, &error),
+                            None => crate::EnqueuePolicy::<E>::decide(&crate::ParkAfter(after), &letter, &error),
+                        };
+                        match decision {
+                            crate::EnqueueDecision::Retry => {}
+                            crate::EnqueueDecision::Enqueue(diagnostics)
+                            | crate::EnqueueDecision::Requeue(diagnostics) => {
+                                progress.fail(segment, None);
+                                letter.diagnostics = diagnostics;
+                                return self.park(letter, token, stop).await;
+                            }
+                            crate::EnqueueDecision::Evict | crate::EnqueueDecision::Ignore => {
+                                progress.fail(segment, None);
+                                tracing::warn!(processor = %self.name, position = event.position, %cause, "event given up by the enqueue policy");
+                                return Some(TokenUpdate::Untouched); // the segment moves past it
+                            }
+                        }
                     }
                     progress.fail(segment, Some(cause));
                     if backoff.wait(stop).await {
@@ -1125,15 +1179,13 @@ where
     /// `None`: stopped while retrying.
     async fn park(
         &self,
-        event: &Arc<EventEnvelope<E>>,
-        sequence: String,
-        cause: String,
+        letter: DeadLetter<E>,
         token: TrackingToken<'_>,
         stop: &mut watch::Receiver<bool>,
     ) -> Option<TokenUpdate> {
         let mut backoff = Backoff::new(&self.options);
         loop {
-            match self.park_once(event, &sequence, &cause, token).await {
+            match self.park_once(letter.clone(), token).await {
                 Ok(update) => return Some(update),
                 Err(error) => {
                     tracing::warn!(processor = %self.name, %error, "cannot park the event");
@@ -1147,19 +1199,9 @@ where
 
     /// One attempt at [`park`](Self::park). A lost claim rolls the letter
     /// back: whoever holds the segment now parks it.
-    async fn park_once(
-        &self,
-        event: &Arc<EventEnvelope<E>>,
-        sequence: &str,
-        cause: &str,
-        token: TrackingToken<'_>,
-    ) -> Result<TokenUpdate, StoreError> {
+    async fn park_once(&self, mut letter: DeadLetter<E>, token: TrackingToken<'_>) -> Result<TokenUpdate, StoreError> {
         let mut tx = self.transactions.begin().await?;
-        let letter = DeadLetter {
-            sequence: sequence.to_owned(),
-            event: Arc::clone(event),
-            cause: cause.to_owned(),
-        };
+        letter.parked_at = Some(std::time::SystemTime::now());
         self.dead_letters.enqueue_in(&mut tx, &self.name, letter).await?;
         if !self.tokens.store(&mut tx, token).await? {
             return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls the letter back

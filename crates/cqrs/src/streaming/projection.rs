@@ -76,6 +76,23 @@ where
     M: TransactionManager + Clone + 'static,
     D: DeadLetterQueue<E, M::Tx> + 'static,
 {
+    /// Decides with `policy` what happens to a namespace's failing event
+    /// and to its parked ones failing again (see
+    /// [`TrackingProcessor::with_enqueue_policy`]): one policy for every
+    /// namespace, which tells them apart by the letter's event or by asking
+    /// each its own. Needs a queue
+    /// ([`with_dead_letters`](ProjectionProcessors::with_dead_letters)).
+    pub fn with_enqueue_policy(self, policy: impl crate::EnqueuePolicy<E> + 'static) -> Self {
+        let policy: Arc<dyn crate::EnqueuePolicy<E>> = Arc::new(policy);
+        Self {
+            processors: self
+                .processors
+                .into_iter()
+                .map(|processor| processor.with_shared_policy(Arc::clone(&policy)))
+                .collect(),
+        }
+    }
+
     /// `processors` with the batch each namespace asks for, if it does.
     fn with_batches(processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M, D>>) -> Self {
         let processors = processors

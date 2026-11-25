@@ -60,13 +60,21 @@ CREATE TABLE IF NOT EXISTS cqrs_tokens (
 -- (aggregate stream) a processor gave up on, and why. The event itself is
 -- read from the log by position, so nothing is copied.
 CREATE TABLE IF NOT EXISTS cqrs_dead_letters (
-    processor text        NOT NULL,
-    sequence  text        NOT NULL,
-    position  bigint      NOT NULL,
-    cause     text        NOT NULL,
-    parked_at timestamptz NOT NULL DEFAULT now(),
+    processor    text        NOT NULL,
+    sequence     text        NOT NULL,
+    position     bigint      NOT NULL,
+    cause        text        NOT NULL,
+    parked_at    timestamptz NOT NULL DEFAULT now(),
+    -- What the enqueue policy keeps: failed attempts, the last failed
+    -- retry, and its diagnostics.
+    attempts     integer     NOT NULL DEFAULT 0,
+    last_touched timestamptz,
+    diagnostics  json        NOT NULL DEFAULT '{}',
     PRIMARY KEY (processor, sequence, position)
 );
+ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS last_touched timestamptz;
+ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS diagnostics json NOT NULL DEFAULT '{}';
 
 -- Parallel appends (Axon's JDBC design): positions come from a sequence, so
 -- appends never wait for each other on a shared row; they commit out of

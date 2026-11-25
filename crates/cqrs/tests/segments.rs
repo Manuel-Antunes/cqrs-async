@@ -323,7 +323,9 @@ async fn dead_letters_park_the_aggregate_in_order_and_let_the_rest_flow() {
     );
 
     // Still broken: the retry stops at the first event, keeping the order.
-    let outcome = retry_dead_letters(&queue, "parking", &(), &*recorder).await.unwrap();
+    let outcome = retry_dead_letters(&queue, "parking", &(), &*recorder, &cqrs::processing::ParkAfter(1))
+        .await
+        .unwrap();
     assert_eq!((outcome.handled, outcome.still_parked), (0, 1));
 
     // Fixed: the parked events are handled in order and the queue empties.
@@ -402,6 +404,10 @@ impl DeadLetterQueue<Ticked> for Arc<FlakyQueue> {
             *self.failures_left.lock().unwrap() = 3; // the next lookups fail
         }
         Ok(())
+    }
+
+    async fn requeue_in(&self, tx: &mut (), processor: &str, letter: &DeadLetter<Ticked>) -> Result<bool, StoreError> {
+        self.inner.requeue_in(tx, processor, letter).await
     }
 
     async fn remove_in(&self, tx: &mut (), processor: &str, letter: &DeadLetter<Ticked>) -> Result<bool, StoreError> {

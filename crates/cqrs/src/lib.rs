@@ -309,7 +309,10 @@ pub mod processing {
     //! feature, from [`Events`]) or inline ([`InlinePublisher`]), with their
     //! tokens, transactions, dead letters and interceptors.
 
-    pub use crate::dead_letter::{DeadLetter, DeadLetterQueue, InMemoryDeadLetters, RetryOutcome, retry_dead_letters};
+    pub use crate::dead_letter::{
+        DeadLetter, DeadLetterQueue, EnqueueDecision, EnqueuePolicy, InMemoryDeadLetters, ParkAfter, RetryOutcome,
+        retry_dead_letters,
+    };
     pub use crate::forward::{FixedTopic, Forward, Outgoing, Publish, RoutedTopic, TopicOf};
     pub use crate::inline::{
         EventProcessor, HandlerFailure, InlineProjection, InlinePublisher, Isolated, LogFailures, OnFailure,

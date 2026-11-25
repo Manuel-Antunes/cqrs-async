@@ -104,7 +104,8 @@ async fn a_namespace_parks_what_keeps_failing_and_a_retry_handles_it() {
             "alerts",
             cqrs::processing::RetryOutcome {
                 handled: 1,
-                still_parked: 0
+                still_parked: 0,
+                evicted: 0,
             }
         )]
     );

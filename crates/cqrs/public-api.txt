@@ -504,6 +504,12 @@ pub trait cqrs::prelude::TagResolver
 pub fn cqrs::prelude::TagResolver::tags(&self) -> alloc::vec::Vec<cqrs::event::Tag>
 pub type cqrs::prelude::QueryUpdateEmitter<P> = <P as crate::HasUpdates>::Updates
 pub mod cqrs::processing
+#[non_exhaustive] pub enum cqrs::processing::EnqueueDecision
+pub cqrs::processing::EnqueueDecision::Enqueue(cqrs::event::Metadata)
+pub cqrs::processing::EnqueueDecision::Evict
+pub cqrs::processing::EnqueueDecision::Ignore
+pub cqrs::processing::EnqueueDecision::Requeue(cqrs::event::Metadata)
+pub cqrs::processing::EnqueueDecision::Retry
 #[non_exhaustive] pub enum cqrs::processing::ResetError
 pub cqrs::processing::ResetError::Handler(cqrs::processing::HandlerError)
 pub cqrs::processing::ResetError::Running
@@ -513,10 +519,17 @@ pub fn cqrs::processing::ResetError::from(cqrs::store::StoreError) -> Self
 impl core::error::Error for cqrs::processing::ResetError
 impl core::fmt::Display for cqrs::processing::ResetError
 pub fn cqrs::processing::ResetError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct cqrs::processing::DeadLetter<E>
+#[non_exhaustive] pub struct cqrs::processing::DeadLetter<E>
+pub cqrs::processing::DeadLetter::attempts: u32
 pub cqrs::processing::DeadLetter::cause: alloc::string::String
+pub cqrs::processing::DeadLetter::diagnostics: cqrs::event::Metadata
 pub cqrs::processing::DeadLetter::event: alloc::rcs::arc::Arc<cqrs::event::EventEnvelope<E>>
+pub cqrs::processing::DeadLetter::last_touched: core::option::Option<std::time::SystemTime>
+pub cqrs::processing::DeadLetter::parked_at: core::option::Option<std::time::SystemTime>
 pub cqrs::processing::DeadLetter::sequence: alloc::string::String
+impl<E> cqrs::processing::DeadLetter<E>
+pub fn cqrs::processing::DeadLetter<E>::is_parked(&self) -> bool
+pub fn cqrs::processing::DeadLetter<E>::new(impl core::convert::Into<alloc::string::String>, alloc::rcs::arc::Arc<cqrs::event::EventEnvelope<E>>, impl core::convert::Into<alloc::string::String>) -> Self
 impl<E> core::clone::Clone for cqrs::processing::DeadLetter<E>
 pub fn cqrs::processing::DeadLetter<E>::clone(&self) -> Self
 pub struct cqrs::processing::Events<E, S, C, M>
@@ -608,6 +621,7 @@ pub async fn cqrs::processing::InMemoryDeadLetters<E>::contains(&self, &str, &st
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::enqueue_in(&self, &mut (), &str, cqrs::processing::DeadLetter<E>) -> core::result::Result<(), cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::first(&self, &str, &str) -> core::result::Result<core::option::Option<cqrs::processing::DeadLetter<E>>, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::remove_in(&self, &mut (), &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::processing::InMemoryDeadLetters<E>::requeue_in(&self, &mut (), &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::store::StoreError>
 impl<E> core::clone::Clone for cqrs::processing::InMemoryDeadLetters<E>
 pub fn cqrs::processing::InMemoryDeadLetters<E>::clone(&self) -> Self
@@ -685,6 +699,9 @@ pub cqrs::processing::Outgoing::metadata: &'a cqrs::event::Metadata
 pub cqrs::processing::Outgoing::payload: &'a [u8]
 pub cqrs::processing::Outgoing::position: u64
 pub cqrs::processing::Outgoing::topic: &'a str
+pub struct cqrs::processing::ParkAfter(pub u32)
+impl<E> cqrs::processing::EnqueuePolicy<E> for cqrs::processing::ParkAfter
+pub fn cqrs::processing::ParkAfter::decide(&self, &cqrs::processing::DeadLetter<E>, &cqrs::processing::HandlerError) -> cqrs::processing::EnqueueDecision
 pub struct cqrs::processing::ProcessingContext<'a, Tx>
 impl<'a, Tx> cqrs::processing::ProcessingContext<'a, Tx>
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::in_processor(&'a mut Tx, bool, &'a str) -> Self
@@ -742,12 +759,14 @@ impl<E, S, P, C, M, D> cqrs::processing::ProjectionProcessors<E, S, P, C, M, D> 
 pub async fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::reset(&self) -> core::result::Result<(), cqrs::processing::ResetError>
 pub async fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::retry_dead_letters(&self) -> core::result::Result<alloc::vec::Vec<(&'static str, cqrs::processing::RetryOutcome)>, cqrs::store::StoreError>
 pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::spawn(self) -> cqrs::processing::ProjectionHandle
+pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::with_enqueue_policy(self, impl cqrs::processing::EnqueuePolicy<E> + 'static) -> Self
 pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::with_options(self, cqrs::processing::TrackingOptions) -> Self
 impl<E, S, P, C, M> cqrs::processing::ProjectionProcessors<E, S, P, C, M> where E: cqrs::event::DomainEvent, S: cqrs::store::ReadLog<E> + core::clone::Clone + 'static, P: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = E> + 'static, C: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static, M: cqrs::processing::TransactionManager + core::clone::Clone + 'static
 pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::with_dead_letters<D>(self, D, u32) -> cqrs::processing::ProjectionProcessors<E, S, P, C, M, D> where D: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static
 impl<E, S, P, C, M, D> core::fmt::Debug for cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>
 pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs::processing::RetryOutcome
+pub cqrs::processing::RetryOutcome::evicted: usize
 pub cqrs::processing::RetryOutcome::handled: usize
 pub cqrs::processing::RetryOutcome::still_parked: usize
 pub struct cqrs::processing::RoutedTopic<F>(_)
@@ -790,6 +809,7 @@ pub async fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::retry_dead_l
 pub async fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::run(self, impl core::future::future::Future<Output = ()> + core::marker::Send)
 pub fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::spawn(self) -> cqrs::processing::ProcessorHandle
 pub fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::with_dead_letters<D2>(self, D2, u32) -> cqrs::processing::TrackingProcessor<E, S, H, T, M, D2> where D2: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx>
+pub fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::with_enqueue_policy(self, impl cqrs::processing::EnqueuePolicy<E> + 'static) -> Self
 pub fn cqrs::processing::TrackingProcessor<E, S, H, T, M, D>::with_options(self, cqrs::processing::TrackingOptions) -> Self
 impl<E, S, H, T, M> cqrs::processing::TrackingProcessor<E, S, H, T, M> where E: cqrs::event::DomainEvent, S: cqrs::store::ReadLog<E> + core::clone::Clone + 'static, H: cqrs::processing::EventHandler<E, <M as cqrs::processing::TransactionManager>::Tx> + 'static, T: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + 'static, M: cqrs::processing::TransactionManager + 'static
 pub fn cqrs::processing::TrackingProcessor<E, S, H, T, M>::new(impl core::convert::Into<alloc::string::String>, S, &cqrs::store::LiveEvents<E>, H, T, M) -> Self
@@ -806,19 +826,28 @@ pub fn cqrs::processing::DeadLetterQueue::contains(&self, &str, &str) -> impl co
 pub fn cqrs::processing::DeadLetterQueue::enqueue_in(&self, &mut Tx, &str, cqrs::processing::DeadLetter<E>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::DeadLetterQueue::first(&self, &str, &str) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::processing::DeadLetter<E>>, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::DeadLetterQueue::remove_in(&self, &mut Tx, &str, &cqrs::processing::DeadLetter<E>) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::processing::DeadLetterQueue::requeue_in(&self, &mut Tx, &str, &cqrs::processing::DeadLetter<E>) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::DeadLetterQueue::sequences(&self, &str) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::store::StoreError>> + core::marker::Send
 impl<E: core::marker::Send + core::marker::Sync, Tx: core::marker::Send> cqrs::processing::DeadLetterQueue<E, Tx> for ()
 pub async fn ()::contains(&self, &str, &str) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn ()::enqueue_in(&self, &mut Tx, &str, cqrs::processing::DeadLetter<E>) -> core::result::Result<(), cqrs::store::StoreError>
 pub async fn ()::first(&self, &str, &str) -> core::result::Result<core::option::Option<cqrs::processing::DeadLetter<E>>, cqrs::store::StoreError>
 pub async fn ()::remove_in(&self, &mut Tx, &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn ()::requeue_in(&self, &mut Tx, &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn ()::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::store::StoreError>
 impl<E: core::marker::Send + core::marker::Sync> cqrs::processing::DeadLetterQueue<E> for cqrs::processing::InMemoryDeadLetters<E>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::contains(&self, &str, &str) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::enqueue_in(&self, &mut (), &str, cqrs::processing::DeadLetter<E>) -> core::result::Result<(), cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::first(&self, &str, &str) -> core::result::Result<core::option::Option<cqrs::processing::DeadLetter<E>>, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::remove_in(&self, &mut (), &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::processing::InMemoryDeadLetters<E>::requeue_in(&self, &mut (), &str, &cqrs::processing::DeadLetter<E>) -> core::result::Result<bool, cqrs::store::StoreError>
 pub async fn cqrs::processing::InMemoryDeadLetters<E>::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::store::StoreError>
+pub trait cqrs::processing::EnqueuePolicy<E>: core::marker::Send + core::marker::Sync
+pub fn cqrs::processing::EnqueuePolicy::decide(&self, &cqrs::processing::DeadLetter<E>, &cqrs::processing::HandlerError) -> cqrs::processing::EnqueueDecision
+impl<E, F> cqrs::processing::EnqueuePolicy<E> for F where F: core::ops::function::Fn(&cqrs::processing::DeadLetter<E>, &cqrs::processing::HandlerError) -> cqrs::processing::EnqueueDecision + core::marker::Send + core::marker::Sync
+pub fn F::decide(&self, &cqrs::processing::DeadLetter<E>, &cqrs::processing::HandlerError) -> cqrs::processing::EnqueueDecision
+impl<E> cqrs::processing::EnqueuePolicy<E> for cqrs::processing::ParkAfter
+pub fn cqrs::processing::ParkAfter::decide(&self, &cqrs::processing::DeadLetter<E>, &cqrs::processing::HandlerError) -> cqrs::processing::EnqueueDecision
 pub trait cqrs::processing::EventChain<Tx>: cqrs::interceptor::sealed::Chain + core::marker::Send
 pub fn cqrs::processing::EventChain::proceed(self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub trait cqrs::processing::EventHandler<E: cqrs::event::DomainEvent, Tx: core::marker::Send>: core::marker::Send + core::marker::Sync
@@ -1034,7 +1063,7 @@ pub type ()::Tx = ()
 pub const ()::ROLLS_BACK: bool
 pub fn ()::begin(&self) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub fn ()::commit(&self, ()) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
-pub async fn cqrs::processing::retry_dead_letters<E, Q, M, H>(&Q, &str, &M, &H) -> core::result::Result<cqrs::processing::RetryOutcome, cqrs::store::StoreError> where E: cqrs::event::DomainEvent, Q: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx>, M: cqrs::processing::TransactionManager, H: cqrs::processing::EventHandler<E, <M as cqrs::processing::TransactionManager>::Tx>
+pub async fn cqrs::processing::retry_dead_letters<E, Q, M, H, P>(&Q, &str, &M, &H, &P) -> core::result::Result<cqrs::processing::RetryOutcome, cqrs::store::StoreError> where E: cqrs::event::DomainEvent, Q: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx>, M: cqrs::processing::TransactionManager, H: cqrs::processing::EventHandler<E, <M as cqrs::processing::TransactionManager>::Tx>, P: cqrs::processing::EnqueuePolicy<E> + ?core::marker::Sized
 pub fn cqrs::processing::segment_of(&cqrs::event::StreamId, u32) -> u32
 pub mod cqrs::query
 pub use cqrs::query::QueryUpdates
