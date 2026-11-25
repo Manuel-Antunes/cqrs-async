@@ -87,6 +87,7 @@ mod dead_letters;
 mod event_store;
 #[cfg(feature = "tokio")]
 mod notify;
+mod schedule;
 mod snapshot_store;
 mod token_store;
 
@@ -94,6 +95,7 @@ pub use dead_letters::PostgresDeadLetters;
 pub use event_store::PostgresEventStore;
 #[cfg(feature = "tokio")]
 pub use notify::{CHANNEL, Listening};
+pub use schedule::PostgresSchedule;
 pub use snapshot_store::PostgresSnapshotStore;
 pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared
@@ -151,6 +153,11 @@ impl Postgres {
     /// The store of the log `log`.
     pub fn store<E>(&self, log: &str) -> PostgresEventStore<E> {
         PostgresEventStore::new(self.pool.clone(), log)
+    }
+
+    /// The schedule of the commands of type `C` kept in the queue `queue`.
+    pub fn schedule<C>(&self, queue: &str) -> PostgresSchedule<C> {
+        PostgresSchedule::new(self.pool.clone(), queue)
     }
 
     /// The token store.

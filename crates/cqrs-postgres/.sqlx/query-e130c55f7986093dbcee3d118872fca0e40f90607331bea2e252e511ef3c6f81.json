@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO cqrs_scheduled (queue, due_at, payload, metadata) VALUES ($1, timestamptz 'epoch' + $2::bigint * interval '1 microsecond', $3::text::json, $4::text::json) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_scheduled",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e130c55f7986093dbcee3d118872fca0e40f90607331bea2e252e511ef3c6f81"
+}

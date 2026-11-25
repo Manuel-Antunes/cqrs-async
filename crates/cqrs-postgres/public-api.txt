@@ -17,6 +17,7 @@ pub fn cqrs_postgres::Postgres::events<E>(&self, &str) -> cqrs_postgres::PgEvent
 pub async fn cqrs_postgres::Postgres::migrate(&self) -> core::result::Result<(), cqrs::event_store::StoreError>
 pub fn cqrs_postgres::Postgres::new(sqlx_postgres::PgPool) -> Self
 pub fn cqrs_postgres::Postgres::pool(&self) -> &sqlx_postgres::PgPool
+pub fn cqrs_postgres::Postgres::schedule<C>(&self, &str) -> cqrs_postgres::PostgresSchedule<C>
 pub fn cqrs_postgres::Postgres::store<E>(&self, &str) -> cqrs_postgres::PostgresEventStore<E>
 pub fn cqrs_postgres::Postgres::tokens(&self) -> &cqrs_postgres::PostgresTokenStore
 pub fn cqrs_postgres::Postgres::transactions(&self) -> &cqrs_postgres::PostgresTransactions
@@ -62,6 +63,22 @@ pub async fn cqrs_postgres::PostgresEventStore<E, U>::read(&self, &cqrs::cursor:
 pub async fn cqrs_postgres::PostgresEventStore<E, U>::read_all(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<cqrs::event_envelope::EventEnvelope<E>>, cqrs::event_store::StoreError>
 impl<E, U> cqrs::event_store::SourceEvents<E> for cqrs_postgres::PostgresEventStore<E, U> where E: serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync, U: cqrs::upcast::Upcaster
 pub async fn cqrs_postgres::PostgresEventStore<E, U>::source(&self, &cqrs::criteria::EventCriteria) -> core::result::Result<(alloc::vec::Vec<cqrs::event_envelope::EventEnvelope<E>>, u64), cqrs::event_store::StoreError>
+pub struct cqrs_postgres::PostgresSchedule<C>
+impl<C: serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync> cqrs_postgres::PostgresSchedule<C>
+pub async fn cqrs_postgres::PostgresSchedule<C>::schedule(&self, std::time::SystemTime, &C, &cqrs::event_envelope::Metadata) -> core::result::Result<cqrs::schedule::ScheduleToken, cqrs::event_store::StoreError>
+impl<C> cqrs_postgres::PostgresSchedule<C>
+pub fn cqrs_postgres::PostgresSchedule<C>::new(sqlx_postgres::PgPool, &str) -> Self
+impl<C: serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync> cqrs::schedule::CommandSchedule<C, sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>> for cqrs_postgres::PostgresSchedule<C>
+pub async fn cqrs_postgres::PostgresSchedule<C>::cancel(&self, cqrs::schedule::ScheduleToken) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSchedule<C>::claim_due(&self, core::time::Duration, usize) -> core::result::Result<alloc::vec::Vec<cqrs::schedule::Scheduled<C>>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSchedule<C>::delivered(&self, cqrs::schedule::ScheduleToken) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSchedule<C>::failed(&self, cqrs::schedule::ScheduleToken, core::option::Option<std::time::SystemTime>, &str) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSchedule<C>::reschedule(&self, cqrs::schedule::ScheduleToken, std::time::SystemTime) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSchedule<C>::schedule_in(&self, &mut cqrs_postgres::PgTransaction, std::time::SystemTime, &C, &cqrs::event_envelope::Metadata) -> core::result::Result<cqrs::schedule::ScheduleToken, cqrs::event_store::StoreError>
+impl<C> core::clone::Clone for cqrs_postgres::PostgresSchedule<C>
+pub fn cqrs_postgres::PostgresSchedule<C>::clone(&self) -> Self
+impl<C> core::fmt::Debug for cqrs_postgres::PostgresSchedule<C>
+pub fn cqrs_postgres::PostgresSchedule<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs_postgres::PostgresSnapshotStore<A>
 impl<A> cqrs_postgres::PostgresSnapshotStore<A>
 pub fn cqrs_postgres::PostgresSnapshotStore<A>::new(sqlx_postgres::PgPool) -> Self

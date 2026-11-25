@@ -2131,3 +2131,90 @@ async fn a_letters_diagnostics_and_requeues_are_stored() {
     assert!(parked.last_touched.is_some());
     assert_eq!(parked.diagnostics.get("code").map(String::as_str), Some("422"));
 }
+
+/// A command scheduled in a transaction exists only once it commits; due,
+/// it is sent once, however many instances deliver.
+#[tokio::test]
+async fn scheduled_commands_are_sent_once_by_competing_deliverers() {
+    use cqrs::command::{CommandSchedule, DeliveryOptions, deliver_scheduled};
+
+    #[cqrs::command(error = StoreError)]
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    struct Ring {
+        n: u32,
+    }
+
+    /// Records what it is sent.
+    #[derive(Clone, Default)]
+    struct Bell(Arc<Mutex<Vec<u32>>>);
+
+    impl cqrs::Dispatch<Ring> for Bell {
+        async fn dispatch_with(&self, ring: Ring, _: Metadata) -> Result<(), StoreError> {
+            self.0.lock().unwrap().push(ring.n);
+            Ok(())
+        }
+    }
+
+    let pool = database_or_skip!();
+    let pg = cqrs_postgres::Postgres::new(pool.clone());
+    let rings = pg.schedule::<Ring>("rings");
+    let now = std::time::SystemTime::now();
+
+    // Rolled back: never scheduled.
+    let mut tx = pool.begin().await.unwrap();
+    rings
+        .schedule_in(&mut tx, now, &Ring { n: 0 }, &Metadata::new())
+        .await
+        .unwrap();
+    drop(tx);
+    // Committed: twenty rings, due now.
+    let mut tx = pool.begin().await.unwrap();
+    for n in 1..=20 {
+        rings
+            .schedule_in(&mut tx, now, &Ring { n }, &Metadata::new())
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    // One far ahead, then cancelled.
+    let later = rings
+        .schedule(now + Duration::from_secs(3600), &Ring { n: 99 }, &Metadata::new())
+        .await
+        .unwrap();
+    assert!(rings.cancel(later).await.unwrap());
+
+    let bell = Bell::default();
+    let options = DeliveryOptions::default()
+        .poll_interval(Duration::from_millis(10))
+        .batch_size(3);
+    let (stop, _) = tokio::sync::broadcast::channel::<()>(1);
+    let deliverers: Vec<_> = (0..3)
+        .map(|_| {
+            let mut stopped = stop.subscribe();
+            tokio::spawn(deliver_scheduled(rings.clone(), bell.clone(), options, async move {
+                let _ = stopped.recv().await;
+            }))
+        })
+        .collect();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while bell.0.lock().unwrap().len() < 20 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("every due ring is sent");
+    tokio::time::sleep(Duration::from_millis(200)).await; // nothing more comes
+    let _ = stop.send(());
+    for deliverer in deliverers {
+        deliverer.await.unwrap();
+    }
+
+    let mut sent = bell.0.lock().unwrap().clone();
+    sent.sort_unstable();
+    assert_eq!(
+        sent,
+        (1..=20).collect::<Vec<_>>(),
+        "each once, the rolled back and cancelled ones never"
+    );
+    assert!(rings.claim_due(Duration::from_secs(1), 100).await.unwrap().is_empty());
+}

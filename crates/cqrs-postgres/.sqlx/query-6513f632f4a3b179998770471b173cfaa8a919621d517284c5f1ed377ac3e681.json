@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE cqrs_scheduled SET due_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond', claimed_until = NULL WHERE id = $1 AND queue = $2 AND failed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6513f632f4a3b179998770471b173cfaa8a919621d517284c5f1ed377ac3e681"
+}

@@ -109,6 +109,39 @@ impl<E> core::default::Default for cqrs::command::CommandContext<E>
 pub fn cqrs::command::CommandContext<E>::default() -> Self
 impl<E> core::iter::traits::collect::Extend<E> for cqrs::command::CommandContext<E>
 pub fn cqrs::command::CommandContext<E>::extend<I: core::iter::traits::collect::IntoIterator<Item = E>>(&mut self, I)
+#[non_exhaustive] pub struct cqrs::command::DeliveryOptions
+pub cqrs::command::DeliveryOptions::batch_size: usize
+pub cqrs::command::DeliveryOptions::lease: core::time::Duration
+pub cqrs::command::DeliveryOptions::max_attempts: u32
+pub cqrs::command::DeliveryOptions::poll_interval: core::time::Duration
+pub cqrs::command::DeliveryOptions::retry_initial: core::time::Duration
+pub cqrs::command::DeliveryOptions::retry_max: core::time::Duration
+impl cqrs::command::DeliveryOptions
+pub fn cqrs::command::DeliveryOptions::batch_size(self, usize) -> Self
+pub fn cqrs::command::DeliveryOptions::lease(self, core::time::Duration) -> Self
+pub fn cqrs::command::DeliveryOptions::max_attempts(self, u32) -> Self
+pub fn cqrs::command::DeliveryOptions::poll_interval(self, core::time::Duration) -> Self
+pub fn cqrs::command::DeliveryOptions::retry_initial(self, core::time::Duration) -> Self
+pub fn cqrs::command::DeliveryOptions::retry_max(self, core::time::Duration) -> Self
+impl core::default::Default for cqrs::command::DeliveryOptions
+pub fn cqrs::command::DeliveryOptions::default() -> Self
+pub struct cqrs::command::InMemorySchedule<C>
+impl<C: core::clone::Clone> cqrs::command::InMemorySchedule<C>
+pub fn cqrs::command::InMemorySchedule<C>::pending(&self) -> alloc::vec::Vec<(cqrs::command::ScheduleToken, C, core::option::Option<alloc::string::String>)>
+pub fn cqrs::command::InMemorySchedule<C>::schedule(&self, std::time::SystemTime, C, cqrs::event::Metadata) -> cqrs::command::ScheduleToken
+impl<C: core::clone::Clone + core::marker::Send + core::marker::Sync> cqrs::command::CommandSchedule<C> for cqrs::command::InMemorySchedule<C>
+pub async fn cqrs::command::InMemorySchedule<C>::cancel(&self, cqrs::command::ScheduleToken) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::claim_due(&self, core::time::Duration, usize) -> core::result::Result<alloc::vec::Vec<cqrs::command::Scheduled<C>>, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::delivered(&self, cqrs::command::ScheduleToken) -> core::result::Result<(), cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::failed(&self, cqrs::command::ScheduleToken, core::option::Option<std::time::SystemTime>, &str) -> core::result::Result<(), cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::reschedule(&self, cqrs::command::ScheduleToken, std::time::SystemTime) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::schedule_in(&self, &mut (), std::time::SystemTime, &C, &cqrs::event::Metadata) -> core::result::Result<cqrs::command::ScheduleToken, cqrs::store::StoreError>
+impl<C> core::clone::Clone for cqrs::command::InMemorySchedule<C>
+pub fn cqrs::command::InMemorySchedule<C>::clone(&self) -> Self
+impl<C> core::default::Default for cqrs::command::InMemorySchedule<C>
+pub fn cqrs::command::InMemorySchedule<C>::default() -> Self
+impl<C> core::fmt::Debug for cqrs::command::InMemorySchedule<C>
+pub fn cqrs::command::InMemorySchedule<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs::command::InTransaction<Tx>(_)
 impl<E, S, C, M> cqrs::command::UnitOfWork<E, cqrs::command::InTransaction<<M as cqrs::processing::TransactionManager>::Tx>> for cqrs::processing::Events<E, S, C, M> where E: cqrs::event::DomainEvent, S: cqrs::store::AppendEvents<E, <M as cqrs::processing::TransactionManager>::Tx>, C: core::marker::Send + core::marker::Sync, M: cqrs::processing::TransactionManager
 pub const cqrs::processing::Events<E, S, C, M>::ROLLS_BACK: bool
@@ -133,6 +166,15 @@ pub cqrs::command::Pending::events: alloc::vec::Vec<E>
 pub cqrs::command::Pending::metadata: cqrs::event::Metadata
 impl<E> cqrs::command::Pending<E>
 pub fn cqrs::command::Pending<E>::new(alloc::vec::Vec<E>) -> Self
+pub struct cqrs::command::ScheduleToken(pub u64)
+#[non_exhaustive] pub struct cqrs::command::Scheduled<C>
+pub cqrs::command::Scheduled::attempts: u32
+pub cqrs::command::Scheduled::command: C
+pub cqrs::command::Scheduled::due: std::time::SystemTime
+pub cqrs::command::Scheduled::metadata: cqrs::event::Metadata
+pub cqrs::command::Scheduled::token: cqrs::command::ScheduleToken
+impl<C> cqrs::command::Scheduled<C>
+pub fn cqrs::command::Scheduled<C>::new(cqrs::command::ScheduleToken, std::time::SystemTime, C, cqrs::event::Metadata) -> Self
 pub struct cqrs::command::Write<E>
 pub cqrs::command::Write::condition: core::option::Option<cqrs::event::AppendCondition>
 pub cqrs::command::Write::events: alloc::vec::Vec<E>
@@ -151,6 +193,20 @@ pub type cqrs::command::CommandHandler::Event: cqrs::event::DomainEvent
 pub type cqrs::command::CommandHandler::Unit: cqrs::command::UnitMode
 pub fn cqrs::command::CommandHandler::conflict_retries(&self) -> u32
 pub fn cqrs::command::CommandHandler::handle(&self, &C, &mut cqrs::command::CommandContext<Self::Event>, &mut <Self::Unit as cqrs::command::UnitMode>::Tx) -> impl core::future::future::Future<Output = core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>>> + core::marker::Send
+pub trait cqrs::command::CommandSchedule<C, Tx>: core::marker::Send + core::marker::Sync
+pub fn cqrs::command::CommandSchedule::cancel(&self, cqrs::command::ScheduleToken) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::command::CommandSchedule::claim_due(&self, core::time::Duration, usize) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<cqrs::command::Scheduled<C>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::command::CommandSchedule::delivered(&self, cqrs::command::ScheduleToken) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::command::CommandSchedule::failed(&self, cqrs::command::ScheduleToken, core::option::Option<std::time::SystemTime>, &str) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::command::CommandSchedule::reschedule(&self, cqrs::command::ScheduleToken, std::time::SystemTime) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::command::CommandSchedule::schedule_in(&self, &mut Tx, std::time::SystemTime, &C, &cqrs::event::Metadata) -> impl core::future::future::Future<Output = core::result::Result<cqrs::command::ScheduleToken, cqrs::store::StoreError>> + core::marker::Send
+impl<C: core::clone::Clone + core::marker::Send + core::marker::Sync> cqrs::command::CommandSchedule<C> for cqrs::command::InMemorySchedule<C>
+pub async fn cqrs::command::InMemorySchedule<C>::cancel(&self, cqrs::command::ScheduleToken) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::claim_due(&self, core::time::Duration, usize) -> core::result::Result<alloc::vec::Vec<cqrs::command::Scheduled<C>>, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::delivered(&self, cqrs::command::ScheduleToken) -> core::result::Result<(), cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::failed(&self, cqrs::command::ScheduleToken, core::option::Option<std::time::SystemTime>, &str) -> core::result::Result<(), cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::reschedule(&self, cqrs::command::ScheduleToken, std::time::SystemTime) -> core::result::Result<bool, cqrs::store::StoreError>
+pub async fn cqrs::command::InMemorySchedule<C>::schedule_in(&self, &mut (), std::time::SystemTime, &C, &cqrs::event::Metadata) -> core::result::Result<cqrs::command::ScheduleToken, cqrs::store::StoreError>
 pub trait cqrs::command::EventPublisher<E: cqrs::event::DomainEvent>: core::marker::Send + core::marker::Sync
 pub fn cqrs::command::EventPublisher::commit<A: cqrs::aggregate::Aggregate<Event = E>>(&self, cqrs::aggregate::Loaded<A>, cqrs::command::Pending<E>) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<u64>, cqrs::store::StoreError>> + core::marker::Send
 impl<E, S, C, M> cqrs::command::EventPublisher<E> for cqrs::processing::Events<E, S, C, M> where E: cqrs::event::DomainEvent + core::clone::Clone, S: cqrs::store::AppendEvents<E>, C: core::marker::Send + core::marker::Sync, M: core::marker::Send + core::marker::Sync
@@ -207,6 +263,7 @@ pub fn alloc::rcs::arc::Arc<T>::append(&self, &mut <U as cqrs::command::UnitMode
 pub fn alloc::rcs::arc::Arc<T>::begin(&self) -> impl core::future::future::Future<Output = core::result::Result<<U as cqrs::command::UnitMode>::Tx, cqrs::store::StoreError>> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<T>::commit(&self, <U as cqrs::command::UnitMode>::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub async fn cqrs::command::append_writes<E, U, W>(&W, &mut <U as cqrs::command::UnitMode>::Tx, alloc::vec::Vec<cqrs::command::Write<E>>) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError> where E: cqrs::event::DomainEvent, U: cqrs::command::UnitMode, W: cqrs::command::UnitOfWork<E, U>
+pub async fn cqrs::command::deliver_scheduled<C, Tx, S, G>(S, G, cqrs::command::DeliveryOptions, impl core::future::future::Future<Output = ()> + core::marker::Send) where C: cqrs::command::Command + core::marker::Sync, <C as cqrs::Message>::Error: core::fmt::Display, S: cqrs::command::CommandSchedule<C, Tx>, G: cqrs::command::CommandGateway<C>
 pub async fn cqrs::command::dispatch_command<C, H, U>(&H, C, cqrs::event::Metadata, &U) -> core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>> where C: cqrs::command::Command + core::marker::Sync, H: cqrs::command::CommandHandler<C>, U: cqrs::command::UnitOfWork<<H as cqrs::command::CommandHandler>::Event, <H as cqrs::command::CommandHandler>::Unit>, cqrs::ErrorOf<C>: core::convert::From<cqrs::store::StoreError>
 pub mod cqrs::event
 pub use cqrs::event::DomainEvent

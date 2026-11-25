@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM cqrs_scheduled WHERE id = $1 AND queue = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "78baa3ab091bcaf404d53010bc8d748d0641c641495d0033400736a3109da86b"
+}

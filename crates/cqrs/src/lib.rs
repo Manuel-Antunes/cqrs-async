@@ -200,6 +200,7 @@ mod interceptor;
 mod loader;
 mod message;
 mod projection;
+mod schedule;
 mod snapshot;
 #[cfg(feature = "tokio")]
 mod streaming;
@@ -250,6 +251,9 @@ pub mod command {
         Write, append_writes, dispatch_command,
     };
     pub use crate::message::{Command, CommandGateway};
+    #[cfg(feature = "tokio")]
+    pub use crate::schedule::deliver_scheduled;
+    pub use crate::schedule::{CommandSchedule, DeliveryOptions, InMemorySchedule, ScheduleToken, Scheduled};
 }
 
 pub mod query {

@@ -76,6 +76,22 @@ ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS attempts integer NOT NULL
 ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS last_touched timestamptz;
 ALTER TABLE cqrs_dead_letters ADD COLUMN IF NOT EXISTS diagnostics json NOT NULL DEFAULT '{}';
 
+-- Commands to send later (`PostgresSchedule`): one queue per command type,
+-- claimed by deliverers for a lease, removed once delivered; a command given
+-- up is kept, with its last error.
+CREATE TABLE IF NOT EXISTS cqrs_scheduled (
+    id            bigserial   PRIMARY KEY,
+    queue         text        NOT NULL,
+    due_at        timestamptz NOT NULL,
+    payload       json        NOT NULL,
+    metadata      json        NOT NULL,
+    attempts      integer     NOT NULL DEFAULT 0,
+    claimed_until timestamptz,
+    failed_at     timestamptz,
+    last_error    text
+);
+CREATE INDEX IF NOT EXISTS cqrs_scheduled_due ON cqrs_scheduled (queue, due_at) WHERE failed_at IS NULL;
+
 -- Parallel appends (Axon's JDBC design): positions come from a sequence, so
 -- appends never wait for each other on a shared row; they commit out of
 -- order and readers track the gaps (`cqrs::Cursor`).
