@@ -11,20 +11,22 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
 publish = false
 
+# The library crates are published as `cqrs-async*` (their code names stay
+# `cqrs`, `cqrs_postgres`, `cqrs_sea_orm`); members name them by those keys.
 [workspace.dependencies]
 # Without its default features, so a member can turn them off (the Cargo of
 # the MSRV, 1.89, refuses `default-features = false` over a workspace
 # dependency that has them on): members ask for the features they use.
-cqrs = { path = "crates/cqrs", default-features = false }
-cqrs-derive = { path = "crates/cqrs-derive" }
-cqrs-postgres = { path = "crates/cqrs-postgres" }
-cqrs-sea-orm = { path = "crates/cqrs-sea-orm" }
+cqrs = { package = "cqrs-async", path = "crates/cqrs", version = "0.1.0-alpha.1", default-features = false }
+cqrs-derive = { package = "cqrs-async-macros", path = "crates/cqrs-derive", version = "0.1.0-alpha.1" }
+cqrs-postgres = { package = "cqrs-async-postgres", path = "crates/cqrs-postgres", version = "0.1.0-alpha.1" }
+cqrs-sea-orm = { package = "cqrs-async-sea-orm", path = "crates/cqrs-sea-orm", version = "0.1.0-alpha.1" }
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false }

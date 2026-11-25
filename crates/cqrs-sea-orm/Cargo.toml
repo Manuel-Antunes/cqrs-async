@@ -1,12 +1,20 @@
 [package]
-name = "cqrs-sea-orm"
+name = "cqrs-async-sea-orm"
 description = "SeaORM in the transactions of the cqrs crate's PostgreSQL adapter"
 version.workspace = true
 edition.workspace = true
 # SeaORM 2 needs 1.94; the other crates keep the workspace's MSRV.
 rust-version = "1.94"
 license.workspace = true
-publish.workspace = true
+publish = true
+readme = "../../README.md"
+keywords = ["cqrs", "event-sourcing", "sea-orm", "postgres"]
+categories = ["database"]
+exclude = ["public-api.txt"]
+
+# Published as `cqrs-async-sea-orm`, written `cqrs_sea_orm::` in code.
+[lib]
+name = "cqrs_sea_orm"
 
 [dependencies]
 cqrs-postgres.workspace = true
@@ -15,3 +23,6 @@ sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-postg
 sea-query-sqlx = { version = "0.9", default-features = false, features = ["sqlx-postgres"] }
 async-trait = "0.1"
 tokio = { workspace = true, features = ["sync"] }
+
+[package.metadata.docs.rs]
+all-features = true

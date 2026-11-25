@@ -3,7 +3,7 @@
 //! ```text
 //! docker run -d --name cqrs-pg -e POSTGRES_PASSWORD=cqrs -e POSTGRES_USER=cqrs \
 //!     -e POSTGRES_DB=cqrs -p 55432:5432 postgres:17-alpine
-//! CQRS_POSTGRES_URL=postgres://cqrs:cqrs@127.0.0.1:55432/cqrs cargo test -p cqrs-postgres
+//! CQRS_POSTGRES_URL=postgres://cqrs:cqrs@127.0.0.1:55432/cqrs cargo test -p cqrs-async-postgres
 //! ```
 //!
 //! Each test runs in its own schema, so they run in parallel.
@@ -1879,7 +1879,7 @@ async fn state_and_events_commit_and_roll_back_together() {
 /// processor carries them as gaps until their transactions finish. Prints
 /// how many gaps the processor's cursor carries (sampled) and stores in its
 /// token, under load. Run on purpose:
-/// `cargo test -p cqrs-postgres --test postgres gaps_from_other_logs -- --ignored --nocapture`.
+/// `cargo test -p cqrs-async-postgres --test postgres gaps_from_other_logs -- --ignored --nocapture`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "a measurement, not a check"]
 async fn gaps_from_other_logs_under_load() {
@@ -1999,7 +1999,7 @@ noop_namespace!("a", "b", "c", "d");
 /// processor of its own. Prints the time, and the database's transactions
 /// and rows read (`pg_stat_database`), to tell what a shared reader (one
 /// read of the log for every namespace) would save. Run on purpose:
-/// `cargo test -p cqrs-postgres --test postgres cost_per_namespace -- --ignored --nocapture`.
+/// `cargo test -p cqrs-async-postgres --test postgres cost_per_namespace -- --ignored --nocapture`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "a measurement, not a check"]
 async fn cost_per_namespace() {

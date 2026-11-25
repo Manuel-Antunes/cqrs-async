@@ -76,9 +76,9 @@
 //! migrations applied to that database, refresh the cache:
 //!
 //! ```text
-//! cargo sqlx prepare -- -p cqrs-postgres            # with sqlx-cli, or:
+//! cargo sqlx prepare -- -p cqrs-async-postgres            # with sqlx-cli, or:
 //! touch crates/cqrs-postgres/src/*.rs && SQLX_OFFLINE_DIR=$PWD/crates/cqrs-postgres/.sqlx \
-//!     CQRS_POSTGRES_URL=postgres://... cargo build -p cqrs-postgres
+//!     CQRS_POSTGRES_URL=postgres://... cargo build -p cqrs-async-postgres
 //! ```
 
 #![warn(missing_docs, missing_debug_implementations)]

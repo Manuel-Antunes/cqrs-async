@@ -59,7 +59,7 @@ jobs:
       # because CQRS_POSTGRES_URL is set.
       - run: cargo test --workspace
       # The macros' error messages, which only stable's diagnostics match.
-      - run: cargo test -p cqrs --all-features --test ui -- --ignored
+      - run: cargo test -p cqrs-async --all-features --test ui -- --ignored
 
   docs:
     runs-on: ubuntu-latest
@@ -78,11 +78,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cqrs --no-default-features
-      - run: cargo check -p cqrs --no-default-features --features derive
-      - run: cargo check -p cqrs --no-default-features --features tokio
-      - run: cargo check -p cqrs --no-default-features --features json
-      - run: cargo test -p cqrs --no-default-features --lib
+      - run: cargo check -p cqrs-async --no-default-features
+      - run: cargo check -p cqrs-async --no-default-features --features derive
+      - run: cargo check -p cqrs-async --no-default-features --features tokio
+      - run: cargo check -p cqrs-async --no-default-features --features json
+      - run: cargo test -p cqrs-async --no-default-features --lib
 
   # Each crate on its own MSRV: the core and its macros on 1.89; the
   # PostgreSQL crates on 1.94, the one of sqlx 0.9.
@@ -92,9 +92,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cqrs -p cqrs-derive --all-features
-      - run: cargo check -p cqrs --no-default-features
-      - run: cargo test -p cqrs --all-features
+      - run: cargo check -p cqrs-async -p cqrs-async-macros --all-features
+      - run: cargo check -p cqrs-async --no-default-features
+      - run: cargo test -p cqrs-async --all-features
 
   msrv-postgres:
     runs-on: ubuntu-latest
@@ -102,9 +102,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cqrs-postgres -p cqrs-sea-orm --all-features
+      - run: cargo check -p cqrs-async-postgres -p cqrs-async-sea-orm --all-features
         env:
           SQLX_OFFLINE: "true"
+
+  # Licenses, advisories, bans and sources of the dependency tree (deny.toml).
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # The four library crates as they would be published: packaged, then
+  # built from the packages alone, without a database (the sqlx cache and
+  # the migrations are in the PostgreSQL crate's package).
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --workspace --dry-run --exclude blog --exclude cqrs-benchmarks --exclude cqrs-versus
 
   # The public API, item by item, as committed: a change to it shows in the
   # pull request's diff. Refresh with the same command, `> public-api.txt`.
@@ -118,8 +136,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-public-api --locked
       - run: |
-          for crate in cqrs cqrs-postgres cqrs-sea-orm; do
-            cargo public-api -p "$crate" --all-features -sss | diff -u "crates/$crate/public-api.txt" -
+          for pair in cqrs-async:cqrs cqrs-async-postgres:cqrs-postgres cqrs-async-sea-orm:cqrs-sea-orm; do
+            cargo public-api -p "${pair%%:*}" --all-features -sss | diff -u "crates/${pair##*:}/public-api.txt" -
           done
 
   # The committed sqlx cache must be what the queries produce against the
@@ -154,5 +172,5 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/sqlx"
           touch crates/cqrs-postgres/src/lib.rs
-          SQLX_OFFLINE_DIR="$RUNNER_TEMP/sqlx" cargo check -p cqrs-postgres
+          SQLX_OFFLINE_DIR="$RUNNER_TEMP/sqlx" cargo check -p cqrs-async-postgres
           diff -r "$RUNNER_TEMP/sqlx" crates/cqrs-postgres/.sqlx

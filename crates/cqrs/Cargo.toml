@@ -1,11 +1,20 @@
 [package]
-name = "cqrs"
-description = "PoC: CQRS/ES core with static dispatch only (no dyn), streams first-class"
+name = "cqrs-async"
+description = "CQRS and event sourcing for async Rust, routed at compile time: commands, queries, projections, subscriptions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
+readme = "../../README.md"
+keywords = ["cqrs", "event-sourcing", "ddd", "async", "projection"]
+categories = ["asynchronous", "rust-patterns"]
+# The API snapshot is the repository's check, not part of the crate.
+exclude = ["public-api.txt"]
+
+# Published as `cqrs-async`, written `cqrs::` in code.
+[lib]
+name = "cqrs"
 
 [features]
 # Batteries included: `cargo add cqrs` gets derives, live events, catch-up
@@ -39,3 +48,6 @@ futures-util.workspace = true
 # The macros' error messages (tests/ui.rs).
 trybuild = "1"
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "test-util"] }
+
+[package.metadata.docs.rs]
+all-features = true

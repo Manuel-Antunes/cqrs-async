@@ -549,15 +549,15 @@ dependencies = [
 
 [[package]]
 name = "blog"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
  "async-trait",
  "axum",
- "cqrs",
- "cqrs-postgres",
- "cqrs-sea-orm",
+ "cqrs-async",
+ "cqrs-async-postgres",
+ "cqrs-async-sea-orm",
  "futures-core",
  "futures-util",
  "sea-orm",
@@ -757,10 +757,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cqrs"
-version = "0.0.0"
+name = "cqrs-async"
+version = "0.1.0-alpha.1"
 dependencies = [
- "cqrs-derive",
+ "cqrs-async-macros",
  "futures-core",
  "futures-util",
  "prost",
@@ -772,13 +772,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "cqrs-async-macros"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cqrs-async-postgres"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "cqrs-async",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sqlx 0.9.1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cqrs-async-sea-orm"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "cqrs-async-postgres",
+ "sea-orm",
+ "sea-query-sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "cqrs-benchmarks"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "axum",
  "blog",
- "cqrs",
- "cqrs-postgres",
+ "cqrs-async",
+ "cqrs-async-postgres",
  "divan",
  "futures-util",
  "http-body-util",
@@ -788,16 +822,6 @@ dependencies = [
  "serde_json",
  "sqlx 0.9.1",
  "tokio",
-]
-
-[[package]]
-name = "cqrs-derive"
-version = "0.0.0"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -814,37 +838,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cqrs-postgres"
-version = "0.0.0"
-dependencies = [
- "cqrs",
- "futures-util",
- "serde",
- "serde_json",
- "sqlx 0.9.1",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cqrs-sea-orm"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "cqrs-postgres",
- "sea-orm",
- "sea-query-sqlx",
- "tokio",
-]
-
-[[package]]
 name = "cqrs-versus"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
- "cqrs",
+ "cqrs-async",
+ "cqrs-async-postgres",
  "cqrs-es",
- "cqrs-postgres",
  "postgres-es",
  "serde",
  "serde_json",

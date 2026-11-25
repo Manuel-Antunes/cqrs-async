@@ -14,11 +14,13 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use syn::{Data, DeriveInput, Error, Ident, LitInt, LitStr, Result, Type, parse_macro_input, spanned::Spanned};
 
-/// Path to what the macros name in the `cqrs` crate (its `__private`
-/// module, the same whatever public module an item lives in), even when a
-/// consumer renamed the dependency.
+/// Path to what the macros name in `cqrs-async` (its `__private` module,
+/// the same whatever public module an item lives in), even when a consumer
+/// renamed the dependency.
 fn krate() -> TokenStream2 {
-    match crate_name("cqrs") {
+    match crate_name("cqrs-async") {
+        // Not renamed: the crate goes by its library's name, `cqrs`.
+        Ok(FoundCrate::Name(name)) if name == "cqrs_async" => quote!(::cqrs::__private),
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name, Span::call_site());
             quote!(::#ident::__private)

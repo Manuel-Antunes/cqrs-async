@@ -1,12 +1,22 @@
 [package]
-name = "cqrs-postgres"
-description = "PoC: PostgreSQL event store and token store for the cqrs crate, over a plain sqlx pool"
+name = "cqrs-async-postgres"
+description = "PostgreSQL for cqrs-async over a plain sqlx pool: event store, tokens, transactions, dead letters, snapshots"
 version.workspace = true
 edition.workspace = true
 # sqlx 0.9's.
 rust-version = "1.94"
 license.workspace = true
-publish.workspace = true
+publish = true
+readme = "../../README.md"
+keywords = ["cqrs", "event-sourcing", "postgres", "sqlx"]
+categories = ["database", "asynchronous"]
+# The checked queries' cache and the migrations build the crate without a
+# database.
+include = ["src/**/*", "migrations/**/*", ".sqlx/**/*", "sqlx.toml", "Cargo.toml"]
+
+# Published as `cqrs-async-postgres`, written `cqrs_postgres::` in code.
+[lib]
+name = "cqrs_postgres"
 
 [features]
 # `Postgres::events`: the events service of a log, its processors running on
@@ -27,3 +37,6 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 cqrs = { workspace = true, features = ["derive", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[package.metadata.docs.rs]
+all-features = true

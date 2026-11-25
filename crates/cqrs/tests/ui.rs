@@ -1,6 +1,6 @@
 //! The macros' error messages, as a user sees them (`trybuild`). Compiler
 //! diagnostics change between Rust versions, so it runs on stable only:
-//! `cargo test -p cqrs --test ui -- --ignored`; `TRYBUILD=overwrite` to
+//! `cargo test -p cqrs-async --test ui -- --ignored`; `TRYBUILD=overwrite` to
 //! accept new messages after reading them.
 
 #[test]
