@@ -47,7 +47,28 @@ pub struct HandlerFailure {
 
 impl fmt::Display for ProcessingFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} event handler(s) failed", self.failures.len())
+        write!(f, "{} event handler(s) failed", self.failures.len())?;
+        for failure in &self.failures {
+            write!(f, "; {failure}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Its cause is the first handler's error.
+impl std::error::Error for ProcessingFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.failures.first().map(|failure| failure.error.as_error() as _)
+    }
+}
+
+impl fmt::Display for HandlerFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} failed at position {}: {}",
+            self.handler, self.position, self.error
+        )
     }
 }
 
@@ -218,6 +239,12 @@ pub struct InlinePublisher<E, S, P = (), F = LogFailures> {
     on_failure: F,
     /// Ties the publisher to one event type without storing one.
     event: PhantomData<fn() -> E>,
+}
+
+impl<E, S, P, F> ::std::fmt::Debug for InlinePublisher<E, S, P, F> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InlinePublisher").finish_non_exhaustive()
+    }
 }
 
 impl<E, S> InlinePublisher<E, S> {

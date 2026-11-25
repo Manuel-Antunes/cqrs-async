@@ -44,7 +44,7 @@
 //!   every contract is a `Future` or a `Stream` (`futures-core`), and any
 //!   runtime can implement them.
 
-#![warn(missing_docs)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 // Lets the derives always emit `::cqrs::...`, even inside this crate's tests.
 extern crate self as cqrs;

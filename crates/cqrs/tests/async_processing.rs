@@ -115,10 +115,9 @@ impl World {
 }
 
 fn options() -> SubscriptionOptions {
-    SubscriptionOptions {
-        batch_size: 4,
-        poll_interval: Duration::from_millis(100),
-    }
+    SubscriptionOptions::default()
+        .batch_size(4)
+        .poll_interval(Duration::from_millis(100))
 }
 
 async fn take(stream: impl futures_core::Stream<Item = u64>, n: usize) -> Vec<u64> {

@@ -225,10 +225,7 @@ async fn batched(fail_on: u64) -> Journal {
         .with_tokens(journal.clone())
         .with_transactions(journal.clone());
     let last = tick(events.store(), [1, 2, 3]).await.last().unwrap().position;
-    let options = TrackingOptions {
-        batch_size: 10,
-        ..TrackingOptions::default()
-    };
+    let options = TrackingOptions::default().batch_size(10);
     let running = events
         .processor("rows", rows(&journal, fail_on))
         .with_options(options)

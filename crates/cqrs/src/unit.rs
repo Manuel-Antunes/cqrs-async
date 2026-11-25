@@ -61,6 +61,12 @@ pub struct Cqrs<C, Q, E = ()> {
     processing: Processing,
 }
 
+impl<C, Q, E> ::std::fmt::Debug for Cqrs<C, Q, E> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("Cqrs").finish_non_exhaustive()
+    }
+}
+
 /// The processors a unit started, and their progress.
 #[cfg(feature = "tokio")]
 #[derive(Default)]
@@ -281,6 +287,7 @@ tuple_units!(A 0, B 1, C 2, D 3, F 4, G 5, H 6, I 7);
 /// # }
 /// let _ = cqrs::Cqrs::from_publisher(()).projection(Counter);
 /// ```
+#[must_use = "a unit is used once built"]
 pub struct CqrsBuilder<P, C = (), Q = (), E = (), U = ()> {
     /// What the command handlers commit through.
     publisher: Arc<P>,
@@ -294,6 +301,12 @@ pub struct CqrsBuilder<P, C = (), Q = (), E = (), U = ()> {
     updates: U,
     /// The processors started so far.
     processing: Processing,
+}
+
+impl<P, C, Q, E, U> ::std::fmt::Debug for CqrsBuilder<P, C, Q, E, U> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("CqrsBuilder").finish_non_exhaustive()
+    }
 }
 
 impl<P, Q, E, U> CqrsBuilder<P, (), Q, E, U> {
@@ -401,7 +414,6 @@ where
 {
     /// Settings (segments, batch size, dead letters...) for the processors
     /// started after this call.
-    #[must_use]
     pub fn options(mut self, options: TrackingOptions) -> Self {
         self.processing.options = options;
         self

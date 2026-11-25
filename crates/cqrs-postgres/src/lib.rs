@@ -65,6 +65,8 @@
 //!     CQRS_POSTGRES_URL=postgres://... cargo build -p cqrs-postgres
 //! ```
 
+#![warn(missing_docs, missing_debug_implementations)]
+
 mod dead_letters;
 mod event_store;
 mod snapshot_store;
@@ -103,6 +105,12 @@ pub struct Postgres {
     tokens: PostgresTokenStore,
     /// The units of work, of processors and commands.
     transactions: PostgresTransactions,
+}
+
+impl ::std::fmt::Debug for Postgres {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("Postgres").finish_non_exhaustive()
+    }
 }
 
 impl Postgres {
@@ -189,4 +197,17 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
 /// the source.
 fn backend(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> StoreError {
     StoreError::backend(error)
+}
+
+/// A `bigint` the schema never stores negative (a position, a sequence, a
+/// version, a count), as a `u64`: a negative one is a backend error, never
+/// a silently wrapped number.
+fn unsigned(value: i64) -> Result<u64, StoreError> {
+    u64::try_from(value).map_err(|_| StoreError::backend(format!("{value} where the schema stores no negative number")))
+}
+
+/// A segment index or count as its `integer` column stores it (segments
+/// are few: saturating is never reached).
+fn to_i32(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }

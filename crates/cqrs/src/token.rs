@@ -125,6 +125,12 @@ pub struct InMemoryTokenStore {
     processors: Arc<Mutex<HashMap<String, Vec<Token>>>>,
 }
 
+impl ::std::fmt::Debug for InMemoryTokenStore {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InMemoryTokenStore").finish_non_exhaustive()
+    }
+}
+
 impl InMemoryTokenStore {
     /// The stored position of each segment of `processor`.
     pub fn positions(&self, processor: &str) -> Vec<u64> {

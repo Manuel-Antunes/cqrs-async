@@ -8,9 +8,16 @@ use crate::{DeadLetterQueue, DomainEvent, ReadLog, Route, TokenStore, Transactio
 
 /// The processors of a projection's namespaces, to configure and
 /// [`spawn`](Self::spawn): [`Events::projection`](super::Events::projection).
+#[must_use = "a projection does nothing until it is spawned"]
 pub struct ProjectionProcessors<E, S, P, C, M> {
     /// One per namespace, in the projection's order.
     processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M>>,
+}
+
+impl<E, S, P, C, M> ::std::fmt::Debug for ProjectionProcessors<E, S, P, C, M> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("ProjectionProcessors").finish_non_exhaustive()
+    }
 }
 
 impl<E, S, P, C, M> ProjectionProcessors<E, S, P, C, M>
@@ -62,7 +69,6 @@ where
 
     /// Settings for every namespace's processor; a namespace that sets its
     /// batch (`batch = N` on its handler) keeps it.
-    #[must_use]
     pub fn with_options(self, options: TrackingOptions) -> Self {
         Self::with_batches(
             self.processors
@@ -119,9 +125,16 @@ struct Namespace {
 }
 
 /// Controls a running projection: its namespaces' processors.
+#[must_use = "dropping the handle leaves the projection running, with no way to stop it"]
 pub struct ProjectionHandle {
     /// In the projection's order.
     namespaces: Vec<Namespace>,
+}
+
+impl ::std::fmt::Debug for ProjectionHandle {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("ProjectionHandle").finish_non_exhaustive()
+    }
 }
 
 impl ProjectionHandle {

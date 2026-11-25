@@ -13,7 +13,7 @@
 //! SeaORM's own `DatabaseTransaction` cannot be the common type: it keeps
 //! its connection private and does not lend it.
 
-#![warn(missing_docs)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 use cqrs_postgres::{
     PgTransaction,
@@ -39,6 +39,12 @@ pub struct SeaOrm<'a> {
     /// The transaction's connection. SeaORM queries through `&self`, so it
     /// is lent to one statement at a time.
     connection: Mutex<&'a mut PgConnection>,
+}
+
+impl<'a> ::std::fmt::Debug for SeaOrm<'a> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("SeaOrm").finish_non_exhaustive()
+    }
 }
 
 impl<'a> SeaOrm<'a> {

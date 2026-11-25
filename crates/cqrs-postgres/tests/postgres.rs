@@ -358,10 +358,11 @@ async fn racing_writers_on_one_stream_have_exactly_one_winner_per_version() {
 async fn a_subscription_reading_while_writers_race_misses_nothing() {
     let pool = database_or_skip!();
     let store = PostgresEventStore::<ClockEvent>::new(pool, "clocks");
-    let events = Events::new(store.clone()).with_options(SubscriptionOptions {
-        batch_size: 7,
-        poll_interval: Duration::from_millis(20),
-    });
+    let events = Events::new(store.clone()).with_options(
+        SubscriptionOptions::default()
+            .batch_size(7)
+            .poll_interval(Duration::from_millis(20)),
+    );
     let mut subscription = Box::pin(events.subscribe(0));
 
     // 8 writers racing on stream 1 (retrying on conflicts), 8 on their own.
@@ -499,13 +500,11 @@ impl<Tx: Send> EventHandler<ClockEvent, Tx> for Recorder {
 }
 
 fn options(segments: u32, max_segments: u32) -> TrackingOptions {
-    TrackingOptions {
-        segments,
-        max_segments,
-        claim_timeout: Duration::from_secs(1),
-        claim_interval: Duration::from_millis(100),
-        ..TrackingOptions::default()
-    }
+    TrackingOptions::default()
+        .segments(segments)
+        .max_segments(max_segments)
+        .claim_timeout(Duration::from_secs(1))
+        .claim_interval(Duration::from_millis(100))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1661,10 +1660,7 @@ async fn a_batched_projection_rolls_a_failed_batch_back_and_applies_each_event_o
         fail_once_at: Some(77),
         ..Totals::default()
     };
-    let batched = TrackingOptions {
-        batch_size: 64,
-        ..options(2, 2)
-    };
+    let batched = options(2, 2).batch_size(64);
     let running = events
         .processor("totals", totals_projection)
         .with_options(batched)
@@ -2036,10 +2032,7 @@ async fn cost_per_namespace() {
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
-    let options = TrackingOptions {
-        batch_size,
-        ..TrackingOptions::default()
-    };
+    let options = TrackingOptions::default().batch_size(batch_size);
     for (name, namespaces) in [("one namespace", 1), ("four namespaces", 4)] {
         sqlx::query("SELECT pg_stat_clear_snapshot()")
             .execute(&pool)

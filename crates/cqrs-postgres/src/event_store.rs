@@ -15,7 +15,7 @@ use futures_util::TryStreamExt;
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::{Connection, PgConnection, PgExecutor, PgPool, Postgres, Transaction};
 
-use crate::{StoredEvent, Upcaster, backend};
+use crate::{StoredEvent, Upcaster, backend, unsigned};
 
 /// A named event log in PostgreSQL, events stored as JSON (`serde`), read
 /// through the [`Upcaster`]s `U` (none by default).
@@ -38,6 +38,12 @@ pub struct PostgresEventStore<E, U = ()> {
     upcaster: Arc<U>,
     /// The event type this store reads and writes.
     event: PhantomData<fn() -> E>,
+}
+
+impl<E, U> ::std::fmt::Debug for PostgresEventStore<E, U> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PostgresEventStore").finish_non_exhaustive()
+    }
 }
 
 impl<E> PostgresEventStore<E> {
@@ -149,9 +155,13 @@ where
         .fetch(&self.pool);
         let mut count = 0;
         while let Some(row) = rows.try_next().await.map_err(backend)? {
-            let (event, _, _) =
-                StoredEvent::decode_text(row.event_type, row.event_version as u32, &row.payload, &*self.upcaster)?;
-            apply(row.sequence as u64, event);
+            let (event, _, _) = StoredEvent::decode_text(
+                row.event_type,
+                u32::try_from(row.event_version).map_err(backend)?,
+                &row.payload,
+                &*self.upcaster,
+            )?;
+            apply(unsigned(row.sequence)?, event);
             count += 1;
         }
         Ok(count)
@@ -381,14 +391,21 @@ where
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
-        let horizon = rows.first().map_or(Horizon::SETTLED, |row| Horizon {
-            finished_below: row.xmin as u64,
-            started_below: row.xmax as u64,
-        });
-        let missing = rows
-            .first()
-            .map(|row| row.missing.iter().map(|&position| position as u64).collect())
-            .unwrap_or_default();
+        let horizon = match rows.first() {
+            Some(row) => Horizon {
+                finished_below: unsigned(row.xmin)?,
+                started_below: unsigned(row.xmax)?,
+            },
+            None => Horizon::SETTLED,
+        };
+        let missing = match rows.first() {
+            Some(row) => row
+                .missing
+                .iter()
+                .map(|&position| unsigned(position))
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        };
         let events = rows
             .into_iter()
             .filter_map(|row| {
@@ -430,13 +447,19 @@ where
         .await
         .map_err(backend)?;
         let horizon = Horizon {
-            finished_below: row.xmin as u64,
-            started_below: row.xmax as u64,
+            finished_below: unsigned(row.xmin)?,
+            started_below: unsigned(row.xmax)?,
         };
-        let gaps = row.missing.into_iter().map(|missing| Gap {
-            position: missing as u64,
-            horizon: horizon.started_below,
-        });
+        let gaps = row
+            .missing
+            .into_iter()
+            .map(|missing| {
+                Ok(Gap {
+                    position: unsigned(missing)?,
+                    horizon: horizon.started_below,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
         let mut cursor = Cursor::new(position, gaps);
         cursor.settle(&horizon, |_| false);
         Ok(cursor)
@@ -491,17 +514,21 @@ async fn head<'c>(executor: impl PgExecutor<'c>, log: &str) -> Result<u64, Store
     .fetch_one(executor)
     .await
     .map_err(backend)?;
-    Ok(head as u64)
+    unsigned(head)
 }
 
 /// A row as an envelope, upcast to the current shape.
 fn envelope<E: DeserializeOwned>(row: EventRow, upcaster: &impl Upcaster) -> Result<EventEnvelope<E>, StoreError> {
-    let (payload, event_type, event_version) =
-        StoredEvent::decode_text(row.event_type, row.event_version as u32, &row.payload, upcaster)?;
+    let (payload, event_type, event_version) = StoredEvent::decode_text(
+        row.event_type,
+        u32::try_from(row.event_version).map_err(backend)?,
+        &row.payload,
+        upcaster,
+    )?;
     Ok(EventEnvelope {
-        position: row.position as u64,
+        position: unsigned(row.position)?,
         stream: StreamId::new(row.stream_type, row.stream_id),
-        sequence: row.sequence as u64,
+        sequence: unsigned(row.sequence)?,
         recorded_at: from_micros(row.recorded_us),
         metadata: serde_json::from_str(&row.metadata).map_err(backend)?,
         payload,
@@ -605,7 +632,9 @@ async fn append_rows<'c, E: DomainEvent + Serialize>(
         stream: stream.clone(),
         expected,
         // An empty stream has no version.
-        actual: actual.filter(|&version| version > 0).map(|version| version as u64),
+        actual: actual
+            .and_then(|version| u64::try_from(version).ok())
+            .filter(|&version| version > 0),
     };
     match result {
         // The version check refused the append: the row says what the
@@ -691,7 +720,8 @@ fn key(log: &str, kind: &str, value: &str) -> i64 {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
-    hash as i64
+    // The hash's bits, as the `bigint` an advisory lock takes.
+    i64::from_ne_bytes(hash.to_ne_bytes())
 }
 
 /// What an append of `events` takes shared: each of their tags and types,
@@ -793,14 +823,15 @@ where
 fn recorded(rows: Result<Vec<Appended>, StoreError>) -> Result<Vec<Recorded>, StoreError> {
     let mut rows = rows?;
     rows.sort_by_key(|row| row.position);
-    Ok(rows
-        .into_iter()
-        .map(|row| Recorded {
-            position: row.position as u64,
-            sequence: row.sequence as u64,
-            recorded_at: from_micros(row.recorded_us),
+    rows.into_iter()
+        .map(|row| {
+            Ok(Recorded {
+                position: unsigned(row.position)?,
+                sequence: unsigned(row.sequence)?,
+                recorded_at: from_micros(row.recorded_us),
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Positions and sequences are stored as `bigint`.
@@ -809,7 +840,7 @@ fn to_i64(value: u64) -> i64 {
 }
 
 fn from_micros(micros: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_micros(micros.max(0) as u64)
+    UNIX_EPOCH + Duration::from_micros(u64::try_from(micros).unwrap_or(0))
 }
 
 #[cfg(test)]

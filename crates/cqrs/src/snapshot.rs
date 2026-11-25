@@ -41,6 +41,12 @@ pub struct InMemorySnapshots<A> {
     snapshots: Arc<Mutex<HashMap<StreamId, (A, u64)>>>,
 }
 
+impl<A> ::std::fmt::Debug for InMemorySnapshots<A> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InMemorySnapshots").finish_non_exhaustive()
+    }
+}
+
 impl<A> Default for InMemorySnapshots<A> {
     fn default() -> Self {
         Self {

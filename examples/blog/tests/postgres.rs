@@ -273,10 +273,7 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
         ),
         interceptor,
     );
-    let options = TrackingOptions {
-        retry_initial: Duration::from_millis(10),
-        ..TrackingOptions::default()
-    };
+    let options = TrackingOptions::default().retry_initial(Duration::from_millis(10));
     let running = events.projection(projection).with_options(options).spawn();
     within(10, running.caught_up(created)).await;
 

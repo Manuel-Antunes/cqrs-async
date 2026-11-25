@@ -28,6 +28,12 @@ pub struct PostgresDeadLetters<E, U = ()> {
     store: PostgresEventStore<E, U>,
 }
 
+impl<E, U> ::std::fmt::Debug for PostgresDeadLetters<E, U> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PostgresDeadLetters").finish_non_exhaustive()
+    }
+}
+
 impl<E, U> PostgresDeadLetters<E, U> {
     /// A queue over the database of `store`, whose schema
     /// [`migrate`](crate::migrate) created.

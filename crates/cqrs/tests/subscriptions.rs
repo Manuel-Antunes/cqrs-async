@@ -315,11 +315,7 @@ async fn subscribers_of_every_instance_get_changes_projected_by_another() {
     };
     let events: Events<ClockEvent, Store> = Events::new(InMemoryEventStore::new());
     let ticks = Arc::new(Ticks::default());
-    let options = TrackingOptions {
-        segments: 2,
-        max_segments: 1,
-        ..TrackingOptions::default()
-    };
+    let options = TrackingOptions::default().segments(2).max_segments(1);
     let a = Instance::new(&events, &ticks, options).await;
     let b = Instance::new(&events, &ticks, options).await;
     tokio::time::sleep(Duration::from_secs(2)).await; // each claimed its segment

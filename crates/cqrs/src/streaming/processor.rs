@@ -41,6 +41,7 @@ enum TokenUpdate {
 
 /// How a [`TrackingProcessor`] splits, claims, reads and retries.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct TrackingOptions {
     /// How each segment reads the store and the live feed.
     pub subscription: SubscriptionOptions,
@@ -83,6 +84,93 @@ pub struct TrackingOptions {
     /// handled elsewhere ([`ProcessorStatus::handled`]): the extra latency of
     /// subscriptions served by another instance. Default 50 ms.
     pub progress_poll: Duration,
+}
+
+/// Built from [`Default`], one setter per field: `TrackingOptions::default().subscription(..)`.
+impl TrackingOptions {
+    /// Sets [`subscription`](Self::subscription): how each segment reads the store and the live feed.
+    #[must_use]
+    pub fn subscription(mut self, subscription: SubscriptionOptions) -> Self {
+        self.subscription = subscription;
+        self
+    }
+
+    /// Sets [`segments`](Self::segments): segments the log is split into, by aggregate. Fixed by whoever
+    #[must_use]
+    pub fn segments(mut self, segments: u32) -> Self {
+        self.segments = segments;
+        self
+    }
+
+    /// Sets [`max_segments`](Self::max_segments): at most this many segments per instance, so several instances share
+    #[must_use]
+    pub fn max_segments(mut self, max_segments: u32) -> Self {
+        self.max_segments = max_segments;
+        self
+    }
+
+    /// Sets [`claim_timeout`](Self::claim_timeout): how long a claim lasts unless renewed; after it, another instance may
+    #[must_use]
+    pub fn claim_timeout(mut self, claim_timeout: Duration) -> Self {
+        self.claim_timeout = claim_timeout;
+        self
+    }
+
+    /// Sets [`claim_interval`](Self::claim_interval): how often claims are renewed and free segments looked for. Must be
+    #[must_use]
+    pub fn claim_interval(mut self, claim_interval: Duration) -> Self {
+        self.claim_interval = claim_interval;
+        self
+    }
+
+    /// Sets [`retry_initial`](Self::retry_initial): wait before the first retry of a failed event; doubles on each retry.
+    #[must_use]
+    pub fn retry_initial(mut self, retry_initial: Duration) -> Self {
+        self.retry_initial = retry_initial;
+        self
+    }
+
+    /// Sets [`retry_max`](Self::retry_max): upper bound for the wait between retries.
+    #[must_use]
+    pub fn retry_max(mut self, retry_max: Duration) -> Self {
+        self.retry_max = retry_max;
+        self
+    }
+
+    /// Sets [`dead_letter_after`](Self::dead_letter_after): attempts before an event is parked in the dead-letter queue (with the
+    #[must_use]
+    pub fn dead_letter_after(mut self, dead_letter_after: Option<u32>) -> Self {
+        self.dead_letter_after = dead_letter_after;
+        self
+    }
+
+    /// Sets [`segment_buffer`](Self::segment_buffer): events the shared reader may queue for one segment. A full queue is
+    #[must_use]
+    pub fn segment_buffer(mut self, segment_buffer: usize) -> Self {
+        self.segment_buffer = segment_buffer;
+        self
+    }
+
+    /// Sets [`segment_stall_timeout`](Self::segment_stall_timeout): how long the reader waits for room in a full queue before deciding the
+    #[must_use]
+    pub fn segment_stall_timeout(mut self, segment_stall_timeout: Duration) -> Self {
+        self.segment_stall_timeout = segment_stall_timeout;
+        self
+    }
+
+    /// Sets [`batch_size`](Self::batch_size): events of a segment handled in one unit of work, with one token
+    #[must_use]
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Sets [`progress_poll`](Self::progress_poll): how often an instance that does not own every segment reads the
+    #[must_use]
+    pub fn progress_poll(mut self, progress_poll: Duration) -> Self {
+        self.progress_poll = progress_poll;
+        self
+    }
 }
 
 impl Default for TrackingOptions {
@@ -130,6 +218,7 @@ impl Default for TrackingOptions {
 ///   the same database as the tokens applies each event exactly once.
 ///   Outside of it (an e-mail, a call to another service), delivery is
 ///   at-least-once: an event handled just before a crash is handled again.
+#[must_use = "a processor does nothing until it is spawned or run"]
 pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     /// Key of the tokens, and the name in logs.
     name: String,
@@ -153,8 +242,15 @@ pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     status: watch::Sender<ProcessorStatus>,
 }
 
+impl<E, S, H, T, M, D> ::std::fmt::Debug for TrackingProcessor<E, S, H, T, M, D> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("TrackingProcessor").finish_non_exhaustive()
+    }
+}
+
 /// What a running processor instance reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProcessorStatus {
     /// Every event up to here was handled by the segments this instance
     /// owns (the lowest of their watermarks; 0 while it owns none). Events
@@ -247,7 +343,6 @@ where
     }
 
     /// Replaces the default settings.
-    #[must_use]
     pub fn with_options(mut self, options: TrackingOptions) -> Self {
         self.options = options;
         self
@@ -1197,6 +1292,7 @@ fn lowest(segments: &BTreeMap<u32, (Cursor, Option<String>)>) -> u64 {
 }
 
 /// Controls a spawned [`TrackingProcessor`] instance.
+#[must_use = "dropping the handle leaves the processor running, with no way to stop it"]
 pub struct ProcessorHandle {
     /// The processor's name.
     name: String,
@@ -1206,6 +1302,12 @@ pub struct ProcessorHandle {
     stop: watch::Sender<bool>,
     /// The coordinator task (its workers end with it).
     task: tokio::task::JoinHandle<()>,
+}
+
+impl ::std::fmt::Debug for ProcessorHandle {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("ProcessorHandle").finish_non_exhaustive()
+    }
 }
 
 impl ProcessorHandle {
@@ -1299,6 +1401,7 @@ impl Backoff {
 
 /// Why [`TrackingProcessor::reset`] did not reset.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ResetError {
     /// An instance still holds a segment: stop every instance first.
     Running,

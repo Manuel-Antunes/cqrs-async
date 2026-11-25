@@ -23,6 +23,12 @@ pub trait ProjectionProgress: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub struct ProcessorProgress(watch::Receiver<ProcessorStatus>);
 
+impl ::std::fmt::Debug for ProcessorProgress {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("ProcessorProgress").finish_non_exhaustive()
+    }
+}
+
 impl ProcessorProgress {
     /// The progress of the processor `handle` runs.
     pub fn of(handle: &ProcessorHandle) -> Self {
@@ -65,6 +71,12 @@ pub struct GlobalProgress<T> {
     processor: Arc<str>,
     /// How often the token store is checked while waiting.
     poll: Duration,
+}
+
+impl<T> ::std::fmt::Debug for GlobalProgress<T> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("GlobalProgress").finish_non_exhaustive()
+    }
 }
 
 impl<T> GlobalProgress<T> {

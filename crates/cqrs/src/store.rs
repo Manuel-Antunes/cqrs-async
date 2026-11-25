@@ -62,6 +62,7 @@ pub enum ExpectedVersion {
 
 /// Why an event store operation failed.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum StoreError {
     /// Optimistic concurrency failure: someone else appended first. The
     /// caller should reload the aggregate and retry the decision.
@@ -343,6 +344,12 @@ pub struct InMemoryEventStore<E> {
     /// Everything behind one lock, so an append checks the version and writes
     /// atomically.
     inner: Arc<Mutex<Inner<E>>>,
+}
+
+impl<E> ::std::fmt::Debug for InMemoryEventStore<E> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InMemoryEventStore").finish_non_exhaustive()
+    }
 }
 
 impl<E> Clone for InMemoryEventStore<E> {

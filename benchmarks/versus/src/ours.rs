@@ -171,11 +171,7 @@ fn options() -> TrackingOptions {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(100);
-    TrackingOptions {
-        segments: 8,
-        batch_size,
-        ..TrackingOptions::default()
-    }
+    TrackingOptions::default().segments(8).batch_size(batch_size)
 }
 
 /// Starts `processor` and waits until it owns all its segments.

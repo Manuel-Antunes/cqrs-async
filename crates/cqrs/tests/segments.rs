@@ -85,13 +85,11 @@ impl World {
     }
 
     fn options(segments: u32, max_segments: u32) -> TrackingOptions {
-        TrackingOptions {
-            segments,
-            max_segments,
-            claim_timeout: Duration::from_secs(5),
-            claim_interval: Duration::from_millis(500),
-            ..TrackingOptions::default()
-        }
+        TrackingOptions::default()
+            .segments(segments)
+            .max_segments(max_segments)
+            .claim_timeout(Duration::from_secs(5))
+            .claim_interval(Duration::from_millis(500))
     }
 }
 
@@ -466,11 +464,9 @@ async fn a_stuck_segment_is_detached_so_the_shared_reader_never_waits_for_it() {
     let stuck = ids_in(0, 4).next().unwrap();
     let healthy: Vec<u32> = (1..=3).flat_map(|segment| ids_in(segment, 4).take(5)).collect();
     let recorder = Arc::new(Recorder::poisoned(stream(stuck)));
-    let options = TrackingOptions {
-        segment_buffer: 2, // fills after two events of the stuck aggregate
-        segment_stall_timeout: Duration::from_secs(1),
-        ..World::options(4, u32::MAX)
-    };
+    let options = World::options(4, u32::MAX)
+        .segment_buffer(2) // fills after two events of the stuck aggregate
+        .segment_stall_timeout(Duration::from_secs(1));
     let processor = world
         .events
         .processor("detach", Arc::clone(&recorder))

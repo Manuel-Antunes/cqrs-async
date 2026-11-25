@@ -12,6 +12,7 @@ use super::LiveEvents;
 
 /// How a [`subscribe`] stream reads.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct SubscriptionOptions {
     /// Events per page when reading the store.
     pub batch_size: usize,
@@ -19,6 +20,23 @@ pub struct SubscriptionOptions {
     /// Bounds how late an event whose broadcast was lost (a save cancelled
     /// after its append) is delivered.
     pub poll_interval: Duration,
+}
+
+/// Built from [`Default`], one setter per field: `SubscriptionOptions::default().batch_size(..)`.
+impl SubscriptionOptions {
+    /// Sets [`batch_size`](Self::batch_size): events per page when reading the store.
+    #[must_use]
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Sets [`poll_interval`](Self::poll_interval): how long to wait for a live event before checking the store anyway.
+    #[must_use]
+    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
 }
 
 impl Default for SubscriptionOptions {

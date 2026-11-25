@@ -97,6 +97,12 @@ pub struct Events<E, S, C = InMemoryTokenStore, M = ()> {
     options: SubscriptionOptions,
 }
 
+impl<E, S, C, M> ::std::fmt::Debug for Events<E, S, C, M> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("Events").finish_non_exhaustive()
+    }
+}
+
 impl<E, S> Events<E, S> {
     /// Events over `store`, with in-memory tokens and a live buffer of 1024
     /// events per subscriber.

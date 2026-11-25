@@ -14,6 +14,7 @@ use crate::{
     Aggregate, AppendCondition, CommandContext, EventCriteria, EventEnvelope, ExpectedVersion, LoadStream,
     SnapshotStore, SourceEvents, StoreError, StreamId,
 };
+#[derive(Debug)]
 
 /// An aggregate together with the version it was loaded at.
 ///
@@ -212,6 +213,12 @@ pub struct AggregateLoader<A, S, N = ()> {
     snapshot_every: u64,
     /// Ties the loader to one aggregate type without storing one.
     aggregate: PhantomData<fn() -> A>,
+}
+
+impl<A, S, N> ::std::fmt::Debug for AggregateLoader<A, S, N> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("AggregateLoader").finish_non_exhaustive()
+    }
 }
 
 impl<A, S> AggregateLoader<A, S> {

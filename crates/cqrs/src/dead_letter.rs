@@ -120,6 +120,12 @@ pub struct InMemoryDeadLetters<E> {
     letters: Arc<Mutex<Queues<E>>>,
 }
 
+impl<E> ::std::fmt::Debug for InMemoryDeadLetters<E> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InMemoryDeadLetters").finish_non_exhaustive()
+    }
+}
+
 impl<E> Default for InMemoryDeadLetters<E> {
     fn default() -> Self {
         Self {

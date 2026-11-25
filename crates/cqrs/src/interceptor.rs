@@ -130,10 +130,24 @@ pub trait EventInterceptor<E: DomainEvent, Tx = ()>: Send + Sync {
 /// The rest of the chain an [`EventInterceptor`] runs around (Axon's
 /// interceptor chain): the next interceptors, then the handler. Consumed by
 /// [`proceed`](Self::proceed), so the handler runs at most once.
-pub trait EventChain<Tx>: Send {
+///
+/// Sealed: the chains are this crate's; an interceptor only calls
+/// [`proceed`](Self::proceed).
+pub trait EventChain<Tx>: sealed::Chain + Send {
     /// Runs the rest of the chain in `context`.
     fn proceed(self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send;
 }
+
+/// The seal of [`EventChain`]: only the chains below implement it.
+mod sealed {
+    /// Implemented by this crate's chains only.
+    pub trait Chain {}
+}
+
+impl<H, E> sealed::Chain for Handle<'_, '_, H, E> {}
+impl<H, E> sealed::Chain for HandleIn<'_, '_, H, E> {}
+impl<I, E, N> sealed::Chain for Then<'_, '_, I, E, N> {}
+impl<P: Projection> sealed::Chain for RouteIn<'_, '_, P> {}
 
 /// The end of the chain: the handler's [`handle`](EventHandler::handle).
 struct Handle<'h, 'e, H, E> {
@@ -218,6 +232,12 @@ pub struct Intercepted<G, I> {
     inner: G,
     /// What they go through.
     interceptor: I,
+}
+
+impl<G, I> ::std::fmt::Debug for Intercepted<G, I> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("Intercepted").finish_non_exhaustive()
+    }
 }
 
 impl<G, I> Intercepted<G, I> {

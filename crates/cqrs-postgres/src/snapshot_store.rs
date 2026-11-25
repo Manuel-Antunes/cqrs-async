@@ -8,7 +8,7 @@ use cqrs::{
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::PgPool;
 
-use crate::backend;
+use crate::{backend, unsigned};
 
 /// Snapshots of aggregates `A` in PostgreSQL, as JSON (`serde`): the newest
 /// one per aggregate, in `cqrs_snapshots`.
@@ -25,6 +25,12 @@ pub struct PostgresSnapshotStore<A> {
     revision: i32,
     /// The aggregate type.
     aggregate: PhantomData<fn() -> A>,
+}
+
+impl<A> ::std::fmt::Debug for PostgresSnapshotStore<A> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PostgresSnapshotStore").finish_non_exhaustive()
+    }
 }
 
 impl<A> PostgresSnapshotStore<A> {
@@ -72,8 +78,13 @@ where
         .fetch_optional(&self.pool)
         .await
         .map_err(backend)?;
-        row.map(|row| Ok((serde_json::from_value(row.state).map_err(backend)?, row.version as u64)))
-            .transpose()
+        row.map(|row| {
+            Ok((
+                serde_json::from_value(row.state).map_err(backend)?,
+                unsigned(row.version)?,
+            ))
+        })
+        .transpose()
     }
 
     async fn save(&self, aggregate: &A, version: u64) -> Result<(), StoreError> {

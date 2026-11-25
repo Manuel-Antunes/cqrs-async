@@ -4,7 +4,7 @@ use cqrs::{
 };
 use sqlx::PgPool;
 
-use crate::backend;
+use crate::{backend, to_i32, unsigned};
 
 /// Tracking processors' tokens in PostgreSQL: one row per (processor,
 /// segment), shared by every instance using the database.
@@ -16,6 +16,12 @@ use crate::backend;
 pub struct PostgresTokenStore {
     /// The connection pool.
     pool: PgPool,
+}
+
+impl ::std::fmt::Debug for PostgresTokenStore {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PostgresTokenStore").finish_non_exhaustive()
+    }
 }
 
 impl PostgresTokenStore {
@@ -40,7 +46,7 @@ fn move_token<'q>(
         "UPDATE cqrs_tokens SET position = $4, gaps = $5, gap_horizons = $6 \
          WHERE processor = $1 AND segment = $2 AND owner = $3",
         processor,
-        segment as i32,
+        to_i32(segment),
         owner,
         i64::try_from(position).unwrap_or(i64::MAX),
         gaps,
@@ -53,17 +59,28 @@ fn columns(cursor: &Cursor) -> (Vec<i64>, Vec<i64>) {
     cursor
         .gaps()
         .iter()
-        .map(|gap| (gap.position as i64, gap.horizon as i64))
+        .map(|gap| (to_i64(gap.position), to_i64(gap.horizon)))
         .unzip()
 }
 
 /// A cursor from its columns.
-fn cursor(position: i64, gaps: &[i64], horizons: &[i64]) -> Cursor {
-    let gaps = gaps.iter().zip(horizons).map(|(&position, &horizon)| Gap {
-        position: position as u64,
-        horizon: horizon as u64,
-    });
-    Cursor::new(position as u64, gaps)
+fn cursor(position: i64, gaps: &[i64], horizons: &[i64]) -> Result<Cursor, StoreError> {
+    let gaps = gaps
+        .iter()
+        .zip(horizons)
+        .map(|(&position, &horizon)| {
+            Ok(Gap {
+                position: unsigned(position)?,
+                horizon: unsigned(horizon)?,
+            })
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
+    Ok(Cursor::new(unsigned(position)?, gaps))
+}
+
+/// A position as its `bigint` column stores it.
+fn to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 /// Tokens move in the transaction the event was handled in, so a read model
@@ -90,14 +107,14 @@ impl TokenStore for PostgresTokenStore {
             sqlx::query!(
                 "INSERT INTO cqrs_tokens (processor, segment) SELECT $1, generate_series(0, $2 - 1)",
                 processor,
-                count as i32,
+                to_i32(count),
             )
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
             count
         } else {
-            existing as u32
+            u32::try_from(existing).map_err(backend)?
         };
         tx.commit().await.map_err(backend)?;
         Ok(count)
@@ -119,14 +136,16 @@ impl TokenStore for PostgresTokenStore {
                AND (owner IS NULL OR owner = $3 OR claimed_until < now()) \
              RETURNING position, gaps, gap_horizons",
             processor,
-            segment as i32,
+            to_i32(segment),
             owner,
             lease_ms,
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(backend)?;
-        Ok(token.map(|token| cursor(token.position, &token.gaps, &token.gap_horizons)))
+        token
+            .map(|token| cursor(token.position, &token.gaps, &token.gap_horizons))
+            .transpose()
     }
 
     async fn store(&self, tx: &mut PgTransaction, token: TrackingToken<'_>) -> Result<bool, StoreError> {
@@ -150,7 +169,7 @@ impl TokenStore for PostgresTokenStore {
             "UPDATE cqrs_tokens SET owner = NULL, claimed_until = NULL \
              WHERE processor = $1 AND segment = $2 AND owner = $3",
             processor,
-            segment as i32,
+            to_i32(segment),
             owner,
         )
         .execute(&self.pool)
@@ -167,10 +186,10 @@ impl TokenStore for PostgresTokenStore {
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
-        Ok(tokens
+        tokens
             .iter()
             .map(|token| cursor(token.position, &token.gaps, &token.gap_horizons))
-            .collect())
+            .collect()
     }
 
     async fn reset(&self, processor: &str, _now: u64, replay_until: u64) -> Result<bool, StoreError> {
@@ -208,7 +227,7 @@ impl TokenStore for PostgresTokenStore {
         .fetch_one(&self.pool)
         .await
         .map_err(backend)?;
-        Ok(until as u64)
+        unsigned(until)
     }
 }
 
@@ -228,6 +247,12 @@ pub type PgTransaction = sqlx::Transaction<'static, sqlx::Postgres>;
 pub struct PostgresTransactions {
     /// Where transactions are opened.
     pool: PgPool,
+}
+
+impl ::std::fmt::Debug for PostgresTransactions {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PostgresTransactions").finish_non_exhaustive()
+    }
 }
 
 impl PostgresTransactions {

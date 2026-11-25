@@ -53,6 +53,12 @@ pub struct QueryUpdateChannel<Q, U = OutputOf<Q>> {
     subscribers: Mutex<Vec<(Q, mpsc::Sender<U>)>>,
 }
 
+impl<Q, U> ::std::fmt::Debug for QueryUpdateChannel<Q, U> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("QueryUpdateChannel").finish_non_exhaustive()
+    }
+}
+
 impl<Q, U> Default for QueryUpdateChannel<Q, U> {
     fn default() -> Self {
         Self {
@@ -157,6 +163,12 @@ pub struct Projected<F, P, E> {
     event: PhantomData<fn() -> E>,
 }
 
+impl<F, P, E> ::std::fmt::Debug for Projected<F, P, E> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("Projected").finish_non_exhaustive()
+    }
+}
+
 impl<F: Clone, P: Clone, E> Clone for Projected<F, P, E> {
     fn clone(&self) -> Self {
         Self {
@@ -200,6 +212,12 @@ pub struct SubscriptionQueries<G, U, C = ()> {
     updates: Arc<U>,
     /// What the initial query waits for.
     catch_up: C,
+}
+
+impl<G, U, C> ::std::fmt::Debug for SubscriptionQueries<G, U, C> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("SubscriptionQueries").finish_non_exhaustive()
+    }
 }
 
 impl<G, U> SubscriptionQueries<G, U> {

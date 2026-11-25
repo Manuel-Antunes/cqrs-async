@@ -428,10 +428,7 @@ async fn segments(report: &mut Report, scale: &Scale) {
     seed_posts(&live.store, events, 1).await; // one event per aggregate: spread evenly
     let last = live.last_position().await;
     for segments in [1_u32, 4, 14] {
-        let options = cqrs::processing::TrackingOptions {
-            segments,
-            ..cqrs::processing::TrackingOptions::default()
-        };
+        let options = cqrs::processing::TrackingOptions::default().segments(segments);
         let started = Instant::now();
         let handle = live
             .events()

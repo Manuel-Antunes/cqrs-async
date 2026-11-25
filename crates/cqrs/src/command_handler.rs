@@ -413,6 +413,12 @@ impl UnitMode for Autocommit {
 /// writes and the events commit together.
 pub struct InTransaction<Tx>(PhantomData<fn() -> Tx>);
 
+impl<Tx> ::std::fmt::Debug for InTransaction<Tx> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InTransaction").finish_non_exhaustive()
+    }
+}
+
 impl<Tx: Send> UnitMode for InTransaction<Tx> {
     type Tx = Tx;
     const AUTOCOMMIT: bool = false;
