@@ -737,13 +737,16 @@ pub fn cqrs::processing::ProjectionHandle::read_models(&self) -> alloc::vec::Vec
 pub async fn cqrs::processing::ProjectionHandle::stop(self)
 impl core::fmt::Debug for cqrs::processing::ProjectionHandle
 pub fn cqrs::processing::ProjectionHandle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct cqrs::processing::ProjectionProcessors<E, S, P, C, M>
-impl<E, S, P, C, M> cqrs::processing::ProjectionProcessors<E, S, P, C, M> where E: cqrs::event::DomainEvent, S: cqrs::store::ReadLog<E> + core::clone::Clone + 'static, P: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = E> + 'static, C: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static, M: cqrs::processing::TransactionManager + core::clone::Clone + 'static, (): cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx>
-pub async fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::reset(&self) -> core::result::Result<(), cqrs::processing::ResetError>
-pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::spawn(self) -> cqrs::processing::ProjectionHandle
-pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::with_options(self, cqrs::processing::TrackingOptions) -> Self
-impl<E, S, P, C, M> core::fmt::Debug for cqrs::processing::ProjectionProcessors<E, S, P, C, M>
-pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>
+impl<E, S, P, C, M, D> cqrs::processing::ProjectionProcessors<E, S, P, C, M, D> where E: cqrs::event::DomainEvent, S: cqrs::store::ReadLog<E> + core::clone::Clone + 'static, P: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = E> + 'static, C: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static, M: cqrs::processing::TransactionManager + core::clone::Clone + 'static, D: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx> + 'static
+pub async fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::reset(&self) -> core::result::Result<(), cqrs::processing::ResetError>
+pub async fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::retry_dead_letters(&self) -> core::result::Result<alloc::vec::Vec<(&'static str, cqrs::processing::RetryOutcome)>, cqrs::store::StoreError>
+pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::spawn(self) -> cqrs::processing::ProjectionHandle
+pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::with_options(self, cqrs::processing::TrackingOptions) -> Self
+impl<E, S, P, C, M> cqrs::processing::ProjectionProcessors<E, S, P, C, M> where E: cqrs::event::DomainEvent, S: cqrs::store::ReadLog<E> + core::clone::Clone + 'static, P: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = E> + 'static, C: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static, M: cqrs::processing::TransactionManager + core::clone::Clone + 'static
+pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M>::with_dead_letters<D>(self, D, u32) -> cqrs::processing::ProjectionProcessors<E, S, P, C, M, D> where D: cqrs::processing::DeadLetterQueue<E, <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static
+impl<E, S, P, C, M, D> core::fmt::Debug for cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>
+pub fn cqrs::processing::ProjectionProcessors<E, S, P, C, M, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs::processing::RetryOutcome
 pub cqrs::processing::RetryOutcome::handled: usize
 pub cqrs::processing::RetryOutcome::still_parked: usize
@@ -1350,6 +1353,7 @@ impl<P, C, Q, Ev, S, T, M, U> cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Event
 pub fn cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, alloc::rcs::arc::Arc<U>>::build(self) -> cqrs::Cqrs<C, cqrs::query::SubscriptionQueries<Q, U, cqrs::query::Projected<cqrs::processing::Events<Ev, S, T, M>, alloc::vec::Vec<cqrs::processing::ProcessorProgress>, Ev>>, cqrs::processing::Events<Ev, S, T, M>>
 impl<P, C, Q, Ev, S, T, M> cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, ()> where Ev: cqrs::event::DomainEvent + core::clone::Clone, S: cqrs::store::ReadLog<Ev> + core::clone::Clone + 'static, T: cqrs::processing::TokenStore<Tx = <M as cqrs::processing::TransactionManager>::Tx> + core::clone::Clone + 'static, M: cqrs::processing::TransactionManager + core::clone::Clone + 'static
 pub fn cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, ()>::projection<H>(self, H) -> cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, alloc::rcs::arc::Arc<<H as crate::HasUpdates>::Updates>> where H: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = Ev> + 'static
+pub fn cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, ()>::projection_with<H, D>(self, H, impl core::ops::function::FnOnce(cqrs::processing::ProjectionProcessors<Ev, S, alloc::rcs::arc::Arc<H>, T, M>) -> cqrs::processing::ProjectionProcessors<Ev, S, alloc::rcs::arc::Arc<H>, T, M, D>) -> cqrs::CqrsBuilder<P, C, Q, cqrs::processing::Events<Ev, S, T, M>, alloc::rcs::arc::Arc<<H as crate::HasUpdates>::Updates>> where H: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = Ev> + 'static, D: cqrs::processing::DeadLetterQueue<Ev, <M as cqrs::processing::TransactionManager>::Tx> + 'static
 impl<P, C, Q, U> cqrs::CqrsBuilder<P, C, Q, (), U>
 pub fn cqrs::CqrsBuilder<P, C, Q, (), U>::events<E>(self, E) -> cqrs::CqrsBuilder<P, C, Q, E, U>
 impl<P, Q, E, U> cqrs::CqrsBuilder<P, (), Q, E, U>

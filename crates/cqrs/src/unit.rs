@@ -413,10 +413,10 @@ where
     M: TransactionManager + Clone + 'static,
 {
     /// Settings (segments, claims, batch size, retries...) for the processors
-    /// started after this call. A projection's namespaces retry a failing
-    /// event with backoff and park none: `dead_letter_after` needs a queue,
-    /// which only a processor built with
-    /// [`Events::processor`](crate::processing::Events::processor) takes.
+    /// started after this call. Parking failing events needs a queue as well
+    /// as `dead_letter_after`: give it to a projection with
+    /// [`projection_with`](Self::projection_with)
+    /// (`|processors| processors.with_dead_letters(queue, 5)`).
     pub fn options(mut self, options: TrackingOptions) -> Self {
         self.processing.options = options;
         self
@@ -454,6 +454,29 @@ where
     where
         H: Route<M::Tx, Event = Ev> + 'static,
     {
+        self.projection_with(projection, |processors| processors)
+    }
+
+    /// [`projection`](Self::projection), its namespaces' processors set up
+    /// by `configure` before they start: dead letters
+    /// (`|processors| processors.with_dead_letters(queue, 5)`), or options
+    /// for this projection only.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime.
+    #[allow(clippy::type_complexity)]
+    pub fn projection_with<H, D>(
+        self,
+        projection: H,
+        configure: impl FnOnce(
+            crate::processing::ProjectionProcessors<Ev, S, Arc<H>, T, M>,
+        ) -> crate::processing::ProjectionProcessors<Ev, S, Arc<H>, T, M, D>,
+    ) -> CqrsBuilder<P, C, Q, Events<Ev, S, T, M>, Arc<<H as crate::HasUpdates>::Updates>>
+    where
+        H: Route<M::Tx, Event = Ev> + 'static,
+        D: crate::processing::DeadLetterQueue<Ev, M::Tx> + 'static,
+    {
         let CqrsBuilder {
             publisher,
             commands,
@@ -464,10 +487,12 @@ where
         } = self;
         let projection = Arc::new(projection);
         let updates = Arc::new(<H as crate::HasUpdates>::Updates::default());
-        let running = events
-            .projection(Arc::clone(&projection))
-            .with_options(processing.options)
-            .spawn();
+        let running = configure(
+            events
+                .projection(Arc::clone(&projection))
+                .with_options(processing.options),
+        )
+        .spawn();
         for (index, namespace) in H::NAMESPACES.iter().enumerate() {
             if !H::emits(index) {
                 continue;

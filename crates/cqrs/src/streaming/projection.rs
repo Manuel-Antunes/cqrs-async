@@ -9,12 +9,12 @@ use crate::{DeadLetterQueue, DomainEvent, ReadLog, Route, TokenStore, Transactio
 /// The processors of a projection's namespaces, to configure and
 /// [`spawn`](Self::spawn): [`Events::projection`](super::Events::projection).
 #[must_use = "a projection does nothing until it is spawned"]
-pub struct ProjectionProcessors<E, S, P, C, M> {
+pub struct ProjectionProcessors<E, S, P, C, M, D = ()> {
     /// One per namespace, in the projection's order.
-    processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M>>,
+    processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M, D>>,
 }
 
-impl<E, S, P, C, M> ::std::fmt::Debug for ProjectionProcessors<E, S, P, C, M> {
+impl<E, S, P, C, M, D> ::std::fmt::Debug for ProjectionProcessors<E, S, P, C, M, D> {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.debug_struct("ProjectionProcessors").finish_non_exhaustive()
     }
@@ -27,7 +27,6 @@ where
     P: Route<M::Tx, Event = E> + 'static,
     C: TokenStore<Tx = M::Tx> + Clone + 'static,
     M: TransactionManager + Clone + 'static,
-    (): DeadLetterQueue<E, M::Tx>,
 {
     /// The processors of `projection`'s namespaces over `processor` (what
     /// builds one, given its name and handler).
@@ -48,8 +47,37 @@ where
         Self::with_batches(processors)
     }
 
+    /// Parks a namespace's events in `queue` after `after` failed attempts
+    /// (with the later events of their aggregate, in that namespace),
+    /// instead of retrying them forever: a side effect whose target keeps
+    /// refusing one event no longer holds back the rest. Each namespace
+    /// parks under its own processor's name (`"post.notifications"`), so
+    /// one queue serves them all; it joins the namespaces' units of work.
+    pub fn with_dead_letters<D>(self, queue: D, after: u32) -> ProjectionProcessors<E, S, P, C, M, D>
+    where
+        D: DeadLetterQueue<E, M::Tx> + Clone + 'static,
+    {
+        ProjectionProcessors {
+            processors: self
+                .processors
+                .into_iter()
+                .map(|processor| processor.with_dead_letters(queue.clone(), after))
+                .collect(),
+        }
+    }
+}
+
+impl<E, S, P, C, M, D> ProjectionProcessors<E, S, P, C, M, D>
+where
+    E: DomainEvent,
+    S: ReadLog<E> + Clone + 'static,
+    P: Route<M::Tx, Event = E> + 'static,
+    C: TokenStore<Tx = M::Tx> + Clone + 'static,
+    M: TransactionManager + Clone + 'static,
+    D: DeadLetterQueue<E, M::Tx> + 'static,
+{
     /// `processors` with the batch each namespace asks for, if it does.
-    fn with_batches(processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M>>) -> Self {
+    fn with_batches(processors: Vec<TrackingProcessor<E, S, NamespaceOf<P>, C, M, D>>) -> Self {
         let processors = processors
             .into_iter()
             .enumerate()
@@ -92,6 +120,24 @@ where
             processor.reset().await?;
         }
         Ok(())
+    }
+
+    /// Retries the events each namespace parked
+    /// ([`with_dead_letters`](ProjectionProcessors::with_dead_letters)),
+    /// namespace by namespace: see
+    /// [`TrackingProcessor::retry_dead_letters`]. Run it once the cause is
+    /// fixed, from processors built like the running ones, not spawned.
+    ///
+    /// # Errors
+    ///
+    /// The first namespace whose queue or unit of work failed (the ones
+    /// before it are retried): call it again.
+    pub async fn retry_dead_letters(&self) -> Result<Vec<(&'static str, crate::RetryOutcome)>, crate::StoreError> {
+        let mut outcomes = Vec::new();
+        for (namespace, processor) in self.processors.iter().enumerate() {
+            outcomes.push((P::NAMESPACES[namespace], processor.retry_dead_letters().await?));
+        }
+        Ok(outcomes)
     }
 
     /// Starts every namespace's processor on Tokio tasks.
