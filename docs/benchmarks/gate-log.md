@@ -233,3 +233,28 @@ two sets of rounds. Every gate measure passes, mixed p99 (0.67 <= 0.76)
 included, for the first time on this machine. Conflicts per 1000 mixed
 commands are unchanged (23.3 / 23.6): they come from the transfer policy
 running asynchronously against the clients' accounts, not from the store.
+
+## 2026-11-24, before the first release (`c315a04` against `c02e963`)
+
+What changed since the last gate: the public modules, the envelope without
+per-event copies, the checklist of public types, the wake-up between
+instances in the readers' loop (`committed_elsewhere`), dead letters for a
+projection's namespaces, the packaging. Both release binaries alternately,
+three rounds of one run each, each round started below load 5.
+
+| Measure | before r1 | r2 | r3 | **before** | release r1 | r2 | r3 | **release** | ratio before -> release | gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| open account, cmd/s | 4095 | 4313 | 4446 | **4313** | 4078 | 3989 | 4406 | **4078** | 1.19 -> 1.14 | >= 1.10 pass |
+| mixed load, cmd/s | 4150 | 4363 | 4188 | **4188** | 4111 | 4032 | 4300 | **4111** | 1.38 -> 1.35 | >= 1.25 pass |
+| mixed load, p99 ms | 14.2 | 13.5 | 14.3 | **14.2** | 15.3 | 15.6 | 13.9 | **15.3** | 0.65 -> 0.70 | <= 0.76 pass |
+| mixed load, all done ms | 4900 | 4698 | 4876 | **4876** | 4924 | 5022 | 4769 | **4924** | 0.74 -> 0.76 | <= 0.77 pass |
+| hot account, cmd/s | 164 | 169 | 177 | **169** | 179 | 176 | 170 | **176** | 1.46 -> 1.44 | >= 1.00 pass |
+| read model rebuild, events/s | 34940 | 41116 | 49769 | **41116** | 36600 | 52171 | 50592 | **50592** | 21.1 -> 25.5 | >= 16 pass |
+| 5000-event replay, p50 ms | 2.59 | 2.54 | 2.61 | **2.59** | 2.46 | 2.48 | 2.40 | **2.46** | 0.53 -> 0.49 | <= 0.95 pass |
+| snapshot every 100, p50 ms | 1.18 | 1.04 | 1.20 | **1.18** | 1.08 | 1.29 | 1.03 | **1.08** | 0.62 -> 0.50 | <= 0.61 pass |
+| events or money lost | 0 | 0 | 0 | **0** | 0 | 0 | 0 | **0** | | pass |
+
+Every gate measure passes. The two versions are equal within the spread
+of their own rounds: open account and mixed throughput are a few percent
+lower in the medians but inside the other version's range; the rebuild and
+the hot account's p99 are better. No regression from what came in since.
