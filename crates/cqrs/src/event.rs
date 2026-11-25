@@ -230,6 +230,36 @@ pub struct EventEnvelope<E> {
     pub payload: E,
 }
 
+impl<E> EventEnvelope<E> {
+    /// The id of the aggregate `A` the event belongs to, parsed from its
+    /// stream: `None` if the stream is not one of `A`'s, or its id does not
+    /// parse. What a projection keys its rows by.
+    ///
+    /// ```
+    /// # use cqrs::{aggregate::Aggregate, event::{EventEnvelope, Metadata, StreamId}};
+    /// # #[derive(Clone, Debug, cqrs::DomainEvent)] enum Ticked { Once }
+    /// #[cqrs::aggregate(name = "clock", event = Ticked)]
+    /// struct Clock { id: u32 }
+    /// # impl Clock { fn apply(&mut self, _: &Ticked) {} }
+    /// # let event = EventEnvelope {
+    /// #     position: 1, stream: StreamId::of::<Clock>(&7), sequence: 1, event_type: "Once".into(),
+    /// #     event_version: 1, recorded_at: std::time::SystemTime::UNIX_EPOCH, metadata: Metadata::new(),
+    /// #     payload: Ticked::Once,
+    /// # };
+    /// assert_eq!(event.aggregate_id::<Clock>(), Some(7));
+    /// ```
+    pub fn aggregate_id<A>(&self) -> Option<A::Id>
+    where
+        A: Aggregate,
+        A::Id: std::str::FromStr,
+    {
+        if self.stream.aggregate_type() != A::TYPE {
+            return None;
+        }
+        self.stream.id().parse().ok()
+    }
+}
+
 #[cfg(test)]
 mod metadata_tests {
     use super::Metadata;

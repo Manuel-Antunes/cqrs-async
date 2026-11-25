@@ -9,7 +9,7 @@ use cqrs::{
 use super::PostProjection;
 use crate::{
     application::queries::{FindPost, ListPublished, PostSummary, PostSummaryRepository, PostSummaryStore},
-    domain::{PostEvent, PostId},
+    domain::{Post, PostEvent, PostId},
 };
 
 /// Keeps the [`PostSummaryRepository`] read model in step with the posts'
@@ -91,11 +91,9 @@ where
     }
 }
 
-/// The post a stream belongs to (its id is the stream's).
+/// The post an event belongs to.
 fn post_of(event: &EventEnvelope<PostEvent>) -> Result<PostId, HandlerError> {
     event
-        .stream
-        .id()
-        .parse()
-        .map_err(|_| HandlerError::msg(format!("not a post stream: {}", event.stream)))
+        .aggregate_id::<Post>()
+        .ok_or_else(|| HandlerError::msg(format!("not a post stream: {}", event.stream)))
 }
