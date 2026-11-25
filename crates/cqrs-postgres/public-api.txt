@@ -1,0 +1,91 @@
+pub mod cqrs_postgres
+pub use cqrs_postgres::StoredEvent
+pub use cqrs_postgres::Upcast
+pub use cqrs_postgres::Upcaster
+pub use cqrs_postgres::sqlx
+pub use cqrs_postgres::upcast
+pub struct cqrs_postgres::Postgres
+impl cqrs_postgres::Postgres
+pub fn cqrs_postgres::Postgres::events<E>(&self, &str) -> cqrs_postgres::PgEvents<E>
+pub async fn cqrs_postgres::Postgres::migrate(&self) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub fn cqrs_postgres::Postgres::new(sqlx_postgres::PgPool) -> Self
+pub fn cqrs_postgres::Postgres::pool(&self) -> &sqlx_postgres::PgPool
+pub fn cqrs_postgres::Postgres::store<E>(&self, &str) -> cqrs_postgres::PostgresEventStore<E>
+pub fn cqrs_postgres::Postgres::tokens(&self) -> &cqrs_postgres::PostgresTokenStore
+pub fn cqrs_postgres::Postgres::transactions(&self) -> &cqrs_postgres::PostgresTransactions
+impl core::fmt::Debug for cqrs_postgres::Postgres
+pub fn cqrs_postgres::Postgres::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs_postgres::PostgresDeadLetters<E, U>
+impl<E, U> cqrs_postgres::PostgresDeadLetters<E, U>
+pub fn cqrs_postgres::PostgresDeadLetters<E, U>::new(cqrs_postgres::PostgresEventStore<E, U>) -> Self
+impl<E, U> core::clone::Clone for cqrs_postgres::PostgresDeadLetters<E, U>
+pub fn cqrs_postgres::PostgresDeadLetters<E, U>::clone(&self) -> Self
+impl<E, U> core::fmt::Debug for cqrs_postgres::PostgresDeadLetters<E, U>
+pub fn cqrs_postgres::PostgresDeadLetters<E, U>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<E, U> cqrs::dead_letter::DeadLetterQueue<E, sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>> for cqrs_postgres::PostgresDeadLetters<E, U> where E: serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::contains(&self, &str, &str) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::enqueue_in(&self, &mut cqrs_postgres::PgTransaction, &str, cqrs::dead_letter::DeadLetter<E>) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::first(&self, &str, &str) -> core::result::Result<core::option::Option<cqrs::dead_letter::DeadLetter<E>>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::remove_in(&self, &mut cqrs_postgres::PgTransaction, &str, &cqrs::dead_letter::DeadLetter<E>) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::event_store::StoreError>
+pub struct cqrs_postgres::PostgresEventStore<E, U>
+impl<E, U> cqrs_postgres::PostgresEventStore<E, U>
+pub fn cqrs_postgres::PostgresEventStore<E, U>::with_upcasters<U2: cqrs::upcast::Upcaster>(self, U2) -> cqrs_postgres::PostgresEventStore<E, U2>
+impl<E> cqrs_postgres::PostgresEventStore<E>
+pub fn cqrs_postgres::PostgresEventStore<E>::new(sqlx_postgres::PgPool, &str) -> Self
+impl<'c, E, U> cqrs::event_store::AppendEvents<E, sqlx_core::transaction::Transaction<'c, sqlx_postgres::database::Postgres>> for cqrs_postgres::PostgresEventStore<E, U> where E: cqrs::event_envelope::DomainEvent + serde_core::ser::Serialize, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::append_tagged(&self, &mut sqlx_core::transaction::Transaction<'c, sqlx_postgres::database::Postgres>, &cqrs::event_envelope::StreamId, cqrs::event_store::ExpectedVersion, &[cqrs::event_store::TaggedEvent<E>], &cqrs::event_envelope::Metadata, core::option::Option<&cqrs::criteria::AppendCondition>) -> core::result::Result<alloc::vec::Vec<cqrs::event_store::Recorded>, cqrs::event_store::StoreError>
+impl<E, U> core::clone::Clone for cqrs_postgres::PostgresEventStore<E, U>
+pub fn cqrs_postgres::PostgresEventStore<E, U>::clone(&self) -> Self
+impl<E, U> core::fmt::Debug for cqrs_postgres::PostgresEventStore<E, U>
+pub fn cqrs_postgres::PostgresEventStore<E, U>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<E, U> cqrs::event_store::AppendEvents<E> for cqrs_postgres::PostgresEventStore<E, U> where E: cqrs::event_envelope::DomainEvent + serde_core::ser::Serialize, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::append_tagged(&self, &mut (), &cqrs::event_envelope::StreamId, cqrs::event_store::ExpectedVersion, &[cqrs::event_store::TaggedEvent<E>], &cqrs::event_envelope::Metadata, core::option::Option<&cqrs::criteria::AppendCondition>) -> core::result::Result<alloc::vec::Vec<cqrs::event_store::Recorded>, cqrs::event_store::StoreError>
+impl<E, U> cqrs::event_store::LoadStream<E> for cqrs_postgres::PostgresEventStore<E, U> where E: serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::load(&self, &cqrs::event_envelope::StreamId, u64) -> core::result::Result<alloc::vec::Vec<cqrs::event_envelope::EventEnvelope<E>>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::replay<F>(&self, &cqrs::event_envelope::StreamId, u64, F) -> core::result::Result<u64, cqrs::event_store::StoreError> where E: core::marker::Send, F: core::ops::function::FnMut(u64, E) + core::marker::Send
+impl<E, U> cqrs::event_store::ReadLog<E> for cqrs_postgres::PostgresEventStore<E, U> where E: serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::cursor_at(&self, u64) -> core::result::Result<cqrs::cursor::Cursor, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::last_position(&self) -> core::result::Result<u64, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::read(&self, &cqrs::cursor::Cursor, usize) -> core::result::Result<cqrs::event_store::LogPage<E>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::read_all(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<cqrs::event_envelope::EventEnvelope<E>>, cqrs::event_store::StoreError>
+impl<E, U> cqrs::event_store::SourceEvents<E> for cqrs_postgres::PostgresEventStore<E, U> where E: serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync, U: cqrs::upcast::Upcaster
+pub async fn cqrs_postgres::PostgresEventStore<E, U>::source(&self, &cqrs::criteria::EventCriteria) -> core::result::Result<(alloc::vec::Vec<cqrs::event_envelope::EventEnvelope<E>>, u64), cqrs::event_store::StoreError>
+pub struct cqrs_postgres::PostgresSnapshotStore<A>
+impl<A> cqrs_postgres::PostgresSnapshotStore<A>
+pub fn cqrs_postgres::PostgresSnapshotStore<A>::new(sqlx_postgres::PgPool) -> Self
+pub fn cqrs_postgres::PostgresSnapshotStore<A>::with_revision(self, u32) -> Self
+impl<A> core::clone::Clone for cqrs_postgres::PostgresSnapshotStore<A>
+pub fn cqrs_postgres::PostgresSnapshotStore<A>::clone(&self) -> Self
+impl<A> core::fmt::Debug for cqrs_postgres::PostgresSnapshotStore<A>
+pub fn cqrs_postgres::PostgresSnapshotStore<A>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<A> cqrs::snapshot::SnapshotStore<A> for cqrs_postgres::PostgresSnapshotStore<A> where A: cqrs::aggregate_root::Aggregate + serde_core::ser::Serialize + serde_core::de::DeserializeOwned
+pub async fn cqrs_postgres::PostgresSnapshotStore<A>::load(&self, &<A as cqrs::aggregate_root::Aggregate>::Id) -> core::result::Result<core::option::Option<(A, u64)>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresSnapshotStore<A>::save(&self, &A, u64) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub struct cqrs_postgres::PostgresTokenStore
+impl cqrs_postgres::PostgresTokenStore
+pub fn cqrs_postgres::PostgresTokenStore::new(sqlx_postgres::PgPool) -> Self
+impl core::fmt::Debug for cqrs_postgres::PostgresTokenStore
+pub fn cqrs_postgres::PostgresTokenStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl cqrs::token::TokenStore for cqrs_postgres::PostgresTokenStore
+pub type cqrs_postgres::PostgresTokenStore::Tx = sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>
+pub async fn cqrs_postgres::PostgresTokenStore::claim(&self, &str, u32, &str, u64, u64) -> core::result::Result<core::option::Option<cqrs::cursor::Cursor>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::cursors(&self, &str) -> core::result::Result<alloc::vec::Vec<cqrs::cursor::Cursor>, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::initialize(&self, &str, u32) -> core::result::Result<u32, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::release(&self, &str, u32, &str) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::replay_until(&self, &str) -> core::result::Result<u64, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::reset(&self, &str, u64, u64) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTokenStore::store(&self, &mut cqrs_postgres::PgTransaction, cqrs::token::TrackingToken<'_>) -> core::result::Result<bool, cqrs::event_store::StoreError>
+pub struct cqrs_postgres::PostgresTransactions
+impl cqrs_postgres::PostgresTransactions
+pub fn cqrs_postgres::PostgresTransactions::new(sqlx_postgres::PgPool) -> Self
+impl core::fmt::Debug for cqrs_postgres::PostgresTransactions
+pub fn cqrs_postgres::PostgresTransactions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl cqrs::transaction::TransactionManager for cqrs_postgres::PostgresTransactions
+pub type cqrs_postgres::PostgresTransactions::Tx = sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>
+pub async fn cqrs_postgres::PostgresTransactions::begin(&self) -> core::result::Result<cqrs_postgres::PgTransaction, cqrs::event_store::StoreError>
+pub async fn cqrs_postgres::PostgresTransactions::commit(&self, cqrs_postgres::PgTransaction) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub const cqrs_postgres::MIGRATIONS: &[(&str, &str)]
+pub async fn cqrs_postgres::migrate(&sqlx_postgres::PgPool) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub type cqrs_postgres::PgEvents<E, U> = cqrs::streaming::Events<E, cqrs_postgres::PostgresEventStore<E, U>, cqrs_postgres::PostgresTokenStore, cqrs_postgres::PostgresTransactions>
+pub type cqrs_postgres::PgTransaction = sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>

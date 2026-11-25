@@ -1,0 +1,12 @@
+pub mod cqrs_sea_orm
+pub struct cqrs_sea_orm::SeaOrm<'a>
+impl<'a> cqrs_sea_orm::SeaOrm<'a>
+pub fn cqrs_sea_orm::SeaOrm<'a>::new(&'a mut cqrs_postgres::token_store::PgTransaction) -> Self
+impl<'a> core::fmt::Debug for cqrs_sea_orm::SeaOrm<'a>
+pub fn cqrs_sea_orm::SeaOrm<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> sea_orm::database::connection::ConnectionTrait for cqrs_sea_orm::SeaOrm<'a>
+pub fn cqrs_sea_orm::SeaOrm<'a>::execute_raw<'life0, 'async_trait>(&'life0 self, sea_orm::database::statement::Statement) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<sea_orm::executor::execute::ExecResult, sea_orm::error::DbErr>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn cqrs_sea_orm::SeaOrm<'a>::execute_unprepared<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<sea_orm::executor::execute::ExecResult, sea_orm::error::DbErr>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn cqrs_sea_orm::SeaOrm<'a>::get_database_backend(&self) -> sea_orm::database::db_connection::DbBackend
+pub fn cqrs_sea_orm::SeaOrm<'a>::query_all_raw<'life0, 'async_trait>(&'life0 self, sea_orm::database::statement::Statement) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<sea_orm::executor::query::QueryResult>, sea_orm::error::DbErr>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn cqrs_sea_orm::SeaOrm<'a>::query_one_raw<'life0, 'async_trait>(&'life0 self, sea_orm::database::statement::Statement) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<sea_orm::executor::query::QueryResult>, sea_orm::error::DbErr>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
