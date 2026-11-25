@@ -193,6 +193,7 @@ mod dead_letter;
 mod event_envelope;
 #[path = "store.rs"]
 mod event_store;
+mod fan_in;
 mod feed;
 mod forward;
 mod inline;
@@ -301,6 +302,7 @@ pub mod store {
         AppendEvents, EventStore, ExpectedVersion, InMemoryEventStore, LoadStream, LogPage, ReadLog, Recorded,
         SourceEvents, StoreError, TaggedEvent,
     };
+    pub use crate::fan_in::{FanIn, InMemoryLogs};
     pub use crate::feed::EventFeed;
     #[cfg(feature = "tokio")]
     pub use crate::streaming::{LiveEvents, SubscriptionOptions, subscribe};
@@ -328,7 +330,7 @@ pub mod processing {
     pub use crate::projection::{Projection, Route};
     #[cfg(feature = "tokio")]
     pub use crate::streaming::{
-        Events, GlobalProgress, ProcessorHandle, ProcessorProgress, ProcessorStatus, ProjectionHandle,
+        Events, FanInSources, GlobalProgress, ProcessorHandle, ProcessorProgress, ProcessorStatus, ProjectionHandle,
         ProjectionProcessors, ProjectionProgress, ResetError, TrackingOptions, TrackingProcessor,
     };
     pub use crate::subscribe::{Consume, Incoming, Subscribe};

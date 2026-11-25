@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT e.log AS \"log!\", e.position AS \"position!\", e.stream_type AS \"stream_type!\",\n                   e.stream_id AS \"stream_id!\", e.sequence AS \"sequence!\", e.event_type AS \"event_type!\",\n                   e.event_version AS \"event_version!\", e.payload AS \"payload!\", e.metadata AS \"metadata!\",\n                   e.recorded_us AS \"recorded_us!\"\n            FROM unnest($1::text[]) AS l(name)\n            CROSS JOIN LATERAL (\n                SELECT log, position, stream_type, stream_id, sequence, event_type, event_version,\n                       payload::text AS payload, metadata::text AS metadata,\n                       (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us\n                FROM cqrs_events WHERE log = l.name AND position > $2 ORDER BY position LIMIT $3\n            ) AS e\n            ORDER BY e.position LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "log!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "log"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "position!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "stream_type!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "stream_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "stream_id!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "stream_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "sequence!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "sequence"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "event_type!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "event_version!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "cqrs_events",
+            "name": "event_version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "payload!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "metadata!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "recorded_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "70617a233f178b6ba34a09bb3af07a2014d2ff57f7e057dea0306ff03511f0d0"
+}

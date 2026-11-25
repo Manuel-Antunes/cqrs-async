@@ -1,0 +1,5 @@
+error: each variant of a `fan_in` event wraps one event type: `Post(PostEvent)`
+  --> tests/ui/fan_in_variant_with_fields.rs:10:5
+   |
+10 |     Shown { at: u64 },
+   |     ^^^^^^^^^^^^^^^^^

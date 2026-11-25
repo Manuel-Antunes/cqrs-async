@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT coalesce(max(h.head), 0) AS \"head!\"\n            FROM unnest($1::text[]) AS l(name)\n            CROSS JOIN LATERAL (SELECT max(position) AS head FROM cqrs_events WHERE log = l.name) AS h",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "head!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3a7e05025e22c59cdb4538613fdf7cb7c001e40aca61deca7122a53daf9ecafe"
+}

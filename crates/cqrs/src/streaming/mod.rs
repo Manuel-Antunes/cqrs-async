@@ -22,7 +22,7 @@ mod projection;
 mod subscription;
 mod updates;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_core::Stream;
 use tokio::sync::{broadcast, watch};
@@ -37,8 +37,9 @@ pub use updates::{
 };
 
 use crate::{
-    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, HandlerError,
-    InMemoryTokenStore, ProcessingFailure, ReadLog, StoreError, TokenStore, TransactionManager,
+    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, FanIn, HandlerError,
+    InMemoryEventStore, InMemoryLogs, InMemoryTokenStore, ProcessingFailure, ReadLog, StoreError, TokenStore,
+    TransactionManager, sync::Locked,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -93,6 +94,9 @@ pub struct Events<E, S, C = InMemoryTokenStore, M = ()> {
     /// Bumped when another process committed to the log
     /// ([`committed_elsewhere`](Self::committed_elsewhere)).
     elsewhere: Arc<watch::Sender<u64>>,
+    /// The wake signals of the events reading this log among others
+    /// ([`follow`](Self::follow)): bumped at each commit.
+    followers: Arc<Mutex<Vec<Arc<watch::Sender<u64>>>>>,
     /// Where tracking processors keep their positions and claims.
     tokens: C,
     /// Opens and commits the processors' units of work.
@@ -115,6 +119,7 @@ impl<E, S> Events<E, S> {
             store,
             live: broadcast::channel(1024).0,
             elsewhere: Arc::new(watch::channel(0).0),
+            followers: Arc::default(),
             tokens: InMemoryTokenStore::default(),
             transactions: (),
             options: SubscriptionOptions::default(),
@@ -131,6 +136,7 @@ impl<E, S, C, M> Events<E, S, C, M> {
             store: self.store,
             live: self.live,
             elsewhere: self.elsewhere,
+            followers: self.followers,
             tokens,
             transactions: self.transactions,
             options: self.options,
@@ -145,6 +151,7 @@ impl<E, S, C, M> Events<E, S, C, M> {
             store: self.store,
             live: self.live,
             elsewhere: self.elsewhere,
+            followers: self.followers,
             tokens: self.tokens,
             transactions,
             options: self.options,
@@ -174,7 +181,24 @@ impl<E, S, C, M> Events<E, S, C, M> {
     /// only carries this process's commits; whatever relays the others'
     /// (`LISTEN`/`NOTIFY` in `cqrs-postgres`) calls this.
     pub fn committed_elsewhere(&self) {
-        self.elsewhere.send_modify(|count| *count = count.wrapping_add(1));
+        wake(&self.elsewhere);
+        self.wake_followers();
+    }
+
+    /// Wakes these events' subscriptions and processors whenever `source`
+    /// commits (or is told another process did): what the events of a
+    /// fan-in do with each log they read, whose commits their own live
+    /// feed does not carry. `Events::fan_in` and the adapters' fan-ins call
+    /// it; without it, the source's commits arrive at the next poll.
+    pub fn follow<E2, S2, C2, M2>(&self, source: &Events<E2, S2, C2, M2>) {
+        source.followers.locked().push(Arc::clone(&self.elsewhere));
+    }
+
+    /// Wakes the events following these ([`follow`](Self::follow)).
+    fn wake_followers(&self) {
+        for follower in self.followers.locked().iter() {
+            wake(follower);
+        }
     }
 
     /// The token store the processors share.
@@ -252,6 +276,7 @@ impl<E, S: Clone, C: Clone, M: Clone> Clone for Events<E, S, C, M> {
             store: self.store.clone(),
             live: self.live.clone(),
             elsewhere: Arc::clone(&self.elsewhere),
+            followers: Arc::clone(&self.followers),
             tokens: self.tokens.clone(),
             transactions: self.transactions.clone(),
             options: self.options,
@@ -271,6 +296,7 @@ where
         for event in events {
             let _ = self.live.send(Arc::new(event.clone())); // no receiver is fine
         }
+        self.wake_followers();
         Ok(())
     }
 }
@@ -362,8 +388,130 @@ impl<E, S, C, M> Events<E, S, C, M> {
         for event in events {
             let _ = self.live.send(Arc::new(event));
         }
+        self.wake_followers();
     }
 }
+
+/// Bumps a wake signal.
+fn wake(signal: &watch::Sender<u64>) {
+    signal.send_modify(|count| *count = count.wrapping_add(1));
+}
+
+impl<U, L> Events<U, FanIn<U, L>> {
+    /// The events of several in-memory logs read as one, in their global
+    /// order, as `U` (an enum with a variant per log's event type,
+    /// `#[event(fan_in)]`): what a projection over them runs on.
+    ///
+    /// `sources` is a tuple of the logs' events (2 to 8), whose stores share
+    /// their numbering ([`InMemoryEventStore::beside`]); their commits wake
+    /// these events' readers ([`follow`](Self::follow)). Nothing is appended
+    /// through these events: commands keep going to each log's own.
+    ///
+    /// ```
+    /// # use cqrs::{processing::Events, store::{FanIn, InMemoryEventStore}};
+    /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum PostEvent { Published }
+    /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] enum UserEvent { Renamed }
+    /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)] #[event(fan_in)]
+    /// # enum FeedEvent { Post(PostEvent), User(UserEvent) }
+    /// let posts = Events::new(InMemoryEventStore::<PostEvent>::new());
+    /// let users = Events::new(posts.store().beside::<UserEvent>());
+    /// let feed: Events<FeedEvent, _> = Events::fan_in((&posts, &users));
+    /// // feed.projection(FeedProjection { .. }).spawn();
+    /// # let _ = feed;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the stores do not share their numbering (see [`FanIn::new`]).
+    pub fn fan_in<T>(sources: T) -> Self
+    where
+        T: FanInSources<Logs = L>,
+        L: InMemoryLogs<U>,
+    {
+        let events = Self::new(FanIn::new(sources.logs()));
+        sources.followed_by(&events);
+        events
+    }
+}
+
+/// The events of the logs a fan-in reads: a tuple of 2 to 8 references to
+/// [`Events`] over [`InMemoryEventStore`]s, for [`Events::fan_in`].
+pub trait FanInSources: fan_in_sealed::Sealed {
+    /// The stores, as [`FanIn`] reads them.
+    type Logs;
+
+    /// A clone of each store.
+    #[doc(hidden)]
+    fn logs(&self) -> Self::Logs;
+
+    /// Has `events` follow each source.
+    #[doc(hidden)]
+    fn followed_by<U, S, C, M>(&self, events: &Events<U, S, C, M>);
+}
+
+/// The seal of [`FanInSources`].
+mod fan_in_sealed {
+    /// Implemented for tuples of references to `Events`.
+    pub trait Sealed {}
+}
+
+/// Implements [`FanInSources`] for a tuple of references to events over
+/// in-memory stores.
+macro_rules! fan_in_sources {
+    ($(($event:ident, $tokens:ident, $transactions:ident)),+) => {
+        impl<$($event, $tokens, $transactions),+> fan_in_sealed::Sealed
+            for ($(&Events<$event, InMemoryEventStore<$event>, $tokens, $transactions>,)+) {}
+
+        #[allow(non_snake_case)]
+        impl<$($event, $tokens, $transactions),+> FanInSources
+            for ($(&Events<$event, InMemoryEventStore<$event>, $tokens, $transactions>,)+)
+        {
+            type Logs = ($(InMemoryEventStore<$event>,)+);
+
+            fn logs(&self) -> Self::Logs {
+                let ($($event,)+) = self;
+                ($($event.store().clone(),)+)
+            }
+
+            fn followed_by<Union, Store, Tokens, Transactions>(&self, events: &Events<Union, Store, Tokens, Transactions>) {
+                let ($($event,)+) = self;
+                $(events.follow($event);)+
+            }
+        }
+    };
+}
+
+fan_in_sources!((A, CA, MA), (B, CB, MB));
+fan_in_sources!((A, CA, MA), (B, CB, MB), (C, CC, MC));
+fan_in_sources!((A, CA, MA), (B, CB, MB), (C, CC, MC), (D, CD, MD));
+fan_in_sources!((A, CA, MA), (B, CB, MB), (C, CC, MC), (D, CD, MD), (E, CE, ME));
+fan_in_sources!(
+    (A, CA, MA),
+    (B, CB, MB),
+    (C, CC, MC),
+    (D, CD, MD),
+    (E, CE, ME),
+    (F, CF, MF)
+);
+fan_in_sources!(
+    (A, CA, MA),
+    (B, CB, MB),
+    (C, CC, MC),
+    (D, CD, MD),
+    (E, CE, ME),
+    (F, CF, MF),
+    (G, CG, MG)
+);
+fan_in_sources!(
+    (A, CA, MA),
+    (B, CB, MB),
+    (C, CC, MC),
+    (D, CD, MD),
+    (E, CE, ME),
+    (F, CF, MF),
+    (G, CG, MG),
+    (H, CH, MH)
+);
 
 /// As the [`EventFeed`] port: catch-up subscriptions over the store, followed
 /// live.

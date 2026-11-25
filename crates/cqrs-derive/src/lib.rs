@@ -265,6 +265,12 @@ fn into_stream(result: Result<TokenStream2>) -> TokenStream {
 /// Give events explicit names when they are stored: the default follows the
 /// Rust name, so renaming a variant would otherwise break old events.
 ///
+/// `#[event(fan_in)]` on an enum whose every variant wraps one log's event
+/// type (`Post(PostEvent)`) makes it the event of a projection over those
+/// logs: its type, version and tags are the wrapped event's, and each
+/// wrapped type converts into it (`From`), which is how a fan-in reader
+/// builds it.
+///
 /// It implements the event's tags too (`TagResolver`, which every
 /// `DomainEvent` has), from the fields marked `#[tag]`:
 /// each becomes a tag keyed by the field name, valued by its `Display`;
@@ -283,6 +289,8 @@ struct EventAttrs {
     name: Option<LitStr>,
     /// `version = N`: the payload's schema version.
     version: Option<LitInt>,
+    /// `fan_in`: every variant wraps another event type, delegated to.
+    fan_in: Option<Ident>,
 }
 
 /// Parses the `#[event(...)]` attributes among `attrs`, rejecting unknown
@@ -295,8 +303,10 @@ fn event_attrs(attrs: &[syn::Attribute]) -> Result<EventAttrs> {
                 parsed.name = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("version") {
                 parsed.version = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("fan_in") {
+                parsed.fan_in = meta.path.get_ident().cloned();
             } else {
-                return Err(meta.error("expected `name = \"...\"` or `version = N`"));
+                return Err(meta.error("expected `name = \"...\"`, `version = N` or `fan_in`"));
             }
             Ok(())
         })?;
@@ -310,6 +320,9 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
     let krate = krate();
     let name = &input.ident;
     let container = event_attrs(&input.attrs)?;
+    if container.fan_in.is_some() {
+        return fan_in_event(&krate, &input, &container);
+    }
     if let Some(name) = &container.name
         && matches!(input.data, Data::Enum(_))
     {
@@ -378,6 +391,100 @@ fn domain_event(input: DeriveInput) -> Result<TokenStream2> {
         }
 
         #tags
+    })
+}
+
+/// Expansion of `#[derive(DomainEvent)]` with `#[event(fan_in)]`: every
+/// variant wraps one event type, which the type, version and tags are
+/// delegated to, and which converts into the enum.
+fn fan_in_event(krate: &TokenStream2, input: &DeriveInput, container: &EventAttrs) -> Result<TokenStream2> {
+    let name = &input.ident;
+    let Data::Enum(data) = &input.data else {
+        return Err(Error::new_spanned(
+            &container.fan_in,
+            "`fan_in` goes on an enum, with a variant per event type",
+        ));
+    };
+    if let Some(attribute) = container
+        .name
+        .as_ref()
+        .map(ToTokens::to_token_stream)
+        .or_else(|| container.version.as_ref().map(ToTokens::to_token_stream))
+    {
+        return Err(Error::new_spanned(
+            attribute,
+            "a `fan_in` event takes its name and version from the events it wraps",
+        ));
+    }
+    let mut variants = Vec::new();
+    for variant in &data.variants {
+        let ident = &variant.ident;
+        let inner = match &variant.fields {
+            syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => &fields.unnamed[0].ty,
+            _ => {
+                return Err(Error::new_spanned(
+                    variant,
+                    "each variant of a `fan_in` event wraps one event type: `Post(PostEvent)`",
+                ));
+            }
+        };
+        if let Some(attr) = variant
+            .attrs
+            .iter()
+            .chain(variant.fields.iter().flat_map(|field| &field.attrs))
+            .find(|attr| attr.path().is_ident("event") || attr.path().is_ident("tag"))
+        {
+            return Err(Error::new_spanned(
+                attr,
+                "the variants of a `fan_in` event take their name, version and tags from the event they wrap",
+            ));
+        }
+        variants.push((ident, inner));
+    }
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let delegate = |call: TokenStream2| {
+        let arms = variants
+            .iter()
+            .map(|(ident, _)| quote!(Self::#ident(event) => #call(event)));
+        if variants.is_empty() {
+            quote!(match *self {})
+        } else {
+            quote!(match self { #(#arms,)* })
+        }
+    };
+    let event_type = delegate(quote!(#krate::DomainEvent::event_type));
+    let event_version = delegate(quote!(#krate::DomainEvent::event_version));
+    let tags = delegate(quote!(#krate::TagResolver::tags));
+    let conversions = variants.iter().map(|(ident, inner)| {
+        quote! {
+            #[automatically_derived]
+            impl #impl_generics ::std::convert::From<#inner> for #name #ty_generics #where_clause {
+                fn from(event: #inner) -> Self {
+                    Self::#ident(event)
+                }
+            }
+        }
+    });
+    Ok(quote! {
+        #[automatically_derived]
+        impl #impl_generics #krate::DomainEvent for #name #ty_generics #where_clause {
+            fn event_type(&self) -> &'static str {
+                #event_type
+            }
+
+            fn event_version(&self) -> u32 {
+                #event_version
+            }
+        }
+
+        #[automatically_derived]
+        impl #impl_generics #krate::TagResolver for #name #ty_generics #where_clause {
+            fn tags(&self) -> ::std::vec::Vec<#krate::Tag> {
+                #tags
+            }
+        }
+
+        #(#conversions)*
     })
 }
 

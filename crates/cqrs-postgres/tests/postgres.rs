@@ -2218,3 +2218,114 @@ async fn scheduled_commands_are_sent_once_by_competing_deliverers() {
     );
     assert!(rings.claim_due(Duration::from_secs(1), 100).await.unwrap().is_empty());
 }
+
+/// What a fan-in over the clocks' and the bells' logs reads.
+#[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+#[event(fan_in)]
+enum AlarmEvent {
+    Clock(ClockEvent),
+    Bell(BellEvent),
+}
+
+/// Two logs read as one, in the global order; a third log of the same
+/// database, in between, is neither read nor taken for a gap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fanned_in_logs_are_read_as_one_in_global_order() {
+    let pool = database_or_skip!();
+    let pg = cqrs_postgres::Postgres::new(pool);
+    let clocks = pg.store::<ClockEvent>("clocks");
+    let bells = pg.store::<BellEvent>("bells");
+    let others = pg.store::<ClockEvent>("others");
+    let none = Metadata::new();
+    let ring = |times| vec![BellEvent::Rung { times }];
+    clocks
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
+        .await
+        .unwrap();
+    others
+        .append(&mut (), &stream(1), ExpectedVersion::NoStream, ticks(1, 1), &none)
+        .await
+        .unwrap();
+    let bell = StreamId::new("bell", "1");
+    bells
+        .append(&mut (), &bell, ExpectedVersion::NoStream, ring(3), &none)
+        .await
+        .unwrap();
+    clocks
+        .append(&mut (), &stream(1), ExpectedVersion::Exact(1), ticks(2, 1), &none)
+        .await
+        .unwrap();
+
+    let alarms = cqrs_postgres::PostgresFanIn::<AlarmEvent, _>::new((clocks.clone(), bells.clone()));
+    let read = alarms.read_all(0, 10).await.unwrap();
+    let positions = |events: &[EventEnvelope<AlarmEvent>]| events.iter().map(|e| e.position).collect::<Vec<_>>();
+    assert_eq!(positions(&read), [1, 3, 4]);
+    assert_eq!(
+        read.iter().map(|e| e.payload.clone()).collect::<Vec<_>>(),
+        [
+            AlarmEvent::Clock(ClockEvent::Ticked { n: 1 }),
+            AlarmEvent::Bell(BellEvent::Rung { times: 3 }),
+            AlarmEvent::Clock(ClockEvent::Ticked { n: 2 }),
+        ]
+    );
+    assert_eq!(read[1].stream, bell);
+    assert_eq!(positions(&alarms.read_all(1, 1).await.unwrap()), [3]);
+    assert_eq!(positions(&alarms.read_all(3, 5).await.unwrap()), [4]);
+    assert_eq!(alarms.last_position().await.unwrap(), 4);
+
+    // Read through a cursor: position 2 is the other log's, not a gap.
+    let page = alarms.read(&Cursor::at(0), 10).await.unwrap();
+    assert_eq!(positions(&page.events), [1, 3, 4]);
+    assert_eq!(page.missing, Some(Vec::new()));
+}
+
+/// Records what a fan-in processor handled.
+#[derive(Default)]
+struct AlarmRecorder(Mutex<Vec<AlarmEvent>>);
+
+impl<Tx: Send> EventHandler<AlarmEvent, Tx> for AlarmRecorder {
+    async fn handle(
+        &self,
+        event: &EventEnvelope<AlarmEvent>,
+        _: &mut ProcessingContext<'_, Tx>,
+    ) -> Result<(), HandlerError> {
+        self.0.lock().unwrap().push(event.payload.clone());
+        Ok(())
+    }
+}
+
+/// A processor over a fan-in, with its token in the database, is woken by
+/// either log's commits and handles them in commit order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_processor_over_a_fan_in_follows_both_logs_in_commit_order() {
+    let pool = database_or_skip!();
+    let pg = cqrs_postgres::Postgres::new(pool);
+    let slow = SubscriptionOptions::default().poll_interval(Duration::from_secs(30));
+    let clocks = pg.events::<ClockEvent>("clocks");
+    let bells = pg.events::<BellEvent>("bells");
+    let alarms: cqrs_postgres::PgFanIn<AlarmEvent, _> = pg.fan_in((&clocks, &bells)).with_options(slow);
+    let heard = Arc::new(AlarmRecorder::default());
+    let running = alarms.processor("alarms", Arc::clone(&heard)).spawn();
+
+    let started = std::time::Instant::now();
+    commit_new::<Clock, _>(&clocks, 1, ticks(1, 1)).await;
+    commit_new::<Bell, _>(&bells, 1, vec![BellEvent::Rung { times: 2 }]).await;
+    let last = commit_new::<Clock, _>(&clocks, 2, ticks(5, 1)).await;
+    tokio::time::timeout(Duration::from_secs(5), running.caught_up(last))
+        .await
+        .expect("woken by the logs' commits");
+    assert!(started.elapsed() < Duration::from_secs(2), "long before the 30 s poll");
+    assert_eq!(
+        *heard.0.lock().unwrap(),
+        [
+            AlarmEvent::Clock(ClockEvent::Ticked { n: 1 }),
+            AlarmEvent::Bell(BellEvent::Rung { times: 2 }),
+            AlarmEvent::Clock(ClockEvent::Ticked { n: 5 }),
+        ]
+    );
+
+    // The token is the fan-in's own: a restart goes on from it.
+    running.stop().await;
+    let cursors = pg.tokens().cursors("alarms").await.unwrap();
+    assert!(cursors.iter().all(|cursor| cursor.position() >= last), "{cursors:?}");
+}

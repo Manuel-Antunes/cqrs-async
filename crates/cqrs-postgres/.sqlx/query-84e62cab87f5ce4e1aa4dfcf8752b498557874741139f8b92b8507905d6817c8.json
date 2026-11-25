@@ -1,0 +1,110 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH snapshot AS (\n                SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS xmin,\n                       pg_snapshot_xmax(pg_current_snapshot())::text::bigint AS xmax\n            ),\n            page AS (\n                (SELECT log, position, stream_type, stream_id, sequence, event_type, event_version, payload, metadata,\n                        (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us\n                 FROM cqrs_events WHERE log = ANY($4) AND position = ANY($2))\n                UNION ALL\n                (SELECT e.log, e.position, e.stream_type, e.stream_id, e.sequence, e.event_type, e.event_version,\n                        e.payload, e.metadata, e.recorded_us\n                 FROM unnest($4::text[]) AS l(name)\n                 CROSS JOIN LATERAL (\n                     SELECT log, position, stream_type, stream_id, sequence, event_type, event_version, payload,\n                            metadata, (extract(epoch FROM recorded_at) * 1000000)::bigint AS recorded_us\n                     FROM cqrs_events WHERE log = l.name AND position > $1 ORDER BY position LIMIT $3\n                 ) AS e)\n                ORDER BY position LIMIT $3\n            ),\n            missing AS (\n                SELECT array(\n                    SELECT p FROM (\n                        SELECT generate_series($1::bigint + 1, (SELECT coalesce(max(position), $1) FROM page)) AS p\n                        EXCEPT\n                        SELECT position FROM page\n                    ) AS absent\n                    WHERE NOT EXISTS (SELECT 1 FROM cqrs_events WHERE position = p)\n                    ORDER BY p\n                ) AS positions\n            )\n            SELECT s.xmin AS \"xmin!\", s.xmax AS \"xmax!\", m.positions AS \"missing!\",\n                   e.log AS \"log?\", e.position AS \"position?\", e.stream_type AS \"stream_type?\",\n                   e.stream_id AS \"stream_id?\", e.sequence AS \"sequence?\", e.event_type AS \"event_type?\",\n                   e.event_version AS \"event_version?\", e.payload::text AS \"payload?\", e.metadata::text AS \"metadata?\",\n                   e.recorded_us AS \"recorded_us?\"\n            FROM snapshot s CROSS JOIN missing m LEFT JOIN page e ON true",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xmin!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "xmax!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "missing!",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "log?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "position?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "stream_type?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "stream_id?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "sequence?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "event_type?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "event_version?",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "payload?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "metadata?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "recorded_us?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "84e62cab87f5ce4e1aa4dfcf8752b498557874741139f8b92b8507905d6817c8"
+}

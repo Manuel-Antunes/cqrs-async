@@ -85,6 +85,7 @@
 
 mod dead_letters;
 mod event_store;
+mod fan_in;
 #[cfg(feature = "tokio")]
 mod notify;
 mod schedule;
@@ -93,6 +94,9 @@ mod token_store;
 
 pub use dead_letters::PostgresDeadLetters;
 pub use event_store::PostgresEventStore;
+#[cfg(feature = "tokio")]
+pub use fan_in::PgFanInSources;
+pub use fan_in::{PostgresFanIn, PostgresLogs};
 #[cfg(feature = "tokio")]
 pub use notify::{CHANNEL, Listening};
 pub use schedule::PostgresSchedule;
@@ -114,6 +118,11 @@ use sqlx::PgPool;
 #[cfg(feature = "tokio")]
 pub type PgEvents<E, U = ()> =
     cqrs::processing::Events<E, PostgresEventStore<E, U>, PostgresTokenStore, PostgresTransactions>;
+
+/// The events of several logs read as one, over PostgreSQL
+/// ([`Postgres::fan_in`]): what a projection over them runs on.
+#[cfg(feature = "tokio")]
+pub type PgFanIn<E, L> = cqrs::processing::Events<E, PostgresFanIn<E, L>, PostgresTokenStore, PostgresTransactions>;
 
 /// The infrastructure every aggregate root of an application shares on one
 /// database, defined once: the pool, the token store and the transactions.
@@ -177,6 +186,37 @@ impl Postgres {
         cqrs::processing::Events::new(self.store(log))
             .with_tokens(self.tokens.clone())
             .with_transactions(self.transactions.clone())
+    }
+
+    /// The events of several logs read as one, in their global order, as
+    /// `E` (an enum with a variant per log's event type,
+    /// `#[derive(DomainEvent)] #[event(fan_in)]`): what a projection over
+    /// them runs on (`.projection(p)`), with this database's tokens and
+    /// transactions.
+    ///
+    /// `sources` is a tuple of the logs' events (2 to 8): each is decoded
+    /// by its own store, upcasters included, and their commits wake these
+    /// events' readers, as do the notifications [`listen`](Self::listen)
+    /// relays to them. Nothing is appended through these events: commands
+    /// keep going to each log's own.
+    ///
+    /// ```text
+    /// let posts = pg.events::<PostEvent>("posts");
+    /// let users = pg.events::<UserEvent>("users");
+    /// let feed: PgFanIn<FeedEvent, _> = pg.fan_in((&posts, &users));
+    /// let running = feed.projection(FeedProjection { .. }).spawn();
+    /// ```
+    #[cfg(feature = "tokio")]
+    pub fn fan_in<E, T, L>(&self, sources: T) -> PgFanIn<E, L>
+    where
+        T: PgFanInSources<Logs = L>,
+        L: PostgresLogs<E>,
+    {
+        let events = cqrs::processing::Events::new(PostgresFanIn::new(sources.logs()))
+            .with_tokens(self.tokens.clone())
+            .with_transactions(self.transactions.clone());
+        sources.followed_by(&events);
+        events
     }
 
     /// Runs the [`MIGRATIONS`] (see [`migrate`]).

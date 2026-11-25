@@ -90,18 +90,25 @@ impl<E, U> Clone for PostgresEventStore<E, U> {
 }
 
 /// A row as every read selects it.
-struct EventRow {
-    position: i64,
-    stream_type: String,
-    stream_id: String,
-    sequence: i64,
-    event_type: String,
-    event_version: i32,
+pub(crate) struct EventRow {
+    pub(crate) position: i64,
+    pub(crate) stream_type: String,
+    pub(crate) stream_id: String,
+    pub(crate) sequence: i64,
+    pub(crate) event_type: String,
+    pub(crate) event_version: i32,
     /// As stored (`json`): decoded straight into the event type.
-    payload: String,
+    pub(crate) payload: String,
     /// As stored (`json`).
-    metadata: String,
-    recorded_us: i64,
+    pub(crate) metadata: String,
+    pub(crate) recorded_us: i64,
+}
+
+impl<E: DeserializeOwned, U: Upcaster> PostgresEventStore<E, U> {
+    /// `row` as an event of this log, upcast by its upcasters.
+    pub(crate) fn decode_row(&self, row: EventRow) -> Result<EventEnvelope<E>, StoreError> {
+        envelope(row, &*self.upcaster)
+    }
 }
 
 /// `sqlx::query_as!` reading [`EventRow`]s from `cqrs_events` filtered by
@@ -439,36 +446,44 @@ where
     /// the last `CURSOR_WINDOW` positions) as gaps, unless every transaction that
     /// could still commit them already finished.
     async fn cursor_at(&self, position: u64) -> Result<Cursor, StoreError> {
-        let row = sqlx::query!(
-            r#"
+        cursor_at(&self.pool, position).await
+    }
+}
+
+/// A cursor that saw everything committed up to `position` in any log
+/// ([`ReadLog::cursor_at`]): the positions below it within the last
+/// `CURSOR_WINDOW` that nothing was committed at yet are gaps, unless
+/// every transaction that could still commit them already finished.
+pub(crate) async fn cursor_at(pool: &PgPool, position: u64) -> Result<Cursor, StoreError> {
+    let row = sqlx::query!(
+        r#"
             SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS "xmin!",
                    pg_snapshot_xmax(pg_current_snapshot())::text::bigint AS "xmax!",
                    array(SELECT p FROM generate_series(greatest($1::bigint - $2::bigint, 0) + 1, $1::bigint) AS p
                          WHERE NOT EXISTS (SELECT 1 FROM cqrs_events WHERE position = p)) AS "missing!""#,
-            to_i64(position),
-            CURSOR_WINDOW,
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(backend)?;
-        let horizon = Horizon {
-            finished_below: unsigned(row.xmin)?,
-            started_below: unsigned(row.xmax)?,
-        };
-        let gaps = row
-            .missing
-            .into_iter()
-            .map(|missing| {
-                Ok(Gap {
-                    position: unsigned(missing)?,
-                    horizon: horizon.started_below,
-                })
+        to_i64(position),
+        CURSOR_WINDOW,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(backend)?;
+    let horizon = Horizon {
+        finished_below: unsigned(row.xmin)?,
+        started_below: unsigned(row.xmax)?,
+    };
+    let gaps = row
+        .missing
+        .into_iter()
+        .map(|missing| {
+            Ok(Gap {
+                position: unsigned(missing)?,
+                horizon: horizon.started_below,
             })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        let mut cursor = Cursor::new(position, gaps);
-        cursor.settle(&horizon, |_| false);
-        Ok(cursor)
-    }
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
+    let mut cursor = Cursor::new(position, gaps);
+    cursor.settle(&horizon, |_| false);
+    Ok(cursor)
 }
 
 /// A conditional append on `conn` (in a transaction): the criteria's keys
@@ -840,7 +855,7 @@ fn recorded(rows: Result<Vec<Appended>, StoreError>) -> Result<Vec<Recorded>, St
 }
 
 /// Positions and sequences are stored as `bigint`.
-fn to_i64(value: u64) -> i64 {
+pub(crate) fn to_i64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 

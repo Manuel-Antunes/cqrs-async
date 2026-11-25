@@ -8,7 +8,10 @@ use std::{
     collections::HashMap,
     fmt,
     future::{Future, ready},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::SystemTime,
 };
 
@@ -340,10 +343,18 @@ impl<E: DomainEvent, S> EventStore<E> for S where S: LoadStream<E> + AppendEvent
 ///
 /// A handle: cloning it shares the same events, so the publisher, the
 /// repositories and the processors each hold a clone.
+///
+/// Each store numbers its events from 1. Stores of other event types made
+/// [`beside`](Self::beside) it share its numbering instead, as the logs of
+/// one database do: their events are in one global order, which a
+/// [`FanIn`](crate::store::FanIn) reads.
 pub struct InMemoryEventStore<E> {
     /// Everything behind one lock, so an append checks the version and writes
     /// atomically.
     inner: Arc<Mutex<Inner<E>>>,
+    /// The last position taken, shared by the stores made beside this one.
+    /// Taken under `inner`'s lock, with the events stored in the same hold.
+    positions: Arc<AtomicU64>,
 }
 
 impl<E> ::std::fmt::Debug for InMemoryEventStore<E> {
@@ -356,14 +367,16 @@ impl<E> Clone for InMemoryEventStore<E> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            positions: Arc::clone(&self.positions),
         }
     }
 }
 
 /// The store's contents.
 struct Inner<E> {
-    /// Every committed event in position order: the event at position `p` is
-    /// `log[p - 1]`, so reading the global log is a slice.
+    /// Every committed event in position order (`log[p - 1]` is at position
+    /// `p` unless stores beside this one take positions too): reading the
+    /// log is a slice found by binary search.
     log: Vec<EventEnvelope<E>>,
     /// Each stream's events, as indices into `log`, in sequence order.
     streams: HashMap<StreamId, Vec<usize>>,
@@ -375,6 +388,16 @@ struct Inner<E> {
 }
 
 impl<E> Inner<E> {
+    /// The index of the first event after `position`.
+    fn after(&self, position: u64) -> usize {
+        self.log.partition_point(|event| event.position <= position)
+    }
+
+    /// The position of the last event (0 when empty).
+    fn last_position(&self) -> u64 {
+        self.log.last().map_or(0, |event| event.position)
+    }
+
     /// Indices of the events matching `criteria`, in position order, from
     /// index `from` on. A criterion with tags walks the shortest of its
     /// tags' lists instead of the whole log.
@@ -408,6 +431,24 @@ impl<E> Inner<E> {
 impl<E> InMemoryEventStore<E> {
     /// An empty store.
     pub fn new() -> Self {
+        Self::numbered_by(Arc::default())
+    }
+
+    /// An empty store of events of type `E2` whose positions are taken from
+    /// this store's numbering: the two logs (and any other made beside
+    /// either) are in one global order, as in one database, which a
+    /// [`FanIn`](crate::store::FanIn) over them reads.
+    pub fn beside<E2>(&self) -> InMemoryEventStore<E2> {
+        InMemoryEventStore::numbered_by(Arc::clone(&self.positions))
+    }
+
+    /// Whether this store and `other` share their numbering.
+    pub(crate) fn numbered_like<E2>(&self, other: &InMemoryEventStore<E2>) -> bool {
+        Arc::ptr_eq(&self.positions, &other.positions)
+    }
+
+    /// An empty store taking its positions from `positions`.
+    fn numbered_by(positions: Arc<AtomicU64>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 log: Vec::new(),
@@ -415,6 +456,7 @@ impl<E> InMemoryEventStore<E> {
                 tags: Vec::new(),
                 tagged: HashMap::new(),
             })),
+            positions,
         }
     }
 
@@ -489,7 +531,7 @@ impl<E: Clone + Send + Sync> SourceEvents<E> for InMemoryEventStore<E> {
             .into_iter()
             .map(|index| inner.log[index].clone())
             .collect();
-        ready(Ok((matching, inner.log.len() as u64)))
+        ready(Ok((matching, inner.last_position())))
     }
 }
 
@@ -499,14 +541,26 @@ impl<E: Clone + Send + Sync> ReadLog<E> for InMemoryEventStore<E> {
         after: u64,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<E>>, StoreError>> + Send {
-        let inner = self.lock();
-        let start = usize::try_from(after).map_or(inner.log.len(), |after| after.min(inner.log.len()));
-        let end = start.saturating_add(limit).min(inner.log.len());
-        ready(Ok(inner.log[start..end].to_vec()))
+        ready(Ok(self.read_after(after, u64::MAX, limit)))
     }
 
     fn last_position(&self) -> impl Future<Output = Result<u64, StoreError>> + Send {
-        ready(Ok(self.lock().log.len() as u64))
+        ready(Ok(self.lock().last_position()))
+    }
+}
+
+impl<E: Clone> InMemoryEventStore<E> {
+    /// Up to `limit` events with `after < position <= up_to`, in order.
+    pub(crate) fn read_after(&self, after: u64, up_to: u64, limit: usize) -> Vec<EventEnvelope<E>> {
+        let inner = self.lock();
+        let start = inner.after(after);
+        let end = inner.after(up_to).min(start.saturating_add(limit));
+        inner.log[start..end].to_vec()
+    }
+
+    /// The position of the last event (0 when empty).
+    pub(crate) fn last(&self) -> u64 {
+        self.lock().last_position()
     }
 }
 
@@ -523,7 +577,7 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
     ) -> Result<Vec<Recorded>, StoreError> {
         let mut inner = self.lock();
         if let Some(condition) = condition {
-            let after = usize::try_from(condition.after).unwrap_or(usize::MAX);
+            let after = inner.after(condition.after);
             if !inner.matching(&condition.criteria, after).is_empty() {
                 return Err(StoreError::ConditionFailed);
             }
@@ -551,7 +605,12 @@ impl<E: DomainEvent + Clone> InMemoryEventStore<E> {
         }
 
         let recorded_at = SystemTime::now();
-        let first = (actual.unwrap_or(0) + 1, log.len() as u64 + 1);
+        // Taken while holding the lock, and stored before releasing it: a
+        // reader that saw a later position (under another store's lock)
+        // sees this one's event once it locks this store. The lock orders
+        // the rest; the counter only has to hand out each position once.
+        let taken = self.positions.fetch_add(events.len() as u64, Ordering::Relaxed);
+        let first = (actual.unwrap_or(0) + 1, taken + 1);
         let numbered = (first.0..).zip(first.1..).zip(events);
         let mut recorded = Vec::with_capacity(events.len());
         for (
