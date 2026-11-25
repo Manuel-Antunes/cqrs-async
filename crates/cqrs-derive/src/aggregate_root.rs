@@ -1,4 +1,4 @@
-//! `#[derive(AggregateRoot)]`: an `Aggregate` impl from the struct, its
+//! `#[cqrs::aggregate(..)]`: an `Aggregate` impl from the struct, its
 //! `#[aggregate(...)]` attribute and an inherent `apply` method.
 
 use proc_macro2::TokenStream as TokenStream2;
@@ -22,7 +22,7 @@ struct Attributes {
     initial: Option<Path>,
 }
 
-/// Expansion of `#[derive(AggregateRoot)]`.
+/// Expansion of `#[cqrs::aggregate(..)]`.
 pub fn aggregate_root(input: DeriveInput) -> Result<TokenStream2> {
     let mut attributes = Attributes::default();
     for attr in input.attrs.iter().filter(|attr| attr.path().is_ident("aggregate")) {

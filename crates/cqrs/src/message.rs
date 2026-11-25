@@ -12,7 +12,7 @@ use crate::{DomainEvent, EventEnvelope, Metadata};
 /// message, not to the handler: whoever sends a message knows exactly what
 /// comes back without knowing who handles it.
 ///
-/// Implemented by `#[derive(Command)]` / `#[derive(Query)]`, together with
+/// Implemented by `#[cqrs::command(..)]` / `#[cqrs::query(..)]`, together with
 /// the [`Command`] or [`Query`] marker.
 pub trait Message: Send + 'static {
     /// What a successful handling returns (`()` for most commands).
@@ -24,7 +24,7 @@ pub trait Message: Send + 'static {
 /// An intent to change state; sent with [`CommandGateway::send`].
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a command",
-    note = "derive it with `#[derive(Command)]`; queries are sent with `.query(...)`"
+    note = "declare it with `#[cqrs::command(error = ..)]`; queries are sent with `.query(...)`"
 )]
 pub trait Command: Message {}
 
@@ -32,7 +32,7 @@ pub trait Command: Message {}
 /// [`QueryGateway::query`].
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a query",
-    note = "derive it with `#[derive(Query)]`; commands are sent with `.send(...)`"
+    note = "declare it with `#[cqrs::query(error = ..)]`; commands are sent with `.send(...)`"
 )]
 pub trait Query: Message {}
 

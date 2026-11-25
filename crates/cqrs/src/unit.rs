@@ -412,8 +412,11 @@ where
     T: TokenStore<Tx = M::Tx> + Clone + 'static,
     M: TransactionManager + Clone + 'static,
 {
-    /// Settings (segments, batch size, dead letters...) for the processors
-    /// started after this call.
+    /// Settings (segments, claims, batch size, retries...) for the processors
+    /// started after this call. A projection's namespaces retry a failing
+    /// event with backoff and park none: `dead_letter_after` needs a queue,
+    /// which only a processor built with
+    /// [`Events::processor`](crate::processing::Events::processor) takes.
     pub fn options(mut self, options: TrackingOptions) -> Self {
         self.processing.options = options;
         self

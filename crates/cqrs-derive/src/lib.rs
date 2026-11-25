@@ -193,11 +193,6 @@ pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
     ))
 }
 
-#[proc_macro_derive(AggregateRoot, attributes(aggregate))]
-pub fn derive_aggregate_root(input: TokenStream) -> TokenStream {
-    into_stream(aggregate_root::aggregate_root(parse_macro_input!(input)))
-}
-
 /// On `impl CommandHandler<C> for H`: adds `type Event` and `type Unit`,
 /// read from `handle(&self, command: &C, events: &mut CommandContext<Event>[, tx:
 /// &mut Tx])`, and `C` if the trait leaves it out. Types written by hand are
@@ -483,14 +478,20 @@ fn tagged_fields(krate: &TokenStream2, fields: &syn::Fields) -> Result<Option<(T
 }
 
 // ---------------------------------------------------------------------------
-// #[aggregate(...)] / #[command(...)] / #[query(...)]: the derives, as one
-// attribute
+// #[aggregate(...)] / #[command(...)] / #[query(...)]
 // ---------------------------------------------------------------------------
 
-/// Declares an aggregate root in one attribute:
-/// `#[cqrs::aggregate(event = PostEvent)]` is `#[derive(AggregateRoot)]`
-/// with `#[aggregate(event = PostEvent)]` (same arguments, and
-/// `#[aggregate(id)]` on a field still marks the id).
+/// Declares an aggregate root: `#[cqrs::aggregate(name = "post", event =
+/// PostEvent)]` implements `Aggregate` from the struct and its inherent
+/// `fn apply(&mut self, event: &PostEvent)`. The id is the field `id`, or
+/// the one marked `#[aggregate(id)]`; `tag = "post"` sources it by tag
+/// instead of by stream (DCB). Put it before `#[derive]`.
+///
+/// ```ignore
+/// #[cqrs::aggregate(name = "post", event = PostEvent)]
+/// #[derive(Debug)]
+/// pub struct Post { id: PostId, title: String, published: bool }
+/// ```
 #[proc_macro_attribute]
 pub fn aggregate(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(attribute_form(
@@ -501,8 +502,16 @@ pub fn aggregate(arguments: TokenStream, item: TokenStream) -> TokenStream {
     ))
 }
 
-/// Declares a command in one attribute: `#[cqrs::command(output = T, error =
-/// E)]` is `#[derive(Command)]` with `#[command(...)]`.
+/// Declares a struct as a command: an intent to change state, sent with
+/// `CommandGateway::send`. `output = T` is what handling it returns
+/// (default `()`), `error = E` what it fails with (required). Implements
+/// `Message` and the `Command` marker. Put it before `#[derive]`.
+///
+/// ```ignore
+/// #[cqrs::command(output = PostId, error = BlogError)]
+/// #[derive(Debug, serde::Deserialize)]
+/// pub struct CreatePost { pub title: String }
+/// ```
 #[proc_macro_attribute]
 pub fn command(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(attribute_form(arguments.into(), item.into(), "command", |input| {
@@ -510,8 +519,17 @@ pub fn command(arguments: TokenStream, item: TokenStream) -> TokenStream {
     }))
 }
 
-/// Declares a query in one attribute: `#[cqrs::query(output = T, error =
-/// E)]` is `#[derive(Query)]` with `#[query(...)]`.
+/// Declares a struct as a query: a request for data that changes nothing,
+/// sent with `QueryGateway::query`. `output = T` is what it answers (default
+/// `()`), `error = E` what it fails with (required). Implements `Message`
+/// and the `Query` marker, so a query can never be sent as a command (or the
+/// other way around).
+///
+/// ```ignore
+/// #[cqrs::query(output = Option<PostSummary>, error = BlogError)]
+/// #[derive(Clone, Debug)]
+/// pub struct FindPost { pub id: PostId }
+/// ```
 #[proc_macro_attribute]
 pub fn query(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(attribute_form(arguments.into(), item.into(), "query", |input| {
@@ -519,9 +537,9 @@ pub fn query(arguments: TokenStream, item: TokenStream) -> TokenStream {
     }))
 }
 
-/// The attribute form of a derive whose helper is `helper`: the derive's
-/// expansion with the attribute's arguments as its helper, and the item
-/// without the helper attributes (no derive is left to read them).
+/// An attribute expanded as a derive would be: `derive`'s expansion, reading
+/// the attribute's arguments as a `#[helper(..)]` attribute, and the item
+/// without the `helper` attributes (on fields too: `#[aggregate(id)]`).
 fn attribute_form(
     arguments: TokenStream2,
     item: TokenStream2,
@@ -554,46 +572,7 @@ fn attribute_form(
     Ok(quote!(#input #generated))
 }
 
-// ---------------------------------------------------------------------------
-// #[derive(Command)] / #[derive(Query)]
-// ---------------------------------------------------------------------------
-
-/// Declares a struct as a command: an intent to change state, sent with
-/// `CommandGateway::send`.
-///
-/// `#[command(output = T, error = E)]` states what handling it returns;
-/// `output` defaults to `()`, `error` is required. Implements `Message` and
-/// the `Command` marker.
-///
-/// ```ignore
-/// #[derive(Command)]
-/// #[command(output = PostId, error = BlogError)]
-/// struct CreatePost { title: String }
-/// ```
-#[proc_macro_derive(Command, attributes(command))]
-pub fn derive_command(input: TokenStream) -> TokenStream {
-    into_stream(message(parse_macro_input!(input), "command", "Command"))
-}
-
-/// Declares a struct as a query: a request for data that changes nothing,
-/// sent with `QueryGateway::query`.
-///
-/// `#[query(output = T, error = E)]` states what it answers; `output`
-/// defaults to `()`, `error` is required. Implements `Message` and the
-/// `Query` marker, so a query can never be sent as a command (or the other
-/// way around).
-///
-/// ```ignore
-/// #[derive(Query)]
-/// #[query(output = Option<PostSummary>, error = BlogError)]
-/// struct FindPost { id: PostId }
-/// ```
-#[proc_macro_derive(Query, attributes(query))]
-pub fn derive_query(input: TokenStream) -> TokenStream {
-    into_stream(message(parse_macro_input!(input), "query", "Query"))
-}
-
-/// Shared expansion of `#[derive(Command)]` and `#[derive(Query)]`: reads
+/// Shared expansion of `#[command]` and `#[query]`: reads
 /// `#[<attribute>(output = T, error = E)]` and implements `Message` plus the
 /// `marker` trait. `error` is required, `output` defaults to `()`.
 fn message(input: DeriveInput, attribute: &str, marker: &str) -> Result<TokenStream2> {

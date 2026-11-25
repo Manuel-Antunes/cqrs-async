@@ -225,8 +225,8 @@ pub use unit::{Cqrs, CqrsBuilder};
 
 #[cfg(feature = "derive")]
 pub use cqrs_derive::{
-    AggregateRoot, Command, DomainEvent, Query, QueryUpdates, aggregate, command, command_gateway, command_handler,
-    event_handler, projection, query, query_gateway, query_handler,
+    DomainEvent, QueryUpdates, aggregate, command, command_gateway, command_handler, event_handler, projection, query,
+    query_gateway, query_handler,
 };
 
 pub mod aggregate {
@@ -237,8 +237,6 @@ pub mod aggregate {
     pub use crate::aggregate_root::{Aggregate, EventAppender};
     pub use crate::loader::{AggregateLoader, Loaded, New, NotFound};
     pub use crate::snapshot::{InMemorySnapshots, SnapshotStore};
-    #[cfg(feature = "derive")]
-    pub use cqrs_derive::AggregateRoot;
 }
 
 pub mod command {
@@ -252,8 +250,6 @@ pub mod command {
         Write, append_writes, dispatch_command,
     };
     pub use crate::message::{Command, CommandGateway};
-    #[cfg(feature = "derive")]
-    pub use cqrs_derive::Command;
 }
 
 pub mod query {
@@ -270,7 +266,7 @@ pub mod query {
         emit_updates, head_of,
     };
     #[cfg(feature = "derive")]
-    pub use cqrs_derive::{Query, QueryUpdates};
+    pub use cqrs_derive::QueryUpdates;
 }
 
 pub mod event {
