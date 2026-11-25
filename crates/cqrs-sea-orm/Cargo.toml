@@ -6,6 +6,8 @@ edition.workspace = true
 # SeaORM 2 needs 1.94; the other crates keep the workspace's MSRV.
 rust-version = "1.94"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = true
 readme = "../../README.md"
 keywords = ["cqrs", "event-sourcing", "sea-orm", "postgres"]

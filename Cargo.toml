@@ -17,6 +17,8 @@ version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
+repository = "https://github.com/Manuel-Antunes/cqrs-async"
+homepage = "https://manuel-antunes.github.io/cqrs-async/"
 publish = false
 
 # The library crates are published as `cqrs-async*` (their code names stay

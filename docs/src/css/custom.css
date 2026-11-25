@@ -1,0 +1,53 @@
+/* Rust-orange brand on top of Infima (Docusaurus' base CSS). */
+:root {
+  --ifm-color-primary: #c2410c;
+  --ifm-color-primary-dark: #af3b0b;
+  --ifm-color-primary-darker: #a4380b;
+  --ifm-color-primary-darkest: #863009;
+  --ifm-color-primary-light: #d5470d;
+  --ifm-color-primary-lighter: #e04d10;
+  --ifm-color-primary-lightest: #f0602a;
+  --ifm-font-family-base: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --ifm-font-family-monospace: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --ifm-code-font-size: 90%;
+  --ifm-heading-font-weight: 700;
+  --ifm-navbar-shadow: none;
+  --docusaurus-highlighted-code-line-bg: rgba(232, 89, 12, 0.12);
+  --home-alt: #f4f1ed;
+  --home-card: #ffffff;
+  --home-border: #e7e2dc;
+  --home-muted: #57534e;
+  --home-code-bg: #17130f;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #fb923c;
+  --ifm-color-primary-dark: #fa7d17;
+  --ifm-color-primary-darker: #fa730a;
+  --ifm-color-primary-darkest: #d25d05;
+  --ifm-color-primary-light: #fca75d;
+  --ifm-color-primary-lighter: #fcb26d;
+  --ifm-color-primary-lightest: #fdcba0;
+  --ifm-background-color: #0f0d0c;
+  --ifm-background-surface-color: #151211;
+  --ifm-navbar-background-color: #0f0d0c;
+  --ifm-footer-background-color: #0b0908;
+  --docusaurus-highlighted-code-line-bg: rgba(251, 146, 60, 0.18);
+  --home-alt: #151211;
+  --home-card: #1a1614;
+  --home-border: #2b2521;
+  --home-muted: #a8a29e;
+  --home-code-bg: #0b0908;
+}
+
+.navbar { border-bottom: 1px solid var(--ifm-toc-border-color); }
+.navbar__title { font-weight: 800; letter-spacing: -0.01em; }
+.navbar__logo img { height: 1.7rem; }
+
+/* ASCII diagrams must not wrap. */
+.theme-doc-markdown pre code { white-space: pre; }
+
+/* The concept maps are wide. */
+.theme-doc-markdown table { display: block; overflow-x: auto; }
+
+.theme-doc-markdown h1 { letter-spacing: -0.03em; }

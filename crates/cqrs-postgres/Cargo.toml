@@ -6,6 +6,8 @@ edition.workspace = true
 # sqlx 0.9's.
 rust-version = "1.94"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = true
 readme = "../../README.md"
 keywords = ["cqrs", "event-sourcing", "postgres", "sqlx"]
