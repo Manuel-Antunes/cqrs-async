@@ -11,6 +11,8 @@
     radial-gradient(700px 380px at 95% 10%, rgba(99, 102, 241, 0.1), transparent 70%);
 }
 .heroInner { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 56px; align-items: center; }
+/* Grid items shrink below their content (long code lines scroll inside their block instead). */
+.heroInner > *, .panel > * { min-width: 0; }
 .pill {
   display: inline-flex; align-items: center; gap: 8px; margin: 0 0 22px; padding: 5px 12px;
   border: 1px solid var(--home-border); border-radius: 999px; font-size: 0.8rem;
@@ -96,17 +98,59 @@
 .tableWrap th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--home-muted); background: var(--home-alt); }
 .tableWrap tr { background: transparent !important; }
 
+/* Tablets: one column for the hero and the tour, two for the cards. */
 @media (max-width: 960px) {
-  .heroInner, .panel { grid-template-columns: 1fr; }
+  .heroInner, .panel { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .hero { padding: 48px 0 56px; }
-  .grid, .four { grid-template-columns: repeat(2, 1fr); }
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .trio { grid-template-columns: 1fr; gap: 24px; }
+  .grid, .four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trio { grid-template-columns: minmax(0, 1fr); gap: 24px; padding: 36px 0; }
+  .lead { max-width: none; }
 }
+
+/* Phones. */
 @media (max-width: 620px) {
-  .grid, .four, .stats { grid-template-columns: 1fr; }
-  .section { padding: 56px 0; }
-  .arrow { display: none; }
-  .laneLabel { width: 100%; }
-  .bridge { margin-left: 0; }
+  .wrap { width: calc(100% - 32px); }
+  .hero { padding: 28px 0 40px; }
+  .logo { width: 112px; margin-bottom: 4px; }
+  .pill { margin-bottom: 16px; }
+  .title { font-size: clamp(1.85rem, 8.4vw, 2.3rem); margin-bottom: 14px; }
+  .lead { font-size: 1rem; margin-bottom: 22px; }
+  .cta { flex-direction: column; gap: 10px; }
+  .cta :global(.button) { width: 100%; }
+  .install :global(pre), .heroCode :global(pre), .panel :global(pre) { font-size: 0.78rem; }
+  .heroCode :global(.theme-code-block) { box-shadow: none; }
+
+  .section { padding: 52px 0; }
+  .section h2 { font-size: 1.6rem; }
+  .sub { margin-bottom: 28px; }
+  .grid, .four, .stats { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .card { padding: 18px; }
+  .card:hover { transform: none; }
+
+  /* The tour's tabs scroll sideways instead of wrapping into a block. */
+  .tabs { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; margin-inline: -16px; padding: 0 16px 6px; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; }
+  .panel h3 { font-size: 1.15rem; }
+
+  /* The flow stacks: one step per row, arrows pointing down. */
+  .flow { padding: 18px; gap: 10px; }
+  .lane { flex-direction: column; align-items: stretch; gap: 6px; }
+  .laneLabel { width: auto; }
+  .node { flex: none; padding: 12px; }
+  .arrow { flex: none; width: 2px; height: 14px; margin: 0 auto; }
+  .arrow::after { right: -4px; top: auto; bottom: -6px; border: 5px solid transparent; border-top: 7px solid var(--home-muted); }
+  .bridge { margin-left: 0; text-align: center; }
+  .bridge::before, .bridge::after { display: none; }
+
+  .stat { padding: 18px 16px; }
+  .stat b { font-size: 2.1rem; }
+  /* The concept table: one card per row, each value labelled. */
+  .tableWrap { overflow: visible; background: transparent; border: 0; }
+  .tableWrap table, .tableWrap tbody, .tableWrap tr, .tableWrap td { display: block; width: 100%; }
+  .tableWrap thead { display: none; }
+  .tableWrap tr { margin-bottom: 10px; padding: 12px 14px; border: 1px solid var(--home-border); border-radius: 10px; background: var(--home-card) !important; }
+  .tableWrap td { padding: 2px 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .tableWrap td[data-label]::before { content: attr(data-label) ': '; color: var(--home-muted); font-size: 0.8rem; }
 }

@@ -18,7 +18,7 @@ const repo = repoUrl();
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'cqrs_async',
+  title: 'cqrs-async',
   tagline: 'CQRS and event sourcing for Rust, resolved at compile time.',
   favicon: 'img/favicon.svg',
 
@@ -76,7 +76,7 @@ const config = {
     ({
       colorMode: { defaultMode: 'dark', respectPrefersColorScheme: true },
       navbar: {
-        title: 'cqrs_async',
+        title: 'cqrs-async',
         logo: { alt: 'cqrs_async', src: 'img/logo.svg' },
         items: [
           { type: 'docSidebar', sidebarId: 'guide', position: 'left', label: 'Guide' },
@@ -107,7 +107,7 @@ const config = {
           },
           ...(repo ? [{ title: 'More', items: [{ label: 'GitHub', href: repo }] }] : []),
         ],
-        copyright: 'cqrs_async contributors. MIT license. Rust 1.89+, edition 2024.',
+        copyright: 'cqrs-async contributors. MIT license. Rust 1.89+ (1.94 with PostgreSQL), edition 2024.',
       },
       prism: {
         theme: prismThemes.github,

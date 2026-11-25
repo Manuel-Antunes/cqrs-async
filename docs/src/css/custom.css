@@ -51,3 +51,18 @@
 .theme-doc-markdown table { display: block; overflow-x: auto; }
 
 .theme-doc-markdown h1 { letter-spacing: -0.03em; }
+
+/* Phones: tighter code, tables and headings in the docs. */
+@media (max-width: 620px) {
+  .theme-doc-markdown h1 { font-size: 2rem; }
+  .theme-doc-markdown h2 { font-size: 1.5rem; }
+  .theme-doc-markdown pre { font-size: 0.8rem; }
+  .theme-doc-markdown table { font-size: 0.85rem; }
+  .theme-doc-markdown th, .theme-doc-markdown td { padding: 0.4rem 0.6rem; }
+  /* Inline code longer than a line breaks rather than pushing the page;
+     a table's first column (module, crate, concept names) stays whole, the
+     table scrolling sideways if it must. */
+  .theme-doc-markdown :not(pre) > code { overflow-wrap: break-word; }
+  .theme-doc-markdown td:first-child code { white-space: nowrap; }
+  .footer__links { gap: 12px; }
+}

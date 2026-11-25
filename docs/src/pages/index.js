@@ -183,7 +183,7 @@ function Hero() {
         <div>
           <img className={styles.logo} src={logo} alt="" width="168" height="140" />
           <p className={styles.pill}>
-            <span className={styles.dot} /> Pre-release · the API is still being shaped
+            <span className={styles.dot} /> 0.1.0-alpha.1 · the API may still change
           </p>
           <h1 className={styles.title}>
             CQRS and event sourcing for Rust, <em>resolved at compile time.</em>
@@ -202,11 +202,12 @@ function Hero() {
             </Link>
           </div>
           <div className={styles.install}>
-            <CodeBlock language="toml">{`cqrs-async = "0.1.0-alpha.1"           # use cqrs::...
-cqrs-async-postgres = "0.1.0-alpha.1"  # use cqrs_postgres::...`}</CodeBlock>
+            <CodeBlock language="toml">{`cqrs-async = "0.1.0-alpha.1"
+cqrs-async-postgres = "0.1.0-alpha.1"`}</CodeBlock>
           </div>
           <p className={styles.fine}>
-            Not on crates.io yet: until then, depend on the crates by <code>path</code>.
+            Written <code>cqrs::</code> and <code>cqrs_postgres::</code> in code. Not on crates.io
+            yet: until then, depend on them by <code>git</code>.
           </p>
         </div>
         <div className={styles.heroCode}>
@@ -420,8 +421,8 @@ function Concepts() {
               {rows.map(([concept, axon, ours]) => (
                 <tr key={concept}>
                   <td><strong>{concept}</strong></td>
-                  <td>{cell(axon)}</td>
-                  <td>{cell(ours)}</td>
+                  <td data-label="Axon 5">{cell(axon)}</td>
+                  <td data-label="cqrs-async">{cell(ours)}</td>
                 </tr>
               ))}
             </tbody>
