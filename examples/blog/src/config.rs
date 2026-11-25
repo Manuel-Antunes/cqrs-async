@@ -112,6 +112,9 @@ pub struct Running<C, Q, R, E> {
     pub audit: Arc<AuditLog>,
     /// Events the projection applied, and the time it took.
     pub metrics: Arc<ProjectionMetrics>,
+    /// On PostgreSQL, the other instances' commits relayed to this one
+    /// (`LISTEN`/`NOTIFY`); relaying stops when it is dropped.
+    pub listening: Option<cqrs_postgres::Listening>,
 }
 
 impl<C, Q, R, Ev, S, T, M> Running<C, Q, R, Events<Ev, S, T, M>>
@@ -166,6 +169,7 @@ pub fn start_in_memory()
         notifier,
         audit,
         metrics,
+        listening: None,
     }
 }
 
@@ -193,7 +197,14 @@ pub async fn start(
 ) -> Result<Running<impl PostCommands, impl PostQueries + PostSubscriptions, SeaOrmPostSummaries, PgPostEvents>, DbErr>
 {
     Migrator::up(&SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone()), None).await?;
-    let events = cqrs_postgres::Postgres::new(pool.clone()).events::<PostEvent>("posts");
+    let pg = cqrs_postgres::Postgres::new(pool.clone());
+    let events = pg.events::<PostEvent>("posts");
+    // Several instances serve the blog: each one's subscriptions and
+    // processors see the others' commits at once, not at their next poll.
+    let listening = pg
+        .listen(&events)
+        .await
+        .map_err(|error| DbErr::Custom(error.to_string()))?;
     let summaries = Arc::new(SeaOrmPostSummaries::new(pool.clone()));
     let notifier = Arc::new(InMemoryNotifier::default());
     let audit = Arc::new(AuditLog::default());
@@ -213,5 +224,6 @@ pub async fn start(
         notifier,
         audit,
         metrics,
+        listening: Some(listening),
     })
 }

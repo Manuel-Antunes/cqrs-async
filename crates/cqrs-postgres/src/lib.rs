@@ -34,6 +34,22 @@
 //! snapshot's `xmax`, so once the oldest running transaction is newer, the
 //! gap is given up, never earlier.
 //!
+//! # Several instances
+//!
+//! Each instance's live feed carries only its own commits; the others'
+//! reach its subscriptions and processors at their next poll. With
+//! [`Postgres::listen`], once per log on every instance, they arrive at
+//! once: an instance tells the others after it committed (`NOTIFY`, after
+//! the commit and from a connection of its own, commits close together
+//! sharing one notification), and wakes its readers when another did
+//! (`LISTEN`). The channel, [`CHANNEL`], is the database's, not a schema's:
+//! two schemas with logs of the same name only cause extra reads.
+//!
+//! ```text
+//! let events = pg.events::<PostEvent>("posts");
+//! let _listening = pg.listen(&events).await?;            // keep it: dropping it stops
+//! ```
+//!
 //! # Criteria
 //!
 //! Tags live in `cqrs_event_tags (tag, position)`, so reading the events of
@@ -69,11 +85,15 @@
 
 mod dead_letters;
 mod event_store;
+#[cfg(feature = "tokio")]
+mod notify;
 mod snapshot_store;
 mod token_store;
 
 pub use dead_letters::PostgresDeadLetters;
 pub use event_store::PostgresEventStore;
+#[cfg(feature = "tokio")]
+pub use notify::{CHANNEL, Listening};
 pub use snapshot_store::PostgresSnapshotStore;
 pub use token_store::{PgTransaction, PostgresTokenStore, PostgresTransactions};
 // The JSON shape and upcasters live in the core (`json` feature), shared

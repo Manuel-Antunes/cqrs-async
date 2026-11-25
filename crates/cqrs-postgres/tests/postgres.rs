@@ -2060,3 +2060,35 @@ async fn cost_per_namespace() {
         );
     }
 }
+
+/// Two instances over one log, each polling the store only every 30 s: the
+/// commits of one reach the other's subscriptions within milliseconds once
+/// both listen (`LISTEN`/`NOTIFY`).
+#[tokio::test]
+async fn listening_instances_see_each_others_commits_at_once() {
+    use futures_util::StreamExt;
+
+    let pool = database_or_skip!();
+    let pg = cqrs_postgres::Postgres::new(pool);
+    let slow = SubscriptionOptions::default().poll_interval(Duration::from_secs(30));
+    let here = pg.events::<ClockEvent>("clocks").with_options(slow);
+    let there = pg.events::<ClockEvent>("clocks").with_options(slow);
+    let _listening = (pg.listen(&here).await.unwrap(), pg.listen(&there).await.unwrap());
+
+    let mut stream = std::pin::pin!(here.subscribe(0));
+    // Caught up and waiting.
+    commit_new::<Clock, _>(&here, 1, vec![ClockEvent::Ticked { n: 1 }]).await;
+    let first = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
+    assert_eq!(first.unwrap().unwrap().unwrap().sequence, 1);
+
+    // The other instance commits: not in this one's live feed.
+    let started = std::time::Instant::now();
+    commit_new::<Clock, _>(&there, 2, vec![ClockEvent::Ticked { n: 2 }]).await;
+    let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("woken by the other instance's notification")
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.stream.id(), "2");
+    assert!(started.elapsed() < Duration::from_secs(2), "long before the 30 s poll");
+}

@@ -823,6 +823,7 @@ dependencies = [
  "serde_json",
  "sqlx 0.9.1",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -4,7 +4,10 @@ use crate::{Cursor, DomainEvent, EventEnvelope, Horizon, ReadLog, StoreError};
 use futures_core::Stream;
 use futures_util::{StreamExt, stream};
 use tokio::{
-    sync::broadcast::{self, error::RecvError},
+    sync::{
+        broadcast::{self, error::RecvError},
+        watch,
+    },
     time::Instant,
 };
 
@@ -83,7 +86,23 @@ where
     E: DomainEvent,
     S: ReadLog<E> + 'static,
 {
-    track(store, live, Start::At(after), options).map(|item| item.map(|(event, _)| event))
+    track(store, live, None, Start::At(after), options).map(|item| item.map(|(event, _)| event))
+}
+
+/// [`subscribe`], also reading the store as soon as `wake` changes (another
+/// process committed to the log): what [`Events`](super::Events) hands out.
+pub(crate) fn subscribe_waking<E, S>(
+    store: S,
+    live: &LiveEvents<E>,
+    wake: watch::Receiver<u64>,
+    after: u64,
+    options: SubscriptionOptions,
+) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<E, S>
+where
+    E: DomainEvent,
+    S: ReadLog<E> + 'static,
+{
+    track(store, live, Some(wake), Start::At(after), options).map(|item| item.map(|(event, _)| event))
 }
 
 /// Where a tracked stream starts.
@@ -99,6 +118,7 @@ pub(crate) enum Start {
 pub(crate) fn track<E, S>(
     store: S,
     live: &LiveEvents<E>,
+    wake: Option<watch::Receiver<u64>>,
     start: Start,
     options: SubscriptionOptions,
 ) -> impl Stream<Item = Result<(Arc<EventEnvelope<E>>, Cursor), StoreError>> + Send + use<E, S>
@@ -109,6 +129,7 @@ where
     let state = State {
         store,
         live: live.subscribe(),
+        wake,
         start: match start {
             Start::At(after) => Some(after),
             Start::From(_) => None,
@@ -137,6 +158,9 @@ struct State<E, S> {
     store: S,
     /// The live feed.
     live: broadcast::Receiver<Arc<EventEnvelope<E>>>,
+    /// Changes when another process committed to the log: the store is read
+    /// then, instead of at the next poll.
+    wake: Option<watch::Receiver<u64>>,
     /// A position to ask the store a cursor for, before the first read.
     start: Option<u64>,
     /// What was yielded.
@@ -210,7 +234,26 @@ impl<E: DomainEvent, S: ReadLog<E>> State<E, S> {
             } else {
                 GAP_RECHECK
             };
-            match tokio::time::timeout(wait, self.live.recv()).await {
+            let woken = async {
+                // No signal, or its sender is gone: only the live feed and
+                // the poll remain.
+                let changed = match &mut self.wake {
+                    Some(wake) => wake.changed().await.is_ok(),
+                    None => false,
+                };
+                if !changed {
+                    std::future::pending::<()>().await;
+                }
+            };
+            let received = tokio::select! {
+                received = tokio::time::timeout(wait, self.live.recv()) => received,
+                () = woken => {
+                    // Committed elsewhere: the store has it, not the live feed.
+                    self.behind = true;
+                    continue;
+                }
+            };
+            match received {
                 Ok(Ok(event)) if self.cursor.covers(event.position) => {}
                 Ok(Ok(event)) if event.position == self.cursor.position() + 1 || self.cursor.is_gap(event.position) => {
                     self.ready.push_back((event, Horizon::SETTLED));

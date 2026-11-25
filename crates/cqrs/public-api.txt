@@ -525,6 +525,7 @@ pub fn cqrs::processing::Events<E, S, C, M>::processor<H>(&self, &str, H) -> cqr
 pub fn cqrs::processing::Events<E, S, C, M>::projection<P>(&self, P) -> cqrs::processing::ProjectionProcessors<E, S, P, C, M> where P: cqrs::processing::Route<<M as cqrs::processing::TransactionManager>::Tx, Event = E> + 'static
 pub fn cqrs::processing::Events<E, S, C, M>::track<H>(&self, &str, H) -> cqrs::processing::ProcessorHandle where H: cqrs::processing::EventHandler<E, <M as cqrs::processing::TransactionManager>::Tx> + 'static
 impl<E, S, C, M> cqrs::processing::Events<E, S, C, M>
+pub fn cqrs::processing::Events<E, S, C, M>::committed_elsewhere(&self)
 pub fn cqrs::processing::Events<E, S, C, M>::global_progress(&self, &str) -> cqrs::processing::GlobalProgress<C> where C: core::clone::Clone
 pub fn cqrs::processing::Events<E, S, C, M>::live(&self) -> &cqrs::store::LiveEvents<E>
 pub fn cqrs::processing::Events<E, S, C, M>::store(&self) -> &S

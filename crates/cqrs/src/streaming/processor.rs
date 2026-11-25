@@ -225,6 +225,9 @@ pub struct TrackingProcessor<E, S, H, T, M = (), D = ()> {
     store: S,
     /// Live feed, for low latency once caught up.
     live: LiveEvents<E>,
+    /// Changes when another process committed to the log (from
+    /// [`Events`](super::Events)): segments read the store at once.
+    wake: Option<watch::Receiver<u64>>,
     /// What each event is handed to, shared by the segment workers.
     handler: Arc<H>,
     /// Positions and claims.
@@ -316,6 +319,7 @@ where
             name: name.into(),
             store,
             live: live.clone(),
+            wake: None,
             handler: Arc::new(handler),
             tokens: Arc::new(tokens),
             transactions: Arc::new(transactions),
@@ -324,6 +328,12 @@ where
             replay_until: AtomicU64::new(0),
             status: watch::channel(ProcessorStatus::default()).0,
         }
+    }
+
+    /// Reads the store as soon as `wake` changes (another process committed).
+    pub(crate) fn waking_on(mut self, wake: watch::Receiver<u64>) -> Self {
+        self.wake = Some(wake);
+        self
     }
 }
 
@@ -359,6 +369,7 @@ where
             name: self.name,
             store: self.store,
             live: self.live,
+            wake: self.wake,
             handler: self.handler,
             tokens: self.tokens,
             transactions: self.transactions,
@@ -704,7 +715,13 @@ where
         let mut backoff = Backoff::new(&self.options);
         'subscribe: loop {
             let from = Start::From(cursor.clone());
-            let mut events = pin!(track(self.store.clone(), &self.live, from, self.options.subscription));
+            let mut events = pin!(track(
+                self.store.clone(),
+                &self.live,
+                self.wake.clone(),
+                from,
+                self.options.subscription
+            ));
             let mut unsaved = 0_u32;
             // What the stream yielded while a batch was gathered, other than
             // an event: handled as the next item.
@@ -801,7 +818,13 @@ where
         flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         'subscribe: loop {
             let from = Start::From(cursor.clone());
-            let mut events = pin!(track(self.store.clone(), &self.live, from, self.options.subscription));
+            let mut events = pin!(track(
+                self.store.clone(),
+                &self.live,
+                self.wake.clone(),
+                from,
+                self.options.subscription
+            ));
             let mut unflushed = 0_u32;
             loop {
                 let next = tokio::select! {

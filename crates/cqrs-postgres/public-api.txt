@@ -4,6 +4,13 @@ pub use cqrs_postgres::Upcast
 pub use cqrs_postgres::Upcaster
 pub use cqrs_postgres::sqlx
 pub use cqrs_postgres::upcast
+pub struct cqrs_postgres::Listening
+impl cqrs_postgres::Listening
+pub fn cqrs_postgres::Listening::stop(self)
+impl core::fmt::Debug for cqrs_postgres::Listening
+pub fn cqrs_postgres::Listening::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for cqrs_postgres::Listening
+pub fn cqrs_postgres::Listening::drop(&mut self)
 pub struct cqrs_postgres::Postgres
 impl cqrs_postgres::Postgres
 pub fn cqrs_postgres::Postgres::events<E>(&self, &str) -> cqrs_postgres::PgEvents<E>
@@ -13,6 +20,8 @@ pub fn cqrs_postgres::Postgres::pool(&self) -> &sqlx_postgres::PgPool
 pub fn cqrs_postgres::Postgres::store<E>(&self, &str) -> cqrs_postgres::PostgresEventStore<E>
 pub fn cqrs_postgres::Postgres::tokens(&self) -> &cqrs_postgres::PostgresTokenStore
 pub fn cqrs_postgres::Postgres::transactions(&self) -> &cqrs_postgres::PostgresTransactions
+impl cqrs_postgres::Postgres
+pub async fn cqrs_postgres::Postgres::listen<E, U>(&self, &cqrs_postgres::PgEvents<E, U>) -> core::result::Result<cqrs_postgres::Listening, cqrs::event_store::StoreError> where E: cqrs::event_envelope::DomainEvent, U: core::marker::Send + core::marker::Sync + 'static
 impl core::fmt::Debug for cqrs_postgres::Postgres
 pub fn cqrs_postgres::Postgres::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs_postgres::PostgresDeadLetters<E, U>
@@ -30,6 +39,7 @@ pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::remove_in(&self, &mut cqr
 pub async fn cqrs_postgres::PostgresDeadLetters<E, U>::sequences(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, cqrs::event_store::StoreError>
 pub struct cqrs_postgres::PostgresEventStore<E, U>
 impl<E, U> cqrs_postgres::PostgresEventStore<E, U>
+pub fn cqrs_postgres::PostgresEventStore<E, U>::log(&self) -> &str
 pub fn cqrs_postgres::PostgresEventStore<E, U>::with_upcasters<U2: cqrs::upcast::Upcaster>(self, U2) -> cqrs_postgres::PostgresEventStore<E, U2>
 impl<E> cqrs_postgres::PostgresEventStore<E>
 pub fn cqrs_postgres::PostgresEventStore<E>::new(sqlx_postgres::PgPool, &str) -> Self
@@ -85,6 +95,7 @@ impl cqrs::transaction::TransactionManager for cqrs_postgres::PostgresTransactio
 pub type cqrs_postgres::PostgresTransactions::Tx = sqlx_core::transaction::Transaction<'static, sqlx_postgres::database::Postgres>
 pub async fn cqrs_postgres::PostgresTransactions::begin(&self) -> core::result::Result<cqrs_postgres::PgTransaction, cqrs::event_store::StoreError>
 pub async fn cqrs_postgres::PostgresTransactions::commit(&self, cqrs_postgres::PgTransaction) -> core::result::Result<(), cqrs::event_store::StoreError>
+pub const cqrs_postgres::CHANNEL: &str
 pub const cqrs_postgres::MIGRATIONS: &[(&str, &str)]
 pub async fn cqrs_postgres::migrate(&sqlx_postgres::PgPool) -> core::result::Result<(), cqrs::event_store::StoreError>
 pub type cqrs_postgres::PgEvents<E, U> = cqrs::streaming::Events<E, cqrs_postgres::PostgresEventStore<E, U>, cqrs_postgres::PostgresTokenStore, cqrs_postgres::PostgresTransactions>

@@ -62,6 +62,11 @@ impl<E> PostgresEventStore<E> {
 
 impl<E, U> PostgresEventStore<E, U> {
     /// Runs `upcasters` (one [`Upcaster`], or a tuple of them, oldest step
+    /// The log it reads and appends to.
+    pub fn log(&self) -> &str {
+        &self.log
+    }
+
     /// first) on every event read, instead of the current ones.
     pub fn with_upcasters<U2: Upcaster>(self, upcasters: U2) -> PostgresEventStore<E, U2> {
         PostgresEventStore {

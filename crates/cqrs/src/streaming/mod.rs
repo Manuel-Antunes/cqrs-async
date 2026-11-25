@@ -25,7 +25,7 @@ mod updates;
 use std::sync::Arc;
 
 use futures_core::Stream;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 pub use processor::{ProcessorHandle, ProcessorStatus, ResetError, TrackingOptions, TrackingProcessor};
 pub use progress::{GlobalProgress, ProcessorProgress, ProjectionProgress};
@@ -90,6 +90,9 @@ pub struct Events<E, S, C = InMemoryTokenStore, M = ()> {
     store: S,
     /// The live feed the repositories publish to after each commit.
     live: LiveEvents<E>,
+    /// Bumped when another process committed to the log
+    /// ([`committed_elsewhere`](Self::committed_elsewhere)).
+    elsewhere: Arc<watch::Sender<u64>>,
     /// Where tracking processors keep their positions and claims.
     tokens: C,
     /// Opens and commits the processors' units of work.
@@ -111,6 +114,7 @@ impl<E, S> Events<E, S> {
         Self {
             store,
             live: broadcast::channel(1024).0,
+            elsewhere: Arc::new(watch::channel(0).0),
             tokens: InMemoryTokenStore::default(),
             transactions: (),
             options: SubscriptionOptions::default(),
@@ -126,6 +130,7 @@ impl<E, S, C, M> Events<E, S, C, M> {
         Events {
             store: self.store,
             live: self.live,
+            elsewhere: self.elsewhere,
             tokens,
             transactions: self.transactions,
             options: self.options,
@@ -139,6 +144,7 @@ impl<E, S, C, M> Events<E, S, C, M> {
         Events {
             store: self.store,
             live: self.live,
+            elsewhere: self.elsewhere,
             tokens: self.tokens,
             transactions,
             options: self.options,
@@ -160,6 +166,15 @@ impl<E, S, C, M> Events<E, S, C, M> {
     /// The live feed.
     pub fn live(&self) -> &LiveEvents<E> {
         &self.live
+    }
+
+    /// Says that another process committed to the log: every subscription
+    /// and processor of these events reads the store now, instead of at its
+    /// next poll ([`SubscriptionOptions::poll_interval`]). Their live feed
+    /// only carries this process's commits; whatever relays the others'
+    /// (`LISTEN`/`NOTIFY` in `cqrs-postgres`) calls this.
+    pub fn committed_elsewhere(&self) {
+        self.elsewhere.send_modify(|count| *count = count.wrapping_add(1));
     }
 
     /// The token store the processors share.
@@ -205,6 +220,7 @@ where
             self.tokens.clone(),
             self.transactions.clone(),
         )
+        .waking_on(self.elsewhere.subscribe())
         .with_options(TrackingOptions {
             subscription: self.options,
             ..TrackingOptions::default()
@@ -235,6 +251,7 @@ impl<E, S: Clone, C: Clone, M: Clone> Clone for Events<E, S, C, M> {
         Self {
             store: self.store.clone(),
             live: self.live.clone(),
+            elsewhere: Arc::clone(&self.elsewhere),
             tokens: self.tokens.clone(),
             transactions: self.transactions.clone(),
             options: self.options,
@@ -361,7 +378,13 @@ where
         &self,
         after: u64,
     ) -> impl Stream<Item = Result<Arc<EventEnvelope<E>>, StoreError>> + Send + use<E, S, C, M> {
-        subscribe(self.store.clone(), &self.live, after, self.options)
+        subscription::subscribe_waking(
+            self.store.clone(),
+            &self.live,
+            self.elsewhere.subscribe(),
+            after,
+            self.options,
+        )
     }
 
     async fn last_position(&self) -> Result<u64, StoreError> {
