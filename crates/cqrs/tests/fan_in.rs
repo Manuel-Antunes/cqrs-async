@@ -105,7 +105,7 @@ impl CommandHandler<Publish> for PostCommands {
             author: command.author,
             title: command.title.to_owned(),
         });
-        ctx.record(New::<Post>(command.id));
+        ctx.commit(New::<Post>(command.id));
         Ok(())
     }
 }
@@ -122,7 +122,7 @@ impl CommandHandler<Register> for UserCommands {
         ctx.append(UserEvent::Registered {
             name: command.name.to_owned(),
         });
-        ctx.record(New::<User>(command.id));
+        ctx.commit(New::<User>(command.id));
         Ok(())
     }
 }
@@ -133,7 +133,7 @@ impl CommandHandler<Rename> for UserCommands {
         ctx.append(UserEvent::Renamed {
             name: command.name.to_owned(),
         });
-        ctx.record(Loaded::at(User { id: command.id }, 1));
+        ctx.commit(Loaded::at(User { id: command.id }, 1));
         Ok(())
     }
 }

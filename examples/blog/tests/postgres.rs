@@ -20,7 +20,7 @@ use std::{
 
 use blog::{
     application::{
-        commands::{CreatePost, PostRepository, PublishPost, RetitlePost},
+        commands::{CreatePost, PostCommandGateway, PostRepository, PublishPost, RetitlePost},
         projections::PostProjection,
         queries::{FindPost, ListPublished},
     },
@@ -29,9 +29,9 @@ use blog::{
 };
 use cqrs::{
     Intercepted,
-    aggregate::New,
+    aggregate::{New, Repository},
     command::{CommandContext, CommandGateway},
-    event::EventEnvelope,
+    event::{EventEnvelope, Metadata},
     processing::{EventChain, EventInterceptor, HandlerError, ProcessingContext, TrackingOptions},
     query::QueryGateway,
     store::StoreError,
@@ -134,26 +134,52 @@ async fn the_blog_runs_on_postgres_and_a_restart_picks_up_where_it_was() {
     running.stop().await;
 }
 
+/// The handlers take their repository's transaction (`R::Tx`). With the
+/// event-sourced repository the engine hands out, whose transaction is the
+/// database's, the same handlers run in the units of work of PostgreSQL: the
+/// events are the only thing written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_handlers_run_with_event_sourced_posts_on_postgres() {
+    let pool = database_or_skip!();
+    Migrator::up(&SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone()), None)
+        .await
+        .unwrap();
+    let events = post_events(&pool);
+    let posts = events.repository::<Post>();
+    let gateway = PostCommandGateway::new(posts, events);
+
+    let id = gateway.send(CreatePost { title: "draft".into() }).await.unwrap();
+    let title = "renamed".to_owned();
+    gateway.send(RetitlePost { id, title }).await.unwrap();
+    gateway.send(PublishPost { id }).await.unwrap();
+
+    assert_eq!(count(&pool, "SELECT count(*) FROM cqrs_events").await, 3);
+    assert_eq!(count(&pool, "SELECT count(*) FROM posts").await, 0, "no state is kept");
+}
+
 /// The post events on PostgreSQL, as the blog wires them.
 fn post_events(pool: &PgPool) -> blog::PgPostEvents {
     cqrs_postgres::Postgres::new(pool.clone()).events("posts")
 }
 
 /// What a command's unit of work does, by hand: opens the transaction, has
-/// the repository save `post` after what `appender` recorded for it,
-/// appends the events in the same transaction, commits and announces.
+/// the repository save `post` after the `events` the domain decided for it,
+/// appends them in the same transaction, commits and announces.
 async fn save(
     unit: &blog::PgPostEvents,
     posts: &SeaOrmPostRepository,
     post: cqrs::aggregate::Loaded<Post>,
-    appender: &mut CommandContext<PostEvent>,
+    events: Vec<PostEvent>,
 ) -> Result<(), StoreError> {
     use cqrs::command::UnitOfWork;
     type Unit = cqrs::command::InTransaction<cqrs_postgres::PgTransaction>;
-    let mut tx = UnitOfWork::<PostEvent, Unit>::begin(unit).await?;
-    let post = appender.record(post);
-    posts.save(&post, &mut tx).await?;
-    let appended = cqrs::command::append_writes::<_, Unit, _>(unit, &mut tx, appender.take_writes()).await?;
+    let tx = UnitOfWork::<PostEvent, Unit>::begin(unit).await?;
+    let mut ctx = CommandContext::in_transaction(Metadata::new(), tx);
+    ctx.extend(events);
+    let post = ctx.commit(post);
+    posts.save(&post, ctx.tx()).await?;
+    let (writes, mut tx) = ctx.into_parts();
+    let appended = cqrs::command::append_writes::<_, Unit, _>(unit, &mut tx, writes).await?;
     UnitOfWork::<PostEvent, Unit>::commit(unit, tx).await?;
     UnitOfWork::<PostEvent, Unit>::announce(unit, appended).await;
     Ok(())
@@ -162,7 +188,7 @@ async fn save(
 /// The post `id` as the repository finds it, in a transaction of its own.
 async fn find(pool: &PgPool, id: PostId) -> Option<cqrs::aggregate::Loaded<Post>> {
     let mut tx = pool.begin().await.unwrap();
-    SeaOrmPostRepository.find(id, &mut tx).await.unwrap()
+    SeaOrmPostRepository.find(&id, &mut tx).await.unwrap()
 }
 
 /// A new post's id, from the repository.
@@ -183,23 +209,21 @@ async fn a_post_state_and_its_events_commit_together_and_a_lost_race_undoes_both
     let posts = SeaOrmPostRepository;
 
     let id = next_id(&pool).await;
-    let mut appender = CommandContext::new();
+    let mut appender = Vec::new();
     Post::create(id, "draft", &mut appender).unwrap();
-    save(&events, &posts, New::<Post>(id).into(), &mut appender)
-        .await
-        .unwrap();
+    save(&events, &posts, New::<Post>(id).into(), appender).await.unwrap();
 
     // Two writers find the same version and decide...
     let first = find(&pool, id).await.unwrap();
     let second = find(&pool, id).await.unwrap();
     assert_eq!(first.version(), Some(1));
-    let (mut renamed, mut published) = (CommandContext::new(), CommandContext::new());
+    let (mut renamed, mut published) = (Vec::new(), Vec::new());
     first.retitle("renamed", &mut renamed).unwrap();
     second.publish(&mut published).unwrap();
 
     // ...the first one wins; the second's events and state are undone.
-    save(&events, &posts, first, &mut renamed).await.unwrap();
-    let lost = save(&events, &posts, second, &mut published).await;
+    save(&events, &posts, first, renamed).await.unwrap();
+    let lost = save(&events, &posts, second, published).await;
     assert!(matches!(lost, Err(StoreError::Conflict { .. })), "{lost:?}");
 
     let kept = find(&pool, id).await.unwrap();
@@ -248,11 +272,9 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
     let events = post_events(&pool);
     let posts = SeaOrmPostRepository;
     let id = next_id(&pool).await;
-    let mut appender = CommandContext::new();
+    let mut appender = Vec::new();
     Post::create(id, "draft", &mut appender).unwrap();
-    save(&events, &posts, New::<Post>(id).into(), &mut appender)
-        .await
-        .unwrap();
+    save(&events, &posts, New::<Post>(id).into(), appender).await.unwrap();
 
     // The creation's insert is written, then the handling fails: if the
     // insert were kept, the retry would hit the primary key forever.
@@ -278,9 +300,9 @@ async fn the_seaorm_projection_applies_each_event_once_even_when_it_fails_after_
     within(10, running.caught_up(created)).await;
 
     let post = find(&pool, id).await.unwrap();
-    let mut appender = CommandContext::new();
+    let mut appender = Vec::new();
     post.retitle("final", &mut appender).unwrap();
-    save(&events, &posts, post, &mut appender).await.unwrap();
+    save(&events, &posts, post, appender).await.unwrap();
     let retitled = sqlx::query_scalar::<_, i64>("SELECT max(position) FROM cqrs_events")
         .fetch_one(&pool)
         .await

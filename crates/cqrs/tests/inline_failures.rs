@@ -59,7 +59,7 @@ struct Commands<P> {
 impl<P> CommandHandler<Tick> for Commands<P> {
     async fn handle(&self, command: &Tick, events: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
         events.append(Ticked(1));
-        events.record(cqrs::aggregate::New::<Clock>(command.id));
+        events.commit(cqrs::aggregate::New::<Clock>(command.id));
         Ok(())
     }
 }

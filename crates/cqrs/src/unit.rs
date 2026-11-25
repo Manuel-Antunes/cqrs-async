@@ -4,10 +4,9 @@
 //!
 //! ```text
 //! let store = InMemoryEventStore::new();
-//! let posts = Arc::new(EventSourcedPostRepository::new(store.clone()));  // yours, over the store
 //!
 //! let app = Cqrs::new(Events::new(store))                       // in-memory tokens, no transactions
-//!     .commands(|events| PostCommandGateway::new(posts, events)) // the unit hands over the publisher
+//!     .commands(|events| PostCommandGateway::new(events.repository::<Post>(), ids, events)) // the unit hands over the publisher
 //!     .intercept(Audit(log))
 //!     .queries(PostQueryGateway::new(summaries.clone()))
 //!     .projection(PostProjection::new(summaries, notifier))  // every namespace, its updates

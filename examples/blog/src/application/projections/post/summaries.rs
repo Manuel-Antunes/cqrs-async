@@ -36,7 +36,7 @@ where
         event: &EventEnvelope<PostEvent>,
         context: &mut ProcessingContext<'_, Tx>,
     ) -> Result<(), HandlerError> {
-        let tx = context.transaction();
+        let tx = context.tx();
         let found = match &event.payload {
             PostEvent::Created { id, title } => {
                 let summary = PostSummary {
@@ -70,7 +70,7 @@ where
 
     /// Before a replay rebuilds it.
     async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
-        self.summaries.clear(context.transaction()).await?;
+        self.summaries.clear(context.tx()).await?;
         Ok(())
     }
 

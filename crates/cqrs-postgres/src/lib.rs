@@ -164,6 +164,15 @@ impl Postgres {
         PostgresEventStore::new(self.pool.clone(), log)
     }
 
+    /// The snapshots of the aggregates `A` in this database, as JSON, at
+    /// revision 1 (see [`PostgresSnapshotStore::with_revision`]): what the
+    /// repository of an aggregate that declares `snapshot(..)` keeps them
+    /// in (`pg.events::<E>(log).repository::<A>()`), for reading or
+    /// writing them by hand.
+    pub fn snapshots<A>(&self) -> PostgresSnapshotStore<A> {
+        PostgresSnapshotStore::new(self.pool.clone())
+    }
+
     /// The schedule of the commands of type `C` kept in the queue `queue`.
     pub fn schedule<C>(&self, queue: &str) -> PostgresSchedule<C> {
         PostgresSchedule::new(self.pool.clone(), queue)

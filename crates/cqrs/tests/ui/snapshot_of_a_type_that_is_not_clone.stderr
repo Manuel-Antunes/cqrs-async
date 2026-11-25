@@ -1,0 +1,19 @@
+error[E0277]: the trait bound `Clock: Clone` is not satisfied
+  --> tests/ui/snapshot_of_a_type_that_is_not_clone.rs:20:20
+   |
+20 |     let _ = events.repository::<Clock>();
+   |                    ^^^^^^^^^^ the trait `Clone` is not implemented for `Clock`
+   |
+help: the trait `KeepSnapshots<A, Snapshots>` is conditionally implemented for `InMemoryEventStore<<A as Aggregate>::Event>`
+  --> src/snapshot.rs
+   |
+   | impl<A: Aggregate + Clone> KeepSnapshots<A, Snapshots> for InMemoryEventStore<A::Event> {
+   | ^^^^^^^^^^^^^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                     |
+   |                     unsatisfied requirement introduced here: `Clock: Clone`
+   = note: required for `InMemoryEventStore<Ticked>` to implement `KeepSnapshots<Clock, Snapshots>`
+help: consider annotating `Clock` with `#[derive(Clone)]`
+   |
+10 + #[derive(Clone)]
+11 | struct Clock {
+   |

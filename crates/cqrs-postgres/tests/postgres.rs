@@ -1069,6 +1069,58 @@ async fn snapshots_are_kept_per_aggregate_and_revision() {
     );
 }
 
+/// Sums the ticks, declaring its own snapshots: after a load that replayed 2
+/// events.
+#[cqrs::aggregate(name = "meter", event = ClockEvent, snapshot(after_events = 2))]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Meter {
+    id: u32,
+    total: u64,
+}
+
+impl Meter {
+    fn apply(&mut self, ClockEvent::Ticked { n }: &ClockEvent) {
+        self.total += n;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_repository_of_the_engine_keeps_the_snapshots_the_aggregate_declares() {
+    let pool = database_or_skip!();
+    let pg = cqrs_postgres::Postgres::new(pool.clone());
+    let events = pg.events::<ClockEvent>("clocks");
+    // Its snapshots are in PostgreSQL, and its transaction is the engine's.
+    let meters: cqrs::aggregate::AggregateLoader<
+        Meter,
+        PostgresEventStore<ClockEvent>,
+        PostgresSnapshotStore<Meter>,
+        PgTransaction,
+    > = events.repository::<Meter>();
+    let rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cqrs_snapshots WHERE stream_type = 'meter'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
+    commit_new::<Meter, _>(&events, 1, ticks(1, 1)).await;
+    assert_eq!(rows().await, 0, "committing never snapshots");
+    let first = meters.load(&1).await.unwrap().unwrap();
+    assert_eq!(first.total, 1);
+    assert_eq!(rows().await, 0, "a load that replayed 1 event is below the policy");
+    events.commit(first, Pending::new(ticks(2, 2))).await.unwrap();
+    // Three events in the stream: the next load replays all 3, so it snapshots.
+    let loaded = meters.load(&1).await.unwrap().unwrap();
+    assert_eq!((loaded.total, loaded.version()), (6, Some(3)));
+    assert_eq!(rows().await, 1, "a load that replayed 2 events or more keeps one");
+
+    // The facade hands out the very store the repository keeps them in.
+    assert_eq!(
+        pg.snapshots::<Meter>().load(&1).await.unwrap(),
+        Some((Meter { id: 1, total: 6 }, 3))
+    );
+}
+
 /// Bookings of a room: each in its own stream, tagged with the room.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, cqrs::DomainEvent)]
 enum RoomEvent {
@@ -1274,14 +1326,7 @@ async fn a_condition_only_fails_on_an_event_matching_all_its_tags() {
 struct Totals {
     fail_once_at: Option<u64>,
     failed: std::sync::atomic::AtomicBool,
-    /// Announces each applied position, once committed.
-    applied: Arc<cqrs::query::QueryUpdateChannel<Applied, u64>>,
 }
-
-/// Subscribed to by the test, to see what the projection announced.
-#[cqrs::query(output = u64, error = ())]
-#[derive(Clone)]
-struct Applied;
 
 #[cqrs::event_handler]
 impl EventHandler for Totals {
@@ -1297,7 +1342,7 @@ impl EventHandler for Totals {
         )
         .bind(event.stream.id())
         .bind(n as i64)
-        .execute(&mut **context.transaction())
+        .execute(&mut **context.tx())
         .await?;
         if Some(event.position) == self.fail_once_at && !self.failed.swap(true, Ordering::Relaxed) {
             return Err(HandlerError::msg("failed after writing"));
@@ -1305,13 +1350,9 @@ impl EventHandler for Totals {
         Ok(())
     }
 
-    async fn committed(&self, event: &EventEnvelope<ClockEvent>) {
-        self.applied.emit(|_| true, event.position);
-    }
-
     async fn reset(&self, context: &mut ProcessingContext<'_, PgTransaction>) -> Result<(), HandlerError> {
         sqlx::query("TRUNCATE clock_totals")
-            .execute(&mut **context.transaction())
+            .execute(&mut **context.tx())
             .await?;
         Ok(())
     }
@@ -1346,7 +1387,6 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         fail_once_at: Some(3),
         ..Totals::default()
     };
-    let mut announced = Box::pin(totals_projection.applied.subscribe(Applied));
     let running = events
         .processor("totals", totals_projection)
         .with_options(options(2, 2))
@@ -1359,11 +1399,6 @@ async fn a_projection_commits_its_changes_with_its_token_so_each_event_applies_o
         (2 * (1 + 2 + 3 + 4 + 5), 10),
         "every tick applied exactly once"
     );
-    // Emitted after each commit only: the rolled-back attempt at 3 is not.
-    let mut positions: Vec<u64> =
-        futures_util::StreamExt::collect(futures_util::StreamExt::take(announced.as_mut(), 10)).await;
-    positions.sort_unstable();
-    assert_eq!(positions, (1..=10).collect::<Vec<_>>());
     // A segment that only saw the other one's events stores its token
     // lazily (when idle): wait for it.
     let stored = async {
@@ -1416,7 +1451,7 @@ impl EventHandler<ClockEvent, PgTransaction> for Counts {
         }
         sqlx::query("INSERT INTO clock_counts (clock, events) VALUES ($1, 1) ON CONFLICT (clock) DO UPDATE SET events = clock_counts.events + 1")
             .bind(event.stream.id())
-            .execute(&mut **context.transaction())
+            .execute(&mut **context.tx())
             .await?;
         Ok(())
     }
@@ -1575,7 +1610,7 @@ impl cqrs::processing::EventInterceptor<ClockEvent, PgTransaction> for AuditRows
     ) -> Result<(), HandlerError> {
         sqlx::query("INSERT INTO clock_audit (position) VALUES ($1)")
             .bind(i64::try_from(event.position).unwrap())
-            .execute(&mut **context.transaction())
+            .execute(&mut **context.tx())
             .await?;
         next.proceed(context).await
     }
@@ -1745,19 +1780,18 @@ impl cqrs::command::CommandHandler for TickKeptHandler {
     async fn handle(
         &self,
         command: &TickKept,
-        events: &mut cqrs::command::CommandContext<ClockEvent>,
-        tx: &mut PgTransaction,
+        ctx: &mut cqrs::command::CommandContext<ClockEvent, PgTransaction>,
     ) -> Result<(), StoreError> {
         let clock = match command.stale {
             Some(version) => cqrs::aggregate::Loaded::at(KeptClock { id: 1, ticks: version }, version),
-            None => find_kept_in(tx, 1)
+            None => find_kept_in(ctx.tx(), 1)
                 .await
                 .unwrap_or_else(|| cqrs::aggregate::New(1).into()),
         };
         let from = clock.ticks + 1;
-        events.extend(ticks(from, command.ticks));
-        let clock = events.record(clock);
-        save_kept(tx, &clock).await;
+        ctx.extend(ticks(from, command.ticks));
+        let clock = ctx.commit(clock);
+        save_kept(ctx.tx(), &clock).await;
         if command.fail_after_saving {
             return Err(StoreError::backend("failed after saving"));
         }

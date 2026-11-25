@@ -147,7 +147,7 @@ impl<'a, Tx> ProcessingContext<'a, Tx> {
 
     /// The unit of work, to write the read model in (it commits with the
     /// processor's token).
-    pub fn transaction(&mut self) -> &mut Tx {
+    pub fn tx(&mut self) -> &mut Tx {
         self.transaction
     }
 
@@ -219,14 +219,6 @@ pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
         context: &mut ProcessingContext<'_, Tx>,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send;
 
-    /// After the unit of work committed: where query updates are emitted,
-    /// so subscribers never see a change that was rolled back. Default:
-    /// nothing.
-    fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
-        let _ = event;
-        async {}
-    }
-
     /// Clears what it built before a replay rebuilds it, in its own unit of work, called by
     /// [`TrackingProcessor::reset`](crate::TrackingProcessor::reset).
     /// Default: nothing to clear.
@@ -253,22 +245,6 @@ pub trait EventHandler<E: DomainEvent, Tx: Send = ()>: Send + Sync {
             self.handle(event, context).await
         }
     }
-
-    /// [`committed`](Self::committed), with the same replay rule as
-    /// `handle_in`. Sealed too.
-    #[doc(hidden)]
-    fn committed_in(
-        &self,
-        event: &EventEnvelope<E>,
-        replay: bool,
-        _: sealed::Internal,
-    ) -> impl Future<Output = ()> + Send {
-        async move {
-            if !replay || Self::REPLAY {
-                self.committed(event).await;
-            }
-        }
-    }
 }
 
 // Forwards every method, so an override of a provided one is never lost.
@@ -284,10 +260,6 @@ impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventHandler<E, Tx> for A
         (**self).handle(event, context)
     }
 
-    fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
-        (**self).committed(event)
-    }
-
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
         (**self).reset(context)
     }
@@ -299,15 +271,6 @@ impl<E: DomainEvent, Tx: Send, H: EventHandler<E, Tx>> EventHandler<E, Tx> for A
         internal: sealed::Internal,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send {
         (**self).handle_in(event, context, internal)
-    }
-
-    fn committed_in(
-        &self,
-        event: &EventEnvelope<E>,
-        replay: bool,
-        internal: sealed::Internal,
-    ) -> impl Future<Output = ()> + Send {
-        (**self).committed_in(event, replay, internal)
     }
 }
 
@@ -328,10 +291,6 @@ macro_rules! tuple_event_handler {
                 Ok(())
             }
 
-            async fn committed(&self, event: &EventEnvelope<E>) {
-                $(self.$index.committed(event).await;)+
-            }
-
             async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
                 $(self.$index.reset(context).await?;)+
                 Ok(())
@@ -340,10 +299,6 @@ macro_rules! tuple_event_handler {
             async fn handle_in(&self, event: &EventEnvelope<E>, context: &mut ProcessingContext<'_, Tx>, internal: sealed::Internal) -> Result<(), HandlerError> {
                 $(self.$index.handle_in(event, context, internal).await?;)+
                 Ok(())
-            }
-
-            async fn committed_in(&self, event: &EventEnvelope<E>, replay: bool, internal: sealed::Internal) {
-                $(self.$index.committed_in(event, replay, internal).await;)+
             }
         }
     };

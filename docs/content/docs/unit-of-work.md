@@ -8,7 +8,7 @@ processor does with an event, commits as a whole or not at all. There are
 two, one at each end of the log:
 
 - **the command's**: the gateway opens it, the handler and its repositories
-  write in it, the library appends the recorded events in it and commits;
+  write in it, the library appends the committed events in it and commits;
 - **the processor's**: a tracking processor opens it, the event handler
   writes its read model in it, the processor stores its token in it and
   commits.
@@ -28,22 +28,26 @@ gateway's `#[gateway(unit)]` field (a `UnitOfWork`):
 
 ```text
 begin      unit.begin()                                  -> Tx  (() without a transaction)
-handle     handler.handle(&command, &mut ctx, &mut tx)   repositories read and write in tx;
-                                                         the domain appends to ctx; ctx.record(entity)
-append     append_writes(unit, &mut tx, ctx.take_writes())   what was recorded, entity by entity
+handle     handler.handle(&command, &mut ctx)            ctx owns tx; repositories read and write in
+                                                         ctx.tx(), lent by the handler; the domain appends to ctx;
+                                                         ctx.commit(entity), then repository.save(&entity, ctx.tx())
+append     append_writes(unit, &mut tx, writes)          what was committed, entity by entity
+                                                         ((writes, tx) = ctx.into_parts())
 commit     unit.commit(tx)
 announce   unit.announce(events)                         processors, subscriptions, inline handlers
 ```
 
-An error at any step before the commit drops `tx`, which rolls back
-whatever the handler and its repositories wrote. The events are announced
+An error at any step before the commit drops the context, and `tx` with it,
+which rolls back whatever the handler and its repositories wrote. The events are announced
 only once committed, so nothing downstream ever sees a rolled-back event.
 
-The handler decides and records; it never appends nor commits.
-`ctx.record(entity)` assigns the events appended since the last call to
-that entity and returns the entity evolved by them, at the version they
-take it to. It is pure: nothing is written yet. A repository that keeps
-state saves that value, in `tx`:
+The handler decides and commits to its entities; it never appends the
+events nor commits the transaction. `ctx.commit(entity)` assigns the events
+appended since the last call to that entity and returns the entity evolved
+by them, at the version they take it to: a version of the entity, not a
+database commit, and nothing is written yet. A repository that keeps state
+then saves that value (`save(&entity, ctx.tx())`), in the context's
+transaction:
 
 ```rust
 // src/application/commands/publish_post.rs
@@ -52,34 +56,38 @@ impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R,
     async fn handle(
         &self,
         command: &PublishPost,
-        ctx: &mut CommandContext<PostEvent>,
-        tx: &mut R::Tx,
+        ctx: &mut CommandContext<PostEvent, R::Tx>,
     ) -> Result<(), BlogError> {
-        let post = self.posts.find(command.id, tx).await?.ok_or(NotFound(command.id))?;
+        let post = self.posts.find(&command.id, ctx.tx()).await?.ok_or(NotFound(command.id))?;
         post.publish(ctx)?;
-        let post = ctx.record(post);
-        self.posts.save(&post, tx).await?;
+        let post = ctx.commit(post);
+        self.posts.save(&post, ctx.tx()).await?;
         Ok(())
     }
 }
 ```
 
-Events appended but never recorded when `handle` returns `Ok` are a bug (a
-forgotten `record`): debug builds panic.
+Events appended but never committed when `handle` returns `Ok` are a bug (a
+forgotten `commit`): in every build, the unit refuses the command with a
+store error and appends nothing.
 
 ### Two modes, chosen by the signature
 
-`#[cqrs::command_handler]` reads the mode from `handle`'s arguments:
+`#[cqrs::command_handler]` reads the mode from the type of `handle`'s
+context:
 
-| `handle` takes | Mode (`CommandHandler::Unit`) | What commits |
+| `ctx` is | Mode (`CommandHandler::Unit`) | What commits |
 |---|---|---|
-| `(&self, command, ctx)` | `Autocommit` | the store appends the recorded events on its own, in one statement. One entity per command. The fastest path, for an event-sourced repository. |
-| `(&self, command, ctx, tx: &mut Tx)` | `InTransaction<Tx>` | the unit opens a transaction of its `TransactionManager`; the handler's writes, the repositories' writes and the events commit together. |
+| `&mut CommandContext<Event>` | `Autocommit` | the store appends the committed events on its own, in one statement. One entity per command. The fastest path, for an event-sourced repository. |
+| `&mut CommandContext<Event, Tx>` | `InTransaction<Tx>` | the unit opens a transaction of its `TransactionManager`, which the context owns; the handler's writes, the repositories' writes and the events commit together. |
 
-The blog's handlers take `tx: &mut R::Tx`, so the repository adapter picks
-the transaction: `EventSourcedPostRepository` has `Tx = ()` (its events are
-its state, `save` writes nothing), `SeaOrmPostRepository` has
-`Tx = PgTransaction` (each post's row is saved with its events).
+The blog's handlers take `CommandContext<PostEvent, R::Tx>`, so the
+repository picks the transaction: the one the engine hands out
+(`events.repository::<Post>()`) takes the engine's, `()` in memory and
+`PgTransaction` on PostgreSQL (its events are its state, `save` writes
+nothing), and `SeaOrmPostRepository` has `Tx = PgTransaction` (each post's
+row is saved with its events). A third argument to `handle` does not compile: the
+transaction is `ctx.tx()`.
 
 Two units of work are provided:
 
@@ -88,7 +96,7 @@ Two units of work are provided:
 | `Events<E, S, C, M>` | the store appends, then broadcasts | `Tx = M::Tx`: a transaction of its `TransactionManager` `M`; the store appends in it (`S: AppendEvents<E, M::Tx>`) |
 | `InlinePublisher<E, S, ..>` | the store appends, then the inline handlers run | `Tx = ()` only: memory has no transaction to roll back |
 
-`Cqrs::new(events).commands(|events| PostCommandGateway::new(repo, events))`
+`Cqrs::new(events).commands(|events| PostCommandGateway::new(repo, ids, events))`
 hands the gateway its unit. On PostgreSQL,
 `cqrs_postgres::Postgres::new(pool).events::<PostEvent>("posts")` gives an
 `Events` whose transactions are `PostgresTransactions` (`Tx = PgTransaction`).
@@ -115,7 +123,7 @@ fn conflict_retries(&self) -> u32 {
 ```
 
 Since the handler may run more than once, it must have no side effects
-besides what it writes in `tx`. An e-mail, a call to another service, a
+besides what it writes in the context's transaction. An e-mail, a call to another service, a
 message to a broker: those go to a projection namespace with
 `const REPLAY: bool = false`, which runs once the events are committed (see
 [Event processing](event-processing.md#namespaces-each-with-its-processor)).
@@ -126,20 +134,21 @@ nothing it appended survived. `UnitOfWork::ROLLS_BACK` says whether dropping
 the transaction undoes the appends: true for a database
 (`TransactionManager::ROLLS_BACK`, default true), false in memory (`()` and
 `InlinePublisher`). When a unit that cannot roll back loses a race after
-recording more than one entity (the first append may have gone through),
+committing to more than one entity (the first append may have gone through),
 the handler is not run again: the conflict reaches the caller, and nothing
 is appended twice. With one entity, nothing was appended when it lost, so
 it is retried as usual.
 
 ### Several entities in one command
 
-- **`Autocommit`**: recording more than one entity is an error, returned
+- **`Autocommit`**: committing to more than one entity is an error, returned
   before anything is appended: their appends would be separate statements,
   not atomic. Take the unit's transaction instead.
 - **`InTransaction<Tx>` on a database**: the writes are appended one after
-  the other in the same transaction, so they commit together. Each later
-  write's condition skips the events the run itself just appended (they
-  match what it read), and checks only what others appended.
+  the other in the same transaction, so they commit together. What the
+  writes were conditioned on is checked as one, on the first write; each
+  later write's condition skips the events the run itself just appended
+  (they match what it read), and checks only what others appended.
 - **`InTransaction<()>` in memory**: appended one after the other, with
   no rollback (see the `ROLLS_BACK` rule).
 
@@ -182,7 +191,6 @@ begin          TransactionManager::begin() -> Tx
     handle       EventHandler::handle(event, &mut ProcessingContext<'_, Tx>)
 store token    TokenStore::store(&mut tx, token)    only if this instance still holds the segment
 commit         TransactionManager::commit(tx)
-committed      EventHandler::committed(event)        after the commit only
 ```
 
 | Axon phase | Here |
@@ -190,7 +198,7 @@ committed      EventHandler::committed(event)        after the commit only
 | pre-invocation / invocation | `begin`, interceptors, `handle` |
 | prepare commit | storing the token in the same transaction |
 | commit | `commit(tx)` |
-| after commit | `committed(event)` |
+| after commit | the projection namespace's `updated`, on every instance ([live queries](../guide/06-live-queries.md)) |
 | on error / rollback | dropping `tx` (an `Err` anywhere before the commit) |
 
 With a batch size above 1 (`batch = N` on a namespace's handler, or
@@ -260,7 +268,7 @@ where
         event: &EventEnvelope<PostEvent>,
         context: &mut ProcessingContext<'_, Tx>,
     ) -> Result<(), HandlerError> {
-        let tx = context.transaction();
+        let tx = context.tx();
         let found = match &event.payload {
             PostEvent::Created { id, title } => {
                 let summary = PostSummary {
@@ -293,9 +301,6 @@ work, but its writes are not rolled back with it: make them idempotent.
   handled again; after it, both are there.
 - **At least once for everything else**: writes outside `Tx` and side
   effects in `handle` may happen again on a retry.
-- **After commit only**: `committed` runs once the commit succeeded, never
-  for a rolled-back attempt. It cannot fail, and a crash between the commit
-  and `committed` skips it.
 - **Ownership.** `TokenStore::store` moves the token only if this instance
   still holds the segment's claim. If another instance took it over, it
   returns `false`: the unit is rolled back and the worker stops, so two
@@ -319,7 +324,7 @@ work, but its writes are not rolled back with it: make them idempotent.
   `const REPLAY: bool = false` never see them (nor do their interceptors).
 - **Dead-letter retries.** `retry_dead_letters()` runs each parked event in
   a unit of work like the processor's: `handle`, the letter's removal,
-  commit, `committed`. The removal commits with what the handler wrote, so
+  commit. The removal commits with what the handler wrote, so
   neither a crash nor two retries running at once apply a parked event
   twice.
 
@@ -331,7 +336,7 @@ See [Event processing](event-processing.md) for the settings.
 impl<'a, Tx> ProcessingContext<'a, Tx> {
     pub fn new(transaction: &'a mut Tx, replay: bool) -> Self;
     pub fn in_processor(transaction: &'a mut Tx, replay: bool, processor: &'a str) -> Self;
-    pub fn transaction(&mut self) -> &mut Tx;   // the unit of work
+    pub fn tx(&mut self) -> &mut Tx;   // the unit of work
     pub fn replay(&self) -> bool;               // Axon's ReplayStatus
     pub fn processor(&self) -> &str;            // "post.summaries"; "" outside a processor
 }
@@ -345,7 +350,7 @@ a handler without a processor.
 
 Event interceptors (`EventInterceptor<E, Tx>`) receive the handler's
 context and call the rest of the chain with it, so what they write in
-`context.transaction()` commits or rolls back with the handler's changes:
+`context.tx()` commits or rolls back with the handler's changes:
 
 ```rust
 impl EventInterceptor<ClockEvent, PgTransaction> for AuditRows {
@@ -357,7 +362,7 @@ impl EventInterceptor<ClockEvent, PgTransaction> for AuditRows {
     ) -> Result<(), HandlerError> {
         sqlx::query("INSERT INTO clock_audit (position) VALUES ($1)")
             .bind(i64::try_from(event.position).unwrap())
-            .execute(&mut **context.transaction())
+            .execute(&mut **context.tx())
             .await?;
         next.proceed(context).await
     }
@@ -373,8 +378,8 @@ each once.
 
 An `InlinePublisher` runs its handlers in the caller's task, after the
 command's unit committed. There is no transaction to share (`Tx = ()`):
-the append was the commit. Each event goes through `handle`, then
-`committed`; a failure stops that handler for the rest of the commit and
+the append was the commit. Each event goes through `handle`; a failure
+stops that handler for the rest of the commit and
 goes to the publisher's `OnFailure` policy. No retries, no tokens.
 
 ## SeaORM in the same transaction
@@ -414,9 +419,9 @@ the library's statements are sqlx's, checked at compile time.
 | Axon 5 | Here | Why |
 |---|---|---|
 | Resources on the context (`putResource`, `getResource` by key) | The context carries one typed resource, `Tx`; anything else is a field of the handler or interceptor | A heterogeneous resource map needs `dyn Any`. A custom `TransactionManager` can make `Tx` any struct (a transaction plus a tenant, a clock...). |
-| Lifecycle callbacks registered at runtime (`onCommit`, `runOnAfterCommit`, `onError`) | Fixed hooks: `committed` after commit; rollback on `Err`; interceptors around `handle` | Registered closures need boxing. Every component that needs a phase implements it statically. |
-| One `ProcessingContext` type for commands, queries and events | `CommandContext<E>` for commands, `ProcessingContext<Tx>` for events, none for queries | Each carries exactly what its handlers use, typed. |
-| The command's transaction from the context | `tx: &mut Tx` as an argument of `handle` | The mode (`Autocommit` or `InTransaction<Tx>`) is part of the handler's type, so a unit that cannot provide that transaction does not compile. |
+| Lifecycle callbacks registered at runtime (`onCommit`, `runOnAfterCommit`, `onError`) | Fixed hooks: rollback on `Err`; interceptors around `handle`; after the commit, a projection namespace's `updated`, on every instance | Registered closures need boxing. Every component that needs a phase implements it statically. |
+| One `ProcessingContext` type for commands, queries and events | `CommandContext<E, Tx>` for commands, `ProcessingContext<Tx>` for events, none for queries | Each carries exactly what its handlers use, typed. |
+| The command's transaction from the context | `ctx.tx()` on a `CommandContext<E, Tx>` | The mode (`Autocommit` or `InTransaction<Tx>`) is part of the context's type, so a unit that cannot provide that transaction does not compile. |
 
 ## Writing your own transaction manager
 

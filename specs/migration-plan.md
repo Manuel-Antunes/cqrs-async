@@ -200,6 +200,7 @@ regressão ali precisa de explicação no commit, mas quem decide é a tabela.
 | D22 | Mutex envenenado (8.4) | **Decidido:** recuperar o guard (`PoisonError::into_inner`) num helper, sem dependência nova. |
 | D23 | Derives redundantes | **Decidido:** comandos, queries e agregados se declaram só por atributo (`#[cqrs::command]`, `#[cqrs::query]`, `#[cqrs::aggregate]`); os derives `Command`, `Query` e `AggregateRoot` saíram. Uma forma para cada coisa. `#[derive(cqrs::DomainEvent)]` fica (eventos não têm forma de atributo). |
 | D24 | Nome no código | **Decidido:** os pacotes são `cqrs-async*`, mas o código escreve `cqrs::`, `cqrs_postgres::` e `cqrs_sea_orm::` (`[lib] name`). Os macros acham o crate pelo nome do pacote: sem renomear é `::cqrs`; renomeado, a chave escolhida. O crate antigo `cqrs` (0.3.1, 2019) só conflita com quem depender dos dois. |
+| D25 | Contrato de repositório e repositório da engine | **Decidido (2026-11-25):** revê a 7.3. `Repository<A>` opcional (`find(id, tx)`, `save(entity, tx)`, só a transação); a transação mora no contexto (`CommandContext<E, Tx>`, `ctx.tx()`, o modo da unidade vem do tipo); `ctx.record` virou `ctx.commit`; `events.repository::<A>()` monta o loader com store, snapshots e transação da engine; a política de snapshot é do agregado (`#[cqrs::aggregate(.., snapshot(after_events, after_sourcing))]`), checada em compilação contra o que o store sabe guardar. Detalhes, revisões e o que ficou de fora em [repository-contract-plan.md](repository-contract-plan.md); o que mudou para quem usa, no `CHANGELOG.md`. |
 
 ## Visão geral do que resta
 
@@ -370,6 +371,10 @@ appended.announce();                                              // processors 
   comportamento de hoje.
 
 ### 7.3 Repositórios com estado
+
+**Revisto em 2026-11-25 (D25):** a biblioteca passou a oferecer um contrato
+opcional, `Repository<A>`, e a engine entrega o repositório de cada
+agregado. O texto abaixo é o desenho anterior.
 
 O usuário implementa o repositório como quiser; a biblioteca não define
 trait de repositório nenhum.

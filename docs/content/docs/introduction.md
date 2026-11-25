@@ -25,7 +25,7 @@ registry finds at startup are compile errors here:
   be wired), or a handler for a namespace the projection does not list;
 - an update emitted for a query the projection does not list in
   `updates(..)`;
-- an entity recorded with events of another aggregate's type.
+- an entity committed with events of another aggregate's type.
 
 It is async from the ground up: every contract is a `Future` or a
 `Stream`, and committed events are a `Stream` you can hand to axum,
@@ -84,8 +84,8 @@ impl From<StoreError> for BankError {
 The commands, and the gateway handling them, one impl each. The gateway is
 the handler: one struct with what its commands need, and the unit of work
 they run in (`#[gateway(unit)]`). A handler appends through its
-`CommandContext` and records the entity the events belong to; it never
-commits.
+`CommandContext` and commits them to the entity they belong to; it never
+commits the transaction.
 
 ```rust
 #[cqrs::command(error = BankError)]
@@ -105,7 +105,7 @@ struct Bank<P> {
 impl<P> CommandHandler<Open> for Bank<P> {
     async fn handle(&self, command: &Open, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
         ctx.append(AccountEvent::Opened);
-        ctx.record(New::<Account>(command.id)); // a new stream: fails if it exists
+        ctx.commit(New::<Account>(command.id)); // a new stream: fails if it exists
         Ok(())
     }
 }
@@ -113,9 +113,9 @@ impl<P> CommandHandler<Open> for Bank<P> {
 #[cqrs::command_handler]
 impl<P> CommandHandler<Deposit> for Bank<P> {
     async fn handle(&self, command: &Deposit, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
-        let account = self.accounts.load(&command.id).await?.ok_or(BankError::NoSuchAccount)?;
+        let account = self.accounts.find(&command.id, ctx.tx()).await?.ok_or(BankError::NoSuchAccount)?;
         account.deposit(command.amount, ctx)?;
-        ctx.record(account); // appended and committed once the handler returns
+        ctx.commit(account); // appended to its stream once the handler returns
         Ok(())
     }
 }
@@ -161,12 +161,12 @@ application's unit (`Cqrs`), built by a typed builder.
 
 ```rust
 fn main() -> Result<(), BankError> {
-    let store = InMemoryEventStore::new();
     let balances = Balances::default();
-    let publisher = InlinePublisher::new(store.clone())
+    let publisher = InlinePublisher::new(InMemoryEventStore::new())
         .with_projection(AccountProjection { balances: Arc::clone(&balances) });
+    // The publisher hands out the accounts' repository: its store, no snapshots.
     let bank = Cqrs::from_publisher(publisher)
-        .commands(|events| Bank { accounts: AggregateLoader::new(store), events })
+        .commands(|events| Bank { accounts: events.repository::<Account>(), events })
         .queries(Accounts { balances })
         .build();
 
@@ -240,8 +240,8 @@ application built on it:
 - **The domain does not know the framework.** An aggregate is a struct;
   its decisions take `&mut impl EventAppender<E>`, and its state changes
   only in `apply` (`Aggregate::evolve`).
-- **The framework commits, not the handler.** A command handler records
-  what it decided; the unit of work appends and commits, and runs the
+- **The framework commits the transaction, not the handler.** A command
+  handler commits what it decided to its entities; the unit of work appends and commits, and runs the
   handler again after a lost race. So a handler has no side effects: those
   belong in a projection namespace, after the commit.
 - **The store is the source of truth.** Read models, live feeds, query

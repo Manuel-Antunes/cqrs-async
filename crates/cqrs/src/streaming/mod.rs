@@ -37,9 +37,9 @@ pub use updates::{
 };
 
 use crate::{
-    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor, FanIn, HandlerError,
-    InMemoryEventStore, InMemoryLogs, InMemoryTokenStore, ProcessingFailure, ReadLog, StoreError, TokenStore,
-    TransactionManager, sync::Locked,
+    Aggregate, AggregateLoader, AppendEvents, DomainEvent, EventEnvelope, EventFeed, EventHandler, EventProcessor,
+    FanIn, HandlerError, InMemoryEventStore, InMemoryLogs, InMemoryTokenStore, KeepSnapshots, ProcessingFailure,
+    ReadLog, Snapshotting, StoreError, TokenStore, TransactionManager, sync::Locked,
 };
 
 /// The live feed: Tokio's `broadcast` of committed envelopes, as is.
@@ -199,6 +199,31 @@ impl<E, S, C, M> Events<E, S, C, M> {
         for follower in self.followers.locked().iter() {
             wake(follower);
         }
+    }
+
+    /// The repository of the aggregates `A` of these events, for command
+    /// handlers: it reads from the engine's store, keeps the snapshots that
+    /// store can keep for `A` as `A` declares (`snapshot(..)` of
+    /// `#[cqrs::aggregate]`; none if it declares none), and takes part in the
+    /// engine's units of work: its transaction is the transaction manager's
+    /// (`()` in memory).
+    ///
+    /// The store must be able to keep snapshots of an aggregate that
+    /// declares them (`Clone` in memory, `Serialize + DeserializeOwned` on
+    /// PostgreSQL), or this does not compile. Where the transaction is not
+    /// wanted (a handler of units without one over a transactional engine),
+    /// `.in_transaction::<()>()` names it.
+    ///
+    /// Snapshots are an optimization: each call hands out the snapshots of its
+    /// own, and where the store keeps them in memory two repositories of one
+    /// aggregate do not share them.
+    pub fn repository<A>(&self) -> AggregateLoader<A, S, <S as KeepSnapshots<A, A::Mode>>::Snapshots, M::Tx>
+    where
+        A: Snapshotting<Event = E>,
+        S: Clone + KeepSnapshots<A, A::Mode>,
+        M: TransactionManager,
+    {
+        crate::loader::declared_by_the_aggregate(&self.store)
     }
 
     /// The token store the processors share.

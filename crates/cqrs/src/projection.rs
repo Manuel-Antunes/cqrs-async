@@ -196,9 +196,6 @@ pub trait Route<Tx: Send>: Projection {
         context: &mut ProcessingContext<'_, Tx>,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send;
 
-    /// The handler of `namespace`'s post-commit step.
-    fn committed(&self, namespace: usize, event: &EventEnvelope<Self::Event>) -> impl Future<Output = ()> + Send;
-
     /// The handler of `namespace`'s reset, before a replay.
     fn reset(
         &self,
@@ -269,12 +266,6 @@ pub trait NamespaceHandler<const ID: u64, E: DomainEvent, Tx: Send = ()>:
         event: &EventEnvelope<E>,
         context: &mut ProcessingContext<'_, Tx>,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send;
-
-    /// As [`EventHandler::committed`].
-    fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
-        let _ = event;
-        async {}
-    }
 
     /// As [`EventHandler::reset`].
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
@@ -351,10 +342,6 @@ impl<P: Route<Tx>, Tx: Send> EventHandler<P::Event, Tx> for NamespaceOf<P> {
         self.projection.handle(self.namespace, event, context)
     }
 
-    fn committed(&self, event: &EventEnvelope<P::Event>) -> impl Future<Output = ()> + Send {
-        self.projection.committed(self.namespace, event)
-    }
-
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
         self.projection.reset(self.namespace, context)
     }
@@ -369,12 +356,6 @@ impl<P: Route<Tx>, Tx: Send> EventHandler<P::Event, Tx> for NamespaceOf<P> {
             return Ok(());
         }
         self.projection.handle(self.namespace, event, context).await
-    }
-
-    async fn committed_in(&self, event: &EventEnvelope<P::Event>, replay: bool, _: crate::message::sealed::Internal) {
-        if !replay || P::replays(self.namespace) {
-            self.projection.committed(self.namespace, event).await;
-        }
     }
 }
 
@@ -398,10 +379,6 @@ impl<P: Route<Tx>, Tx: Send> Route<Tx> for Arc<P> {
         context: &mut ProcessingContext<'_, Tx>,
     ) -> impl Future<Output = Result<(), HandlerError>> + Send {
         (**self).handle(namespace, event, context)
-    }
-
-    fn committed(&self, namespace: usize, event: &EventEnvelope<Self::Event>) -> impl Future<Output = ()> + Send {
-        (**self).committed(namespace, event)
     }
 
     fn reset(

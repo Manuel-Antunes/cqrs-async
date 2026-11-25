@@ -4,7 +4,8 @@
 //!
 //! - [`SeaOrm`](crate::infrastructure::postgres::SeaOrm): SeaORM over a borrowed sqlx transaction (the `cqrs-sea-orm`
 //!   crate).
-//! - [`SeaOrmPostRepository`]: the posts' state, saved with their events.
+//! - [`SeaOrmPostRepository`]: the posts' state, saved with their events,
+//!   and their ids, from a sequence.
 //! - [`SeaOrmPostSummaries`]: the read model, written in the projection's
 //!   unit of work.
 //! - [`Migrator`](crate::infrastructure::postgres::Migrator): the blog's migrations, the library's tables among them.

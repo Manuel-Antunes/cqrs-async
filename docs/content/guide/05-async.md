@@ -24,8 +24,8 @@ pub fn start_in_memory()
     // ...the audit log and the metrics of part 7
 
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let app = Cqrs::new(Events::new(store.clone()))
-        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+    let app = Cqrs::new(Events::new(store))
+        .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(projection)
         .build();
@@ -59,7 +59,7 @@ A processor:
    the live broadcast, falling back to the store whenever it misses
    something;
 2. runs events in a **unit of work**: begin, `handle`, store the token,
-   commit, then `committed`. The summaries take up to 64 waiting events
+   commit. The summaries take up to 64 waiting events
    per unit of work (their `batch = 64`); the notifications one;
 3. on failure, rolls back and retries with backoff, holding back only the
    failing post's segment.

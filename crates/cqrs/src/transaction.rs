@@ -12,9 +12,7 @@ use crate::StoreError;
 ///
 /// Ownership is the protocol: [`begin`](Self::begin) hands a transaction
 /// out, the participants borrow it, and [`commit`](Self::commit) consumes
-/// it. A transaction dropped without a commit is rolled back, and an event handler's
-/// [`committed`](crate::EventHandler::committed) runs once the commit
-/// returned (its after-commit phase).
+/// it. A transaction dropped without a commit is rolled back.
 ///
 /// The processor checks at compile time that its token store, its
 /// dead-letter queue and its handler all take part in the same `Tx`: a read

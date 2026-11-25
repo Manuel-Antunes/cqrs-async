@@ -87,7 +87,7 @@ tuple_interceptor!(A 0, B 1, C 2, D 3, E 4, F5 5, G 6, H 7);
 /// Runs around the handling of each event of type `E` by an event handler
 /// or a projection,
 /// inside its unit of work: it gets the handler's [`ProcessingContext`], so
-/// what it writes in `context.transaction()` commits or rolls back with the
+/// what it writes in `context.tx()` commits or rolls back with the
 /// handler's changes and the processor's token. It may look at the event,
 /// time or trace its handling, fail it (the processor retries it, or parks
 /// it), or skip it by returning `Ok(())` without calling `next`: the event
@@ -274,8 +274,7 @@ where
 }
 
 /// An event handler (or projection) whose events go through `I`, inside
-/// its unit of work. Replayed events it skips skip `I` too; `committed`
-/// runs as is.
+/// its unit of work. Replayed events it skips skip `I` too.
 impl<E, Tx, H, I> EventHandler<E, Tx> for Intercepted<H, I>
 where
     E: DomainEvent,
@@ -298,10 +297,6 @@ where
                 event,
             },
         )
-    }
-
-    fn committed(&self, event: &EventEnvelope<E>) -> impl Future<Output = ()> + Send {
-        self.inner.committed(event)
     }
 
     fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> impl Future<Output = Result<(), HandlerError>> + Send {
@@ -327,15 +322,6 @@ where
                 },
             )
             .await
-    }
-
-    fn committed_in(
-        &self,
-        event: &EventEnvelope<E>,
-        replay: bool,
-        internal: crate::message::sealed::Internal,
-    ) -> impl Future<Output = ()> + Send {
-        self.inner.committed_in(event, replay, internal)
     }
 }
 
@@ -384,10 +370,6 @@ where
             event,
         };
         self.interceptor.intercept(event, context, next)
-    }
-
-    fn committed(&self, namespace: usize, event: &EventEnvelope<P::Event>) -> impl Future<Output = ()> + Send {
-        self.inner.committed(namespace, event)
     }
 
     fn reset(

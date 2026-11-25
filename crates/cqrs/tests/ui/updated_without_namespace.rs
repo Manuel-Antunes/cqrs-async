@@ -1,3 +1,5 @@
+// The macro refuses the impl, so the imports it would use are not used.
+#![allow(unused_imports)]
 use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
 
 #[derive(Clone, cqrs::DomainEvent)]

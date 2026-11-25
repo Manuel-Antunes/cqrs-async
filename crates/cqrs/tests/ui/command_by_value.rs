@@ -1,3 +1,5 @@
+// The macro refuses the impl, so the imports it would use are not used.
+#![allow(unused_imports)]
 use cqrs::{command::{CommandContext, CommandHandler}, store::StoreError};
 
 #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]

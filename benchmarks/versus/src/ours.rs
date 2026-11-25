@@ -89,7 +89,7 @@ impl<R: Accounts, P> CommandHandler<Execute> for Bank<R, P> {
         for event in account.state.decide(&command.command)? {
             events.append(event);
         }
-        events.record(account);
+        events.commit(account);
         Ok(())
     }
 
@@ -116,14 +116,14 @@ impl EventHandler for AccountViews {
         )
         .bind(event.stream.id())
         .bind(event.payload.delta())
-        .execute(&mut **context.transaction())
+        .execute(&mut **context.tx())
         .await?;
         Ok(())
     }
 
     async fn reset(&self, context: &mut ProcessingContext<'_, PgTransaction>) -> Result<(), HandlerError> {
         sqlx::query("TRUNCATE account_views")
-            .execute(&mut **context.transaction())
+            .execute(&mut **context.tx())
             .await?;
         Ok(())
     }

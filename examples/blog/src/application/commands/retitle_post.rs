@@ -25,16 +25,15 @@ pub struct RetitlePost {
 /// is committed if the domain refuses.
 #[cqrs::command_handler]
 impl<R: PostRepository, P> CommandHandler<RetitlePost> for PostCommandGateway<R, P> {
-    async fn handle(
-        &self,
-        command: &RetitlePost,
-        ctx: &mut CommandContext<PostEvent>,
-        tx: &mut R::Tx,
-    ) -> Result<(), BlogError> {
-        let post = self.posts.find(command.id, tx).await?.ok_or(NotFound(command.id))?;
+    async fn handle(&self, command: &RetitlePost, ctx: &mut CommandContext<PostEvent, R::Tx>) -> Result<(), BlogError> {
+        let post = self
+            .posts
+            .find(&command.id, ctx.tx())
+            .await?
+            .ok_or(NotFound(command.id))?;
         post.retitle(command.title.as_str(), ctx)?;
-        let post = ctx.record(post);
-        self.posts.save(&post, tx).await?;
+        let post = ctx.commit(post);
+        self.posts.save(&post, ctx.tx()).await?;
         Ok(())
     }
 }

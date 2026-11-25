@@ -11,18 +11,23 @@ pub use cqrs::query
 pub use cqrs::query_gateway
 pub use cqrs::query_handler
 pub mod cqrs::aggregate
-pub struct cqrs::aggregate::AggregateLoader<A, S, N>
-impl<A, S, N> cqrs::aggregate::AggregateLoader<A, S, N> where A: cqrs::aggregate::Aggregate, S: cqrs::store::LoadStream<<A as cqrs::aggregate::Aggregate>::Event> + cqrs::store::SourceEvents<<A as cqrs::aggregate::Aggregate>::Event>, N: cqrs::aggregate::SnapshotStore<A>
-pub async fn cqrs::aggregate::AggregateLoader<A, S, N>::load(&self, &<A as cqrs::aggregate::Aggregate>::Id) -> core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>
-pub async fn cqrs::aggregate::AggregateLoader<A, S, N>::load_in(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut cqrs::command::CommandContext<<A as cqrs::aggregate::Aggregate>::Event>) -> core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>
-pub async fn cqrs::aggregate::AggregateLoader<A, S, N>::source(&self, cqrs::event::EventCriteria, &mut cqrs::command::CommandContext<<A as cqrs::aggregate::Aggregate>::Event>) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<<A as cqrs::aggregate::Aggregate>::Event>>, cqrs::store::StoreError>
-impl<A, S, N> cqrs::aggregate::AggregateLoader<A, S, N>
-pub fn cqrs::aggregate::AggregateLoader<A, S, N>::store(&self) -> &S
-pub fn cqrs::aggregate::AggregateLoader<A, S, N>::with_snapshots<N2>(self, N2, u64) -> cqrs::aggregate::AggregateLoader<A, S, N2>
+pub struct cqrs::aggregate::AggregateLoader<A, S, N, Tx>
+impl<A, S, N, Tx> cqrs::aggregate::AggregateLoader<A, S, N, Tx> where A: cqrs::aggregate::Aggregate, S: cqrs::store::LoadStream<<A as cqrs::aggregate::Aggregate>::Event> + cqrs::store::SourceEvents<<A as cqrs::aggregate::Aggregate>::Event>, N: cqrs::aggregate::SnapshotStore<A>
+pub async fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::load(&self, &<A as cqrs::aggregate::Aggregate>::Id) -> core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>
+pub async fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::load_in<Tx2>(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut cqrs::command::CommandContext<<A as cqrs::aggregate::Aggregate>::Event, Tx2>) -> core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>
+pub async fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::source(&self, cqrs::event::EventCriteria, &mut cqrs::command::CommandContext<<A as cqrs::aggregate::Aggregate>::Event, Tx>) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<<A as cqrs::aggregate::Aggregate>::Event>>, cqrs::store::StoreError>
+impl<A, S, N, Tx> cqrs::aggregate::AggregateLoader<A, S, N, Tx>
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::in_transaction<Tx2>(self) -> cqrs::aggregate::AggregateLoader<A, S, N, Tx2>
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::store(&self) -> &S
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::with_snapshots<N2>(self, N2, impl core::convert::Into<cqrs::aggregate::SnapshotPolicy>) -> cqrs::aggregate::AggregateLoader<A, S, N2, Tx>
 impl<A, S> cqrs::aggregate::AggregateLoader<A, S>
 pub fn cqrs::aggregate::AggregateLoader<A, S>::new(S) -> Self
-impl<A, S, N> core::fmt::Debug for cqrs::aggregate::AggregateLoader<A, S, N>
-pub fn cqrs::aggregate::AggregateLoader<A, S, N>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<A, S, N, Tx> core::fmt::Debug for cqrs::aggregate::AggregateLoader<A, S, N, Tx>
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<A, S, N, Tx> cqrs::aggregate::Repository<A> for cqrs::aggregate::AggregateLoader<A, S, N, Tx> where A: cqrs::aggregate::Aggregate, S: cqrs::store::LoadStream<<A as cqrs::aggregate::Aggregate>::Event> + cqrs::store::SourceEvents<<A as cqrs::aggregate::Aggregate>::Event>, N: cqrs::aggregate::SnapshotStore<A>, Tx: core::marker::Send
+pub type cqrs::aggregate::AggregateLoader<A, S, N, Tx>::Tx = Tx
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub struct cqrs::aggregate::InMemorySnapshots<A>
 impl<A: cqrs::aggregate::Aggregate + core::clone::Clone> cqrs::aggregate::SnapshotStore<A> for cqrs::aggregate::InMemorySnapshots<A>
 pub fn cqrs::aggregate::InMemorySnapshots<A>::load(&self, &<A as cqrs::aggregate::Aggregate>::Id) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<(A, u64)>, cqrs::store::StoreError>> + core::marker::Send
@@ -50,10 +55,25 @@ impl<A: cqrs::aggregate::Aggregate> core::convert::From<cqrs::aggregate::New<A>>
 pub fn cqrs::aggregate::Loaded<A>::from(cqrs::aggregate::New<A>) -> Self
 impl<A: cqrs::aggregate::Aggregate> core::fmt::Debug for cqrs::aggregate::New<A> where <A as cqrs::aggregate::Aggregate>::Id: core::fmt::Debug
 pub fn cqrs::aggregate::New<A>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs::aggregate::NoSnapshots
 pub struct cqrs::aggregate::NotFound<Id>(pub Id)
 impl<Id: core::fmt::Debug + core::fmt::Display> core::error::Error for cqrs::aggregate::NotFound<Id>
 impl<Id: core::fmt::Display> core::fmt::Display for cqrs::aggregate::NotFound<Id>
 pub fn cqrs::aggregate::NotFound<Id>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct cqrs::aggregate::SnapshotPolicy
+impl cqrs::aggregate::SnapshotPolicy
+pub const fn cqrs::aggregate::SnapshotPolicy::after_events(u64) -> Self
+pub const fn cqrs::aggregate::SnapshotPolicy::after_sourcing(core::time::Duration) -> Self
+pub const fn cqrs::aggregate::SnapshotPolicy::or_after_events(self, u64) -> Self
+pub const fn cqrs::aggregate::SnapshotPolicy::or_after_sourcing(self, core::time::Duration) -> Self
+pub fn cqrs::aggregate::SnapshotPolicy::reached(&self, u64, core::time::Duration) -> bool
+pub const fn cqrs::aggregate::SnapshotPolicy::times_sourcing(&self) -> bool
+impl core::convert::From<u64> for cqrs::aggregate::SnapshotPolicy
+pub fn cqrs::aggregate::SnapshotPolicy::from(u64) -> Self
+pub struct cqrs::aggregate::Snapshots
+impl<A: cqrs::aggregate::Aggregate + core::clone::Clone> cqrs::aggregate::KeepSnapshots<A, cqrs::aggregate::Snapshots> for cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>
+pub type cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::Snapshots = cqrs::aggregate::InMemorySnapshots<A>
+pub fn cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::snapshots(&self) -> Self::Snapshots
 pub trait cqrs::aggregate::Aggregate: core::marker::Send + core::marker::Sync + core::marker::Sized + 'static
 pub type cqrs::aggregate::Aggregate::Event: cqrs::event::DomainEvent
 pub type cqrs::aggregate::Aggregate::Id: core::clone::Clone + core::fmt::Display + core::marker::Send + core::marker::Sync + 'static
@@ -66,6 +86,27 @@ pub trait cqrs::aggregate::EventAppender<E>: core::marker::Send
 pub fn cqrs::aggregate::EventAppender::append(&mut self, E)
 impl<E, T: core::iter::traits::collect::Extend<E> + core::marker::Send> cqrs::aggregate::EventAppender<E> for T
 pub fn T::append(&mut self, E)
+pub trait cqrs::aggregate::KeepSnapshots<A: cqrs::aggregate::Aggregate, Mode>
+pub type cqrs::aggregate::KeepSnapshots::Snapshots: cqrs::aggregate::SnapshotStore<A>
+pub fn cqrs::aggregate::KeepSnapshots::snapshots(&self) -> Self::Snapshots
+impl<A: cqrs::aggregate::Aggregate + core::clone::Clone> cqrs::aggregate::KeepSnapshots<A, cqrs::aggregate::Snapshots> for cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>
+pub type cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::Snapshots = cqrs::aggregate::InMemorySnapshots<A>
+pub fn cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::snapshots(&self) -> Self::Snapshots
+impl<A: cqrs::aggregate::Aggregate, S> cqrs::aggregate::KeepSnapshots<A, cqrs::aggregate::NoSnapshots> for S
+pub type S::Snapshots = ()
+pub fn S::snapshots(&self) -> <S as cqrs::aggregate::KeepSnapshots<A, cqrs::aggregate::NoSnapshots>>::Snapshots
+pub trait cqrs::aggregate::Repository<A: cqrs::aggregate::Aggregate>: core::marker::Send + core::marker::Sync
+pub type cqrs::aggregate::Repository::Tx: core::marker::Send
+pub fn cqrs::aggregate::Repository::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::aggregate::Repository::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+impl<A, S, N, Tx> cqrs::aggregate::Repository<A> for cqrs::aggregate::AggregateLoader<A, S, N, Tx> where A: cqrs::aggregate::Aggregate, S: cqrs::store::LoadStream<<A as cqrs::aggregate::Aggregate>::Event> + cqrs::store::SourceEvents<<A as cqrs::aggregate::Aggregate>::Event>, N: cqrs::aggregate::SnapshotStore<A>, Tx: core::marker::Send
+pub type cqrs::aggregate::AggregateLoader<A, S, N, Tx>::Tx = Tx
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+impl<A: cqrs::aggregate::Aggregate, R: cqrs::aggregate::Repository<A>> cqrs::aggregate::Repository<A> for alloc::rcs::arc::Arc<R>
+pub type alloc::rcs::arc::Arc<R>::Tx = <R as cqrs::aggregate::Repository<A>>::Tx
+pub fn alloc::rcs::arc::Arc<R>::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn alloc::rcs::arc::Arc<R>::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub trait cqrs::aggregate::SnapshotStore<A: cqrs::aggregate::Aggregate>: core::marker::Send + core::marker::Sync
 pub fn cqrs::aggregate::SnapshotStore::load(&self, &<A as cqrs::aggregate::Aggregate>::Id) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<(A, u64)>, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::aggregate::SnapshotStore::save(&self, &A, u64) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
@@ -75,6 +116,9 @@ pub fn cqrs::aggregate::InMemorySnapshots<A>::save(&self, &A, u64) -> impl core:
 impl<A: cqrs::aggregate::Aggregate> cqrs::aggregate::SnapshotStore<A> for ()
 pub fn ()::load(&self, &<A as cqrs::aggregate::Aggregate>::Id) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<(A, u64)>, cqrs::store::StoreError>> + core::marker::Send
 pub fn ()::save(&self, &A, u64) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+pub trait cqrs::aggregate::Snapshotting: cqrs::aggregate::Aggregate
+pub type cqrs::aggregate::Snapshotting::Mode
+pub const cqrs::aggregate::Snapshotting::POLICY: core::option::Option<cqrs::aggregate::SnapshotPolicy>
 pub mod cqrs::command
 pub struct cqrs::command::Autocommit
 impl cqrs::command::UnitMode for cqrs::command::Autocommit
@@ -92,23 +136,29 @@ pub async fn cqrs::processing::InlinePublisher<E, S, H, F>::announce(&self, allo
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::append(&self, &mut (), cqrs::command::Write<E>) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::begin(&self) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::commit(&self, ()) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
-pub struct cqrs::command::CommandContext<E>
+pub struct cqrs::command::CommandContext<E, Tx>
+impl<E, Tx> cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::append(&mut self, E)
+pub fn cqrs::command::CommandContext<E, Tx>::commit<A>(&mut self, impl core::convert::Into<cqrs::aggregate::Loaded<A>>) -> cqrs::aggregate::Loaded<A> where E: cqrs::event::DomainEvent, A: cqrs::aggregate::Aggregate<Event = E>
+pub fn cqrs::command::CommandContext<E, Tx>::condition(&self) -> core::option::Option<&cqrs::event::AppendCondition>
+pub fn cqrs::command::CommandContext<E, Tx>::depend_on(&mut self, cqrs::event::AppendCondition)
+pub fn cqrs::command::CommandContext<E, Tx>::in_transaction(cqrs::event::Metadata, Tx) -> Self
+pub fn cqrs::command::CommandContext<E, Tx>::into_parts(self) -> (alloc::vec::Vec<cqrs::command::Write<E>>, Tx)
+pub fn cqrs::command::CommandContext<E, Tx>::metadata(&self) -> &cqrs::event::Metadata
+pub fn cqrs::command::CommandContext<E, Tx>::pending(&self) -> &[E]
+pub async fn cqrs::command::CommandContext<E, Tx>::source<S: cqrs::store::SourceEvents<E>>(&mut self, &S, cqrs::event::EventCriteria) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError> where E: cqrs::event::DomainEvent
+pub fn cqrs::command::CommandContext<E, Tx>::take_writes(&mut self) -> alloc::vec::Vec<cqrs::command::Write<E>>
+pub fn cqrs::command::CommandContext<E, Tx>::tx(&mut self) -> &mut Tx
+pub fn cqrs::command::CommandContext<E, Tx>::writes(&self) -> &[cqrs::command::Write<E>]
 impl<E> cqrs::command::CommandContext<E>
-pub fn cqrs::command::CommandContext<E>::append(&mut self, E)
-pub fn cqrs::command::CommandContext<E>::condition(&self) -> core::option::Option<&cqrs::event::AppendCondition>
-pub fn cqrs::command::CommandContext<E>::depend_on(&mut self, cqrs::event::AppendCondition)
-pub fn cqrs::command::CommandContext<E>::metadata(&self) -> &cqrs::event::Metadata
 pub fn cqrs::command::CommandContext<E>::new() -> Self
-pub fn cqrs::command::CommandContext<E>::pending(&self) -> &[E]
-pub fn cqrs::command::CommandContext<E>::record<A>(&mut self, impl core::convert::Into<cqrs::aggregate::Loaded<A>>) -> cqrs::aggregate::Loaded<A> where E: cqrs::event::DomainEvent, A: cqrs::aggregate::Aggregate<Event = E>
-pub async fn cqrs::command::CommandContext<E>::source<S: cqrs::store::SourceEvents<E>>(&mut self, &S, cqrs::event::EventCriteria) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError> where E: cqrs::event::DomainEvent
-pub fn cqrs::command::CommandContext<E>::take_writes(&mut self) -> alloc::vec::Vec<cqrs::command::Write<E>>
 pub fn cqrs::command::CommandContext<E>::with_metadata(cqrs::event::Metadata) -> Self
-pub fn cqrs::command::CommandContext<E>::writes(&self) -> &[cqrs::command::Write<E>]
+impl<E, Tx> core::iter::traits::collect::Extend<E> for cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::extend<I: core::iter::traits::collect::IntoIterator<Item = E>>(&mut self, I)
+impl<E: core::fmt::Debug, Tx> core::fmt::Debug for cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<E> core::default::Default for cqrs::command::CommandContext<E>
 pub fn cqrs::command::CommandContext<E>::default() -> Self
-impl<E> core::iter::traits::collect::Extend<E> for cqrs::command::CommandContext<E>
-pub fn cqrs::command::CommandContext<E>::extend<I: core::iter::traits::collect::IntoIterator<Item = E>>(&mut self, I)
 #[non_exhaustive] pub struct cqrs::command::DeliveryOptions
 pub cqrs::command::DeliveryOptions::batch_size: usize
 pub cqrs::command::DeliveryOptions::lease: core::time::Duration
@@ -192,7 +242,7 @@ pub trait cqrs::command::CommandHandler<C: cqrs::command::Command + core::marker
 pub type cqrs::command::CommandHandler::Event: cqrs::event::DomainEvent
 pub type cqrs::command::CommandHandler::Unit: cqrs::command::UnitMode
 pub fn cqrs::command::CommandHandler::conflict_retries(&self) -> u32
-pub fn cqrs::command::CommandHandler::handle(&self, &C, &mut cqrs::command::CommandContext<Self::Event>, &mut <Self::Unit as cqrs::command::UnitMode>::Tx) -> impl core::future::future::Future<Output = core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>>> + core::marker::Send
+pub fn cqrs::command::CommandHandler::handle(&self, &C, &mut cqrs::command::CommandContext<Self::Event, <Self::Unit as cqrs::command::UnitMode>::Tx>) -> impl core::future::future::Future<Output = core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>>> + core::marker::Send
 pub trait cqrs::command::CommandSchedule<C, Tx>: core::marker::Send + core::marker::Sync
 pub fn cqrs::command::CommandSchedule::cancel(&self, cqrs::command::ScheduleToken) -> impl core::future::future::Future<Output = core::result::Result<bool, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::command::CommandSchedule::claim_due(&self, core::time::Duration, usize) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<cqrs::command::Scheduled<C>>, cqrs::store::StoreError>> + core::marker::Send
@@ -347,23 +397,29 @@ pub trait cqrs::event::TagResolver
 pub fn cqrs::event::TagResolver::tags(&self) -> alloc::vec::Vec<cqrs::event::Tag>
 pub mod cqrs::prelude
 pub use cqrs::prelude::DomainEvent
-pub struct cqrs::prelude::CommandContext<E>
+pub struct cqrs::prelude::CommandContext<E, Tx>
+impl<E, Tx> cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::append(&mut self, E)
+pub fn cqrs::command::CommandContext<E, Tx>::commit<A>(&mut self, impl core::convert::Into<cqrs::aggregate::Loaded<A>>) -> cqrs::aggregate::Loaded<A> where E: cqrs::event::DomainEvent, A: cqrs::aggregate::Aggregate<Event = E>
+pub fn cqrs::command::CommandContext<E, Tx>::condition(&self) -> core::option::Option<&cqrs::event::AppendCondition>
+pub fn cqrs::command::CommandContext<E, Tx>::depend_on(&mut self, cqrs::event::AppendCondition)
+pub fn cqrs::command::CommandContext<E, Tx>::in_transaction(cqrs::event::Metadata, Tx) -> Self
+pub fn cqrs::command::CommandContext<E, Tx>::into_parts(self) -> (alloc::vec::Vec<cqrs::command::Write<E>>, Tx)
+pub fn cqrs::command::CommandContext<E, Tx>::metadata(&self) -> &cqrs::event::Metadata
+pub fn cqrs::command::CommandContext<E, Tx>::pending(&self) -> &[E]
+pub async fn cqrs::command::CommandContext<E, Tx>::source<S: cqrs::store::SourceEvents<E>>(&mut self, &S, cqrs::event::EventCriteria) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError> where E: cqrs::event::DomainEvent
+pub fn cqrs::command::CommandContext<E, Tx>::take_writes(&mut self) -> alloc::vec::Vec<cqrs::command::Write<E>>
+pub fn cqrs::command::CommandContext<E, Tx>::tx(&mut self) -> &mut Tx
+pub fn cqrs::command::CommandContext<E, Tx>::writes(&self) -> &[cqrs::command::Write<E>]
 impl<E> cqrs::command::CommandContext<E>
-pub fn cqrs::command::CommandContext<E>::append(&mut self, E)
-pub fn cqrs::command::CommandContext<E>::condition(&self) -> core::option::Option<&cqrs::event::AppendCondition>
-pub fn cqrs::command::CommandContext<E>::depend_on(&mut self, cqrs::event::AppendCondition)
-pub fn cqrs::command::CommandContext<E>::metadata(&self) -> &cqrs::event::Metadata
 pub fn cqrs::command::CommandContext<E>::new() -> Self
-pub fn cqrs::command::CommandContext<E>::pending(&self) -> &[E]
-pub fn cqrs::command::CommandContext<E>::record<A>(&mut self, impl core::convert::Into<cqrs::aggregate::Loaded<A>>) -> cqrs::aggregate::Loaded<A> where E: cqrs::event::DomainEvent, A: cqrs::aggregate::Aggregate<Event = E>
-pub async fn cqrs::command::CommandContext<E>::source<S: cqrs::store::SourceEvents<E>>(&mut self, &S, cqrs::event::EventCriteria) -> core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError> where E: cqrs::event::DomainEvent
-pub fn cqrs::command::CommandContext<E>::take_writes(&mut self) -> alloc::vec::Vec<cqrs::command::Write<E>>
 pub fn cqrs::command::CommandContext<E>::with_metadata(cqrs::event::Metadata) -> Self
-pub fn cqrs::command::CommandContext<E>::writes(&self) -> &[cqrs::command::Write<E>]
+impl<E, Tx> core::iter::traits::collect::Extend<E> for cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::extend<I: core::iter::traits::collect::IntoIterator<Item = E>>(&mut self, I)
+impl<E: core::fmt::Debug, Tx> core::fmt::Debug for cqrs::command::CommandContext<E, Tx>
+pub fn cqrs::command::CommandContext<E, Tx>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<E> core::default::Default for cqrs::command::CommandContext<E>
 pub fn cqrs::command::CommandContext<E>::default() -> Self
-impl<E> core::iter::traits::collect::Extend<E> for cqrs::command::CommandContext<E>
-pub fn cqrs::command::CommandContext<E>::extend<I: core::iter::traits::collect::IntoIterator<Item = E>>(&mut self, I)
 pub struct cqrs::prelude::EventEnvelope<E>
 pub cqrs::prelude::EventEnvelope::event_type: alloc::borrow::Cow<'static, str>
 pub cqrs::prelude::EventEnvelope::event_version: u32
@@ -447,7 +503,7 @@ pub fn cqrs::processing::ProcessingContext<'a, Tx>::in_processor(&'a mut Tx, boo
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::new(&'a mut Tx, bool) -> Self
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::processor(&self) -> &str
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::replay(&self) -> bool
-pub fn cqrs::processing::ProcessingContext<'a, Tx>::transaction(&mut self) -> &mut Tx
+pub fn cqrs::processing::ProcessingContext<'a, Tx>::tx(&mut self) -> &mut Tx
 impl<'a, Tx> core::fmt::Debug for cqrs::processing::ProcessingContext<'a, Tx>
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub trait cqrs::prelude::Aggregate: core::marker::Send + core::marker::Sync + core::marker::Sized + 'static
@@ -469,7 +525,7 @@ pub trait cqrs::prelude::CommandHandler<C: cqrs::command::Command + core::marker
 pub type cqrs::prelude::CommandHandler::Event: cqrs::event::DomainEvent
 pub type cqrs::prelude::CommandHandler::Unit: cqrs::command::UnitMode
 pub fn cqrs::prelude::CommandHandler::conflict_retries(&self) -> u32
-pub fn cqrs::prelude::CommandHandler::handle(&self, &C, &mut cqrs::command::CommandContext<Self::Event>, &mut <Self::Unit as cqrs::command::UnitMode>::Tx) -> impl core::future::future::Future<Output = core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>>> + core::marker::Send
+pub fn cqrs::prelude::CommandHandler::handle(&self, &C, &mut cqrs::command::CommandContext<Self::Event, <Self::Unit as cqrs::command::UnitMode>::Tx>) -> impl core::future::future::Future<Output = core::result::Result<cqrs::OutputOf<C>, cqrs::ErrorOf<C>>> + core::marker::Send
 pub trait cqrs::prelude::DomainEvent: cqrs::event::TagResolver + core::marker::Send + core::marker::Sync + 'static
 pub fn cqrs::prelude::DomainEvent::event_type(&self) -> &'static str
 pub fn cqrs::prelude::DomainEvent::event_version(&self) -> u32
@@ -479,67 +535,54 @@ impl<E, T: core::iter::traits::collect::Extend<E> + core::marker::Send> cqrs::ag
 pub fn T::append(&mut self, E)
 pub trait cqrs::prelude::EventHandler<E: cqrs::event::DomainEvent, Tx: core::marker::Send>: core::marker::Send + core::marker::Sync
 pub const cqrs::prelude::EventHandler::REPLAY: bool
-pub fn cqrs::prelude::EventHandler::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::prelude::EventHandler::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::prelude::EventHandler::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E, Tx, H, I> cqrs::processing::EventHandler<E, Tx> for cqrs::Intercepted<H, I> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, H: cqrs::processing::EventHandler<E, Tx>, I: cqrs::processing::EventInterceptor<E, Tx>
 pub const cqrs::Intercepted<H, I>::REPLAY: bool
-pub fn cqrs::Intercepted<H, I>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E, Tx, P, C, T> cqrs::processing::EventHandler<E, Tx> for cqrs::processing::Forward<P, C, T> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, P: cqrs::processing::Publish, C: cqrs::store::Codec<E>, T: cqrs::processing::TopicOf<E>
 pub const cqrs::processing::Forward<P, C, T>::REPLAY: bool
-pub fn cqrs::processing::Forward<P, C, T>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub async fn cqrs::processing::Forward<P, C, T>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub fn cqrs::processing::Forward<P, C, T>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E: cqrs::event::DomainEvent + core::clone::Clone, Tx: core::marker::Send> cqrs::processing::EventHandler<E, Tx> for cqrs::store::LiveEvents<E>
 pub const cqrs::store::LiveEvents<E>::REPLAY: bool
-pub fn cqrs::store::LiveEvents<E>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub async fn cqrs::store::LiveEvents<E>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub fn cqrs::store::LiveEvents<E>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>, H: cqrs::processing::EventHandler<E, Tx>, I: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G, H, I)
 pub const (A, B, C, D, F, G, H, I)::REPLAY: bool
-pub async fn (A, B, C, D, F, G, H, I)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G, H, I)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G, H, I)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>, H: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G, H)
 pub const (A, B, C, D, F, G, H)::REPLAY: bool
-pub async fn (A, B, C, D, F, G, H)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G, H)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G, H)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G)
 pub const (A, B, C, D, F, G)::REPLAY: bool
-pub async fn (A, B, C, D, F, G)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F)
 pub const (A, B, C, D, F)::REPLAY: bool
-pub async fn (A, B, C, D, F)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D)
 pub const (A, B, C, D)::REPLAY: bool
-pub async fn (A, B, C, D)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C)
 pub const (A, B, C)::REPLAY: bool
-pub async fn (A, B, C)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B)
 pub const (A, B)::REPLAY: bool
-pub async fn (A, B)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A)
 pub const (A)::REPLAY: bool
-pub async fn (A)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, H: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for alloc::rcs::arc::Arc<H>
 pub const alloc::rcs::arc::Arc<H>::REPLAY: bool
-pub fn alloc::rcs::arc::Arc<H>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<H>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<H>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub trait cqrs::prelude::Query: cqrs::Message
@@ -557,6 +600,18 @@ pub trait cqrs::prelude::QuerySubscriptions<Q: cqrs::query::Query>: cqrs::query:
 pub fn cqrs::prelude::QuerySubscriptions::subscribe(&self, Q) -> impl futures_core::stream::Stream<Item = core::result::Result<<Q as cqrs::Message>::Output, <Q as cqrs::Message>::Error>> + core::marker::Send + use<Self, Q>
 impl<Q, G, U, C> cqrs::query::QuerySubscriptions<Q> for cqrs::query::SubscriptionQueries<G, U, C> where Q: cqrs::query::Query + core::clone::Clone + core::marker::Sync, <Q as cqrs::Message>::Output: core::clone::Clone + core::cmp::PartialEq + core::marker::Send + core::marker::Sync, G: cqrs::Dispatch<Q> + 'static, U: cqrs::query::UpdatesOf<Q> + 'static, C: cqrs::query::CatchUp
 pub fn cqrs::query::SubscriptionQueries<G, U, C>::subscribe(&self, Q) -> impl futures_core::stream::Stream<Item = core::result::Result<<Q as cqrs::Message>::Output, <Q as cqrs::Message>::Error>> + core::marker::Send + use<Q, G, U, C>
+pub trait cqrs::prelude::Repository<A: cqrs::aggregate::Aggregate>: core::marker::Send + core::marker::Sync
+pub type cqrs::prelude::Repository::Tx: core::marker::Send
+pub fn cqrs::prelude::Repository::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::prelude::Repository::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+impl<A, S, N, Tx> cqrs::aggregate::Repository<A> for cqrs::aggregate::AggregateLoader<A, S, N, Tx> where A: cqrs::aggregate::Aggregate, S: cqrs::store::LoadStream<<A as cqrs::aggregate::Aggregate>::Event> + cqrs::store::SourceEvents<<A as cqrs::aggregate::Aggregate>::Event>, N: cqrs::aggregate::SnapshotStore<A>, Tx: core::marker::Send
+pub type cqrs::aggregate::AggregateLoader<A, S, N, Tx>::Tx = Tx
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn cqrs::aggregate::AggregateLoader<A, S, N, Tx>::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
+impl<A: cqrs::aggregate::Aggregate, R: cqrs::aggregate::Repository<A>> cqrs::aggregate::Repository<A> for alloc::rcs::arc::Arc<R>
+pub type alloc::rcs::arc::Arc<R>::Tx = <R as cqrs::aggregate::Repository<A>>::Tx
+pub fn alloc::rcs::arc::Arc<R>::find(&self, &<A as cqrs::aggregate::Aggregate>::Id, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<cqrs::aggregate::Loaded<A>>, cqrs::store::StoreError>> + core::marker::Send
+pub fn alloc::rcs::arc::Arc<R>::save(&self, &cqrs::aggregate::Loaded<A>, &mut Self::Tx) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::store::StoreError>> + core::marker::Send
 pub trait cqrs::prelude::TagResolver
 pub fn cqrs::prelude::TagResolver::tags(&self) -> alloc::vec::Vec<cqrs::event::Tag>
 pub type cqrs::prelude::QueryUpdateEmitter<P> = <P as crate::HasUpdates>::Updates
@@ -599,6 +654,7 @@ pub fn cqrs::processing::Events<E, S, C, M>::committed_elsewhere(&self)
 pub fn cqrs::processing::Events<E, S, C, M>::follow<E2, S2, C2, M2>(&self, &cqrs::processing::Events<E2, S2, C2, M2>)
 pub fn cqrs::processing::Events<E, S, C, M>::global_progress(&self, &str) -> cqrs::processing::GlobalProgress<C> where C: core::clone::Clone
 pub fn cqrs::processing::Events<E, S, C, M>::live(&self) -> &cqrs::store::LiveEvents<E>
+pub fn cqrs::processing::Events<E, S, C, M>::repository<A>(&self) -> cqrs::aggregate::AggregateLoader<A, S, <S as cqrs::aggregate::KeepSnapshots<A, <A as cqrs::aggregate::Snapshotting>::Mode>>::Snapshots, <M as cqrs::processing::TransactionManager>::Tx> where A: cqrs::aggregate::Snapshotting<Event = E>, S: core::clone::Clone + cqrs::aggregate::KeepSnapshots<A, <A as cqrs::aggregate::Snapshotting>::Mode>, M: cqrs::processing::TransactionManager
 pub fn cqrs::processing::Events<E, S, C, M>::store(&self) -> &S
 pub fn cqrs::processing::Events<E, S, C, M>::tokens(&self) -> &C
 pub fn cqrs::processing::Events<E, S, C, M>::transactions(&self) -> &M
@@ -641,7 +697,6 @@ pub fn cqrs::processing::Forward<P, C>::new(P, C, impl core::convert::Into<alloc
 pub fn cqrs::processing::Forward<P, C>::routed<E, F>(P, C, F) -> cqrs::processing::Forward<P, C, cqrs::processing::RoutedTopic<F>> where F: core::ops::function::Fn(&cqrs::event::EventEnvelope<E>) -> alloc::string::String + core::marker::Send + core::marker::Sync
 impl<E, Tx, P, C, T> cqrs::processing::EventHandler<E, Tx> for cqrs::processing::Forward<P, C, T> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, P: cqrs::processing::Publish, C: cqrs::store::Codec<E>, T: cqrs::processing::TopicOf<E>
 pub const cqrs::processing::Forward<P, C, T>::REPLAY: bool
-pub fn cqrs::processing::Forward<P, C, T>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub async fn cqrs::processing::Forward<P, C, T>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub fn cqrs::processing::Forward<P, C, T>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub struct cqrs::processing::GlobalProgress<T>
@@ -722,6 +777,7 @@ pub struct cqrs::processing::InlinePublisher<E, S, H, F>
 impl<E, S, H, F> cqrs::processing::InlinePublisher<E, S, H, F>
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::on_failure<F2>(self, F2) -> cqrs::processing::InlinePublisher<E, S, H, F2>
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::processor(&self) -> &H
+pub fn cqrs::processing::InlinePublisher<E, S, H, F>::repository<A>(&self) -> cqrs::aggregate::AggregateLoader<A, S, <S as cqrs::aggregate::KeepSnapshots<A, <A as cqrs::aggregate::Snapshotting>::Mode>>::Snapshots> where A: cqrs::aggregate::Snapshotting<Event = E>, S: core::clone::Clone + cqrs::aggregate::KeepSnapshots<A, <A as cqrs::aggregate::Snapshotting>::Mode>
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::store(&self) -> &S
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::with_processor<P2>(self, P2) -> cqrs::processing::InlinePublisher<E, S, P2, F>
 pub fn cqrs::processing::InlinePublisher<E, S, H, F>::with_projection<P2>(self, P2) -> cqrs::processing::InlinePublisher<E, S, cqrs::processing::InlineProjection<P2>, F>
@@ -780,7 +836,7 @@ pub fn cqrs::processing::ProcessingContext<'a, Tx>::in_processor(&'a mut Tx, boo
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::new(&'a mut Tx, bool) -> Self
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::processor(&self) -> &str
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::replay(&self) -> bool
-pub fn cqrs::processing::ProcessingContext<'a, Tx>::transaction(&mut self) -> &mut Tx
+pub fn cqrs::processing::ProcessingContext<'a, Tx>::tx(&mut self) -> &mut Tx
 impl<'a, Tx> core::fmt::Debug for cqrs::processing::ProcessingContext<'a, Tx>
 pub fn cqrs::processing::ProcessingContext<'a, Tx>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct cqrs::processing::ProcessingFailure
@@ -930,67 +986,54 @@ pub trait cqrs::processing::EventChain<Tx>: cqrs::interceptor::sealed::Chain + c
 pub fn cqrs::processing::EventChain::proceed(self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub trait cqrs::processing::EventHandler<E: cqrs::event::DomainEvent, Tx: core::marker::Send>: core::marker::Send + core::marker::Sync
 pub const cqrs::processing::EventHandler::REPLAY: bool
-pub fn cqrs::processing::EventHandler::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::processing::EventHandler::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::processing::EventHandler::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E, Tx, H, I> cqrs::processing::EventHandler<E, Tx> for cqrs::Intercepted<H, I> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, H: cqrs::processing::EventHandler<E, Tx>, I: cqrs::processing::EventInterceptor<E, Tx>
 pub const cqrs::Intercepted<H, I>::REPLAY: bool
-pub fn cqrs::Intercepted<H, I>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E, Tx, P, C, T> cqrs::processing::EventHandler<E, Tx> for cqrs::processing::Forward<P, C, T> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, P: cqrs::processing::Publish, C: cqrs::store::Codec<E>, T: cqrs::processing::TopicOf<E>
 pub const cqrs::processing::Forward<P, C, T>::REPLAY: bool
-pub fn cqrs::processing::Forward<P, C, T>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub async fn cqrs::processing::Forward<P, C, T>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub fn cqrs::processing::Forward<P, C, T>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E: cqrs::event::DomainEvent + core::clone::Clone, Tx: core::marker::Send> cqrs::processing::EventHandler<E, Tx> for cqrs::store::LiveEvents<E>
 pub const cqrs::store::LiveEvents<E>::REPLAY: bool
-pub fn cqrs::store::LiveEvents<E>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub async fn cqrs::store::LiveEvents<E>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub fn cqrs::store::LiveEvents<E>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>, H: cqrs::processing::EventHandler<E, Tx>, I: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G, H, I)
 pub const (A, B, C, D, F, G, H, I)::REPLAY: bool
-pub async fn (A, B, C, D, F, G, H, I)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G, H, I)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G, H, I)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>, H: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G, H)
 pub const (A, B, C, D, F, G, H)::REPLAY: bool
-pub async fn (A, B, C, D, F, G, H)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G, H)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G, H)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>, G: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F, G)
 pub const (A, B, C, D, F, G)::REPLAY: bool
-pub async fn (A, B, C, D, F, G)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F, G)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F, G)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>, F: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D, F)
 pub const (A, B, C, D, F)::REPLAY: bool
-pub async fn (A, B, C, D, F)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D, F)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D, F)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>, D: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C, D)
 pub const (A, B, C, D)::REPLAY: bool
-pub async fn (A, B, C, D)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C, D)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C, D)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>, C: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B, C)
 pub const (A, B, C)::REPLAY: bool
-pub async fn (A, B, C)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B, C)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B, C)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>, B: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A, B)
 pub const (A, B)::REPLAY: bool
-pub async fn (A, B)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A, B)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A, B)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, A: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for (A)
 pub const (A)::REPLAY: bool
-pub async fn (A)::committed(&self, &cqrs::event::EventEnvelope<E>)
 pub async fn (A)::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 pub async fn (A)::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> core::result::Result<(), cqrs::processing::HandlerError>
 impl<E: cqrs::event::DomainEvent, Tx: core::marker::Send, H: cqrs::processing::EventHandler<E, Tx>> cqrs::processing::EventHandler<E, Tx> for alloc::rcs::arc::Arc<H>
 pub const alloc::rcs::arc::Arc<H>::REPLAY: bool
-pub fn alloc::rcs::arc::Arc<H>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<H>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<H>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub trait cqrs::processing::EventInterceptor<E: cqrs::event::DomainEvent, Tx>: core::marker::Send + core::marker::Sync
@@ -1101,7 +1144,6 @@ pub type cqrs::processing::Publish::Error: core::error::Error + core::marker::Se
 pub fn cqrs::processing::Publish::publish(&self, cqrs::processing::Outgoing<'_>) -> impl core::future::future::Future<Output = core::result::Result<(), Self::Error>> + core::marker::Send
 pub trait cqrs::processing::Route<Tx: core::marker::Send>: cqrs::processing::Projection
 pub fn cqrs::processing::Route::batch_size(usize) -> core::option::Option<usize>
-pub fn cqrs::processing::Route::committed(&self, usize, &cqrs::event::EventEnvelope<Self::Event>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::processing::Route::emits(usize) -> bool
 pub fn cqrs::processing::Route::handle(&self, usize, &cqrs::event::EventEnvelope<Self::Event>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::processing::Route::replays(usize) -> bool
@@ -1109,7 +1151,6 @@ pub fn cqrs::processing::Route::reset(&self, usize, &mut cqrs::processing::Proce
 pub fn cqrs::processing::Route::updated(&self, usize, &cqrs::event::EventEnvelope<Self::Event>, &<Self as HasUpdates>::Updates) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl<P: cqrs::processing::Route<Tx>, Tx: core::marker::Send> cqrs::processing::Route<Tx> for alloc::rcs::arc::Arc<P>
 pub fn alloc::rcs::arc::Arc<P>::batch_size(usize) -> core::option::Option<usize>
-pub fn alloc::rcs::arc::Arc<P>::committed(&self, usize, &cqrs::event::EventEnvelope<Self::Event>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<P>::emits(usize) -> bool
 pub fn alloc::rcs::arc::Arc<P>::handle(&self, usize, &cqrs::event::EventEnvelope<Self::Event>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn alloc::rcs::arc::Arc<P>::replays(usize) -> bool
@@ -1117,7 +1158,6 @@ pub fn alloc::rcs::arc::Arc<P>::reset(&self, usize, &mut cqrs::processing::Proce
 pub fn alloc::rcs::arc::Arc<P>::updated(&self, usize, &cqrs::event::EventEnvelope<Self::Event>, &<P as >::Updates) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl<Tx, P, I> cqrs::processing::Route<Tx> for cqrs::Intercepted<P, I> where Tx: core::marker::Send, P: cqrs::processing::Route<Tx>, I: cqrs::processing::EventInterceptor<<P as cqrs::processing::Projection>::Event, Tx> + 'static
 pub fn cqrs::Intercepted<P, I>::batch_size(usize) -> core::option::Option<usize>
-pub fn cqrs::Intercepted<P, I>::committed(&self, usize, &cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::Intercepted<P, I>::emits(usize) -> bool
 pub fn cqrs::Intercepted<P, I>::handle(&self, usize, &cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<P, I>::replays(usize) -> bool
@@ -1296,6 +1336,9 @@ pub fn cqrs::store::InMemoryEventStore<E>::all(&self) -> alloc::vec::Vec<cqrs::e
 impl<E> cqrs::store::InMemoryEventStore<E>
 pub fn cqrs::store::InMemoryEventStore<E>::beside<E2>(&self) -> cqrs::store::InMemoryEventStore<E2>
 pub fn cqrs::store::InMemoryEventStore<E>::new() -> Self
+impl<A: cqrs::aggregate::Aggregate + core::clone::Clone> cqrs::aggregate::KeepSnapshots<A, cqrs::aggregate::Snapshots> for cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>
+pub type cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::Snapshots = cqrs::aggregate::InMemorySnapshots<A>
+pub fn cqrs::store::InMemoryEventStore<<A as cqrs::aggregate::Aggregate>::Event>::snapshots(&self) -> Self::Snapshots
 impl<E: core::clone::Clone + core::marker::Send + core::marker::Sync> cqrs::store::LoadStream<E> for cqrs::store::InMemoryEventStore<E>
 pub fn cqrs::store::InMemoryEventStore<E>::load(&self, &cqrs::event::StreamId, u64) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<cqrs::event::EventEnvelope<E>>, cqrs::store::StoreError>> + core::marker::Send
 pub fn cqrs::store::InMemoryEventStore<E>::replay<F>(&self, &cqrs::event::StreamId, u64, F) -> impl core::future::future::Future<Output = core::result::Result<u64, cqrs::store::StoreError>> + core::marker::Send where E: core::marker::Send, F: core::ops::function::FnMut(u64, E) + core::marker::Send
@@ -1521,7 +1564,6 @@ pub fn cqrs::Intercepted<G, I>::interceptor(&self) -> &I
 pub fn cqrs::Intercepted<G, I>::new(G, I) -> Self
 impl<E, Tx, H, I> cqrs::processing::EventHandler<E, Tx> for cqrs::Intercepted<H, I> where E: cqrs::event::DomainEvent, Tx: core::marker::Send, H: cqrs::processing::EventHandler<E, Tx>, I: cqrs::processing::EventInterceptor<E, Tx>
 pub const cqrs::Intercepted<H, I>::REPLAY: bool
-pub fn cqrs::Intercepted<H, I>::committed(&self, &cqrs::event::EventEnvelope<E>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::handle(&self, &cqrs::event::EventEnvelope<E>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<H, I>::reset(&self, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 impl<G, I> core::fmt::Debug for cqrs::Intercepted<G, I>
@@ -1535,7 +1577,6 @@ pub const cqrs::Intercepted<P, I>::NAMESPACES: &'static [&'static str]
 pub fn cqrs::Intercepted<P, I>::processor_name(usize) -> alloc::string::String
 impl<Tx, P, I> cqrs::processing::Route<Tx> for cqrs::Intercepted<P, I> where Tx: core::marker::Send, P: cqrs::processing::Route<Tx>, I: cqrs::processing::EventInterceptor<<P as cqrs::processing::Projection>::Event, Tx> + 'static
 pub fn cqrs::Intercepted<P, I>::batch_size(usize) -> core::option::Option<usize>
-pub fn cqrs::Intercepted<P, I>::committed(&self, usize, &cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub fn cqrs::Intercepted<P, I>::emits(usize) -> bool
 pub fn cqrs::Intercepted<P, I>::handle(&self, usize, &cqrs::event::EventEnvelope<<P as cqrs::processing::Projection>::Event>, &mut cqrs::processing::ProcessingContext<'_, Tx>) -> impl core::future::future::Future<Output = core::result::Result<(), cqrs::processing::HandlerError>> + core::marker::Send
 pub fn cqrs::Intercepted<P, I>::replays(usize) -> bool

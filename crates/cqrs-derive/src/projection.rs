@@ -309,13 +309,12 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
     let (route_impl, _, route_where) = route_generics.split_for_impl();
     let handler = |id: &TokenStream2| quote!(<Self as #krate::NamespaceHandler<#id, #events, __CqrsTx>>);
     let handles = ids.iter().map(&handler);
-    let commits = ids.iter().map(&handler);
     let resets = ids.iter().map(&handler);
     let replays = ids.iter().map(&handler);
     let batches = ids.iter().map(&handler);
     let emits = ids.iter().map(&handler);
     let updateds = ids.iter().map(&handler);
-    let (i1, i2, i3, i4, i5) = (&indices, &indices, &indices, &indices, &indices);
+    let (i1, i3, i4, i5) = (&indices, &indices, &indices, &indices);
     let (i6, i7) = (&indices, &indices);
     let channels = channels(&item, &updates, subscriptions.as_ref());
 
@@ -344,13 +343,6 @@ pub fn projection(arguments: ProjectionArguments, item: ItemStruct) -> Result<To
                 match namespace {
                     #(#i1 => #handles::handle(self, event, context).await,)*
                     _ => ::core::result::Result::Ok(()),
-                }
-            }
-
-            async fn committed(&self, namespace: usize, event: &#krate::EventEnvelope<#events>) {
-                match namespace {
-                    #(#i2 => #commits::committed(self, event).await,)*
-                    _ => {}
                 }
             }
 

@@ -5,12 +5,12 @@
 use blog::{
     PostStore,
     application::{BlogError, commands::*, queries::*},
-    domain::{PostError, PostId},
+    domain::{Post, PostError, PostId},
     in_memory, in_memory_with,
-    infrastructure::EventSourcedPostRepository,
 };
 use cqrs::{
-    command::{CommandGateway, EventPublisher, Pending},
+    aggregate::Repository,
+    command::{CommandContext, CommandGateway, EventPublisher, Pending},
     processing::InlinePublisher,
     query::QueryGateway,
     store::StoreError,
@@ -110,11 +110,11 @@ fn concurrent_writers_cannot_overwrite_each_other() {
         let id = blog.commands().send(CreatePost { title: "v1".into() }).await.unwrap();
         // Two writers of their own, over the blog's store.
         let events = InlinePublisher::new(store.clone());
-        let posts = EventSourcedPostRepository::new(store);
+        let posts = events.repository::<Post>();
 
         // Two writers load the same version and decide...
-        let first = posts.find(id, &mut ()).await.unwrap().unwrap();
-        let second = posts.find(id, &mut ()).await.unwrap().unwrap();
+        let first = posts.find(&id, &mut ()).await.unwrap().unwrap();
+        let second = posts.find(&id, &mut ()).await.unwrap().unwrap();
         let (mut renamed, mut published) = (Vec::new(), Vec::new());
         first.retitle("v2", &mut renamed).unwrap();
         second.publish(&mut published).unwrap();
@@ -124,7 +124,7 @@ fn concurrent_writers_cannot_overwrite_each_other() {
         let error = events.commit(second, Pending::new(published)).await.err().unwrap();
         assert!(matches!(error, StoreError::Conflict { actual: Some(2), .. }));
 
-        let stored = posts.find(id, &mut ()).await.unwrap().unwrap();
+        let stored = posts.find(&id, &mut ()).await.unwrap().unwrap();
         assert_eq!(stored.title(), "v2");
         assert!(!stored.is_published());
         assert_eq!(stored.version(), Some(2));
@@ -181,7 +181,7 @@ fn replaying_the_log_into_the_projection_rebuilds_the_same_rows() {
 #[test]
 fn handlers_can_be_called_directly_without_any_bus() {
     use cqrs::{
-        command::{CommandContext, CommandHandler, dispatch_command},
+        command::{CommandHandler, dispatch_command},
         event::Metadata,
         store::InMemoryEventStore,
     };
@@ -190,21 +190,21 @@ fn handlers_can_be_called_directly_without_any_bus() {
         // A handler is a method of the gateway: called with an appender, it
         // decides and records, and nothing is written.
         let store = InMemoryEventStore::new();
-        let gateway = PostCommandGateway::new(EventSourcedPostRepository::new(store.clone()), ());
+        let unit = InlinePublisher::new(store);
+        let gateway = PostCommandGateway::new(unit.repository::<Post>(), ());
         let mut events = CommandContext::new();
         let id = gateway
-            .handle(&CreatePost { title: "direct".into() }, &mut events, &mut ())
+            .handle(&CreatePost { title: "direct".into() }, &mut events)
             .await
             .unwrap();
         assert_eq!((id, events.writes().len()), (PostId(1), 1));
 
-        // In a unit of work of the caller's: it commits (the repository
-        // handed out id 1 already, to the run above).
-        let unit = InlinePublisher::new(store);
+        // In a unit of work of the caller's: it commits (nothing was written
+        // by the run above, so the log still hands out id 1).
         let id = dispatch_command(&gateway, CreatePost { title: "direct".into() }, Metadata::new(), &unit)
             .await
             .unwrap();
-        assert_eq!(id, PostId(2));
+        assert_eq!(id, PostId(1));
         assert_eq!(
             dispatch_command(&gateway, PublishPost { id }, Metadata::new(), &unit).await,
             Ok(())
@@ -277,7 +277,7 @@ fn a_gateway_can_be_written_by_hand_without_the_attribute() {
             Arc::new(InMemoryNotifier::default()),
         ));
         let gateway = ByHand {
-            commands: PostCommandGateway::new(EventSourcedPostRepository::new(store), ()),
+            commands: PostCommandGateway::new(publisher.repository::<Post>(), ()),
             queries: PostQueryGateway::new(summaries),
             unit: publisher,
         };

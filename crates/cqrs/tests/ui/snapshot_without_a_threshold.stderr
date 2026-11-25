@@ -1,0 +1,5 @@
+error: `snapshot(..)` needs a threshold: `after_events = 100`, `after_sourcing = "5s"`, or both
+ --> tests/ui/snapshot_without_a_threshold.rs:6:35
+  |
+6 | #[cqrs::aggregate(event = Ticked, snapshot())]
+  |                                   ^^^^^^^^^^

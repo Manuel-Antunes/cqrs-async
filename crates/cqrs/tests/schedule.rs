@@ -78,14 +78,15 @@ struct Tasks {
 
 #[cqrs::command_handler]
 impl CommandHandler<Open> for Tasks {
-    async fn handle(&self, command: &Open, ctx: &mut CommandContext<TaskEvent>, tx: &mut ()) -> Result<(), TaskError> {
+    async fn handle(&self, command: &Open, ctx: &mut CommandContext<TaskEvent, ()>) -> Result<(), TaskError> {
         use cqrs::command::CommandSchedule;
         ctx.append(TaskEvent::Opened);
-        ctx.record(cqrs::aggregate::New::<Task>(command.id));
+        ctx.commit(cqrs::aggregate::New::<Task>(command.id));
         // In the unit of work: scheduled once the events commit.
         let due = SystemTime::now() + command.remind_in;
+        let metadata = ctx.metadata().clone();
         self.reminders
-            .schedule_in(tx, due, &Remind { id: command.id }, ctx.metadata())
+            .schedule_in(ctx.tx(), due, &Remind { id: command.id }, &metadata)
             .await?;
         Ok(())
     }
@@ -99,7 +100,7 @@ impl CommandHandler<Remind> for Tasks {
             return Err(TaskError::Refused);
         }
         ctx.append(TaskEvent::Reminded);
-        ctx.record(cqrs::aggregate::Loaded::at(Task { id: command.id }, 1));
+        ctx.commit(cqrs::aggregate::Loaded::at(Task { id: command.id }, 1));
         Ok(())
     }
 }

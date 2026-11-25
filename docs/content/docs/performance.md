@@ -185,6 +185,7 @@ are listed there too.
   event. Keep side effects at 1.
 - Raise `segments` for read models with many aggregates; it is fixed by the
   first instance that initializes the processor's tokens.
-- Snapshot aggregates with long streams (`with_snapshots(store, 100)`).
+- Snapshot aggregates with long streams: `snapshot(after_events = 100)` on
+  the aggregate (`#[cqrs::aggregate(..)]`), and the engine's repository keeps them.
 - Keep side effects in their own namespace, so a slow external call never
   holds the read model back.

@@ -78,7 +78,7 @@ where
         event: &EventEnvelope<PostEvent>,
         context: &mut ProcessingContext<'_, Tx>,
     ) -> Result<(), HandlerError> {
-        let tx = context.transaction();
+        let tx = context.tx();
         let found = match &event.payload {
             PostEvent::Created { id, title } => {
                 let summary = PostSummary {
@@ -112,7 +112,7 @@ where
 
     /// Before a replay rebuilds it.
     async fn reset(&self, context: &mut ProcessingContext<'_, Tx>) -> Result<(), HandlerError> {
-        self.summaries.clear(context.transaction()).await?;
+        self.summaries.clear(context.tx()).await?;
         Ok(())
     }
 
@@ -141,7 +141,7 @@ What `#[cqrs::event_handler(namespace = "summaries", batch = 64)]` does:
 
 **The unit of work is a type parameter.** The handler writes through
 `PostSummaryStore<Tx>`, the write half of the read model's port (part 3),
-in the transaction the processor hands it (`context.transaction()`). In
+in the transaction the processor hands it (`context.tx()`). In
 memory `Tx` is `()`; on PostgreSQL it is the processor's transaction, so
 each change commits with the processor's token (part 8). The projection
 does not choose: the composition root does, by picking the adapter.
@@ -231,20 +231,21 @@ pub fn in_memory_with(
     // Synchronous: no subscriptions to push updates to. Each namespace runs
     // isolated: a failing notification never holds the read model back.
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_projection(projection);
+    let publisher = InlinePublisher::<PostEvent, _, _>::new(store).with_projection(projection);
     let blog = Cqrs::from_publisher(publisher)
-        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+        .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
     (blog, summaries, notifier)
 }
 ```
 
-`in_memory()` is `in_memory_with(PostStore::default())`; `posts_over(&store)`
-is the event-sourced repository from part 2, over the same store.
+`in_memory()` is `in_memory_with(PostStore::default())`;
+`events.repository::<Post>()` is the event-sourced repository from part 2:
+the publisher hands it out, over its own store.
 
-- **The store is created here and shared**: the repository reads it, the
-  publisher writes it.
+- **The store is created here and shared**: the publisher writes it, and the
+  repository the publisher hands out reads it.
 - **The publisher** is an `InlinePublisher` over the store. With
   `with_projection`, it runs every namespace right after each commit, in
   the caller's task, no runtime needed. It is built by hand

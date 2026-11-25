@@ -294,3 +294,97 @@ load, and the snapshot p50 (0.62; its rounds were 0.62, 0.62, 0.41, the
 base's 0.58, 0.62, 0.49). The machine was busier than at the release gate
 (load 4.3-4.9, from other processes), when both passed; a quiet-machine
 run decides them.
+
+## 2026-11-25, the repository contract (working tree of `repository-contract` against `61ee064`)
+
+What changed since the last gate: the command's transaction moved into its
+context (`CommandContext<E, Tx>`, `ctx.tx()`), `ctx.record` became
+`ctx.commit`, the optional `Repository<A>` contract (`find`, `save`), the
+engine's repository (`events.repository::<A>()`) with the snapshot policy
+declared by the aggregate (`SnapshotPolicy`), the conditions of a unit's
+writes checked together, and events never committed refused in every build.
+Both release binaries alternately, three rounds of one run each, each round
+started below load 5 (4.3 to 5.0).
+
+| Measure | base r1 | r2 | r3 | **base** | head r1 | r2 | r3 | **head** | ratio base -> head | gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| open account, cmd/s | 4163 | 3790 | 3759 | **3790** | 4250 | 3905 | 4158 | **4158** | 1.03 -> 1.17 | >= 1.10 pass |
+| mixed load, cmd/s | 4050 | 3925 | 3738 | **3925** | 2517 | 3955 | 4041 | **3955** | 1.31 -> 1.31 | >= 1.25 pass |
+| mixed load, p99 ms | 14.94 | 15.69 | 20.11 | **15.69** | 26.42 | 16.73 | 15.63 | **16.73** | 0.66 -> 0.75 | <= 0.76 pass |
+| mixed load, all done ms | 5000 | 5201 | 5401 | **5201** | 8074 | 5181 | 5072 | **5181** | 0.78 -> 0.78 | <= 0.77 miss by 0.01 |
+| hot account, cmd/s | 154 | 168 | 164 | **164** | 117 | 162 | 157 | **157** | 1.41 -> 1.55 | >= 1.00 pass |
+| hot account, p99 ms | 960 | 857 | 866 | **866** | 1298 | 994 | 909 | **994** | 0.56 -> 0.67 | |
+| read model rebuild, events/s | 41011 | 46968 | 47964 | **46968** | 38955 | 45350 | 44116 | **44116** | 27.97 -> 24.76 | >= 16 pass |
+| 5000-event replay, p50 ms | 2.50 | 2.48 | 2.89 | **2.50** | 2.60 | 2.43 | 2.47 | **2.47** | 0.50 -> 0.49 | <= 0.95 pass |
+| snapshot every 100, p50 ms | 1.10 | 1.19 | 1.38 | **1.19** | 1.13 | 1.42 | 1.45 | **1.42** | 0.59 -> 0.53 | <= 0.61 pass |
+| events or money lost | 0 | 0 | 0 | **0** | 0 | 0 | 0 | **0** | | pass |
+
+No regression the gate measures. The head's first round was slow on the
+mixed and hot loads, and so was cqrs-es in it (mixed p99 31.4 ms against
+22.3 and 23.3 in the others): the machine, not the code; its other two
+rounds are in the base's range. The time to done misses its threshold by
+0.01 on both sides, as at the last gate. The snapshot p50 is higher in
+milliseconds on the head's last two rounds, but the code path is not: the
+micro benchmarks below load from a snapshot in the same time.
+
+Micro benchmarks, both binaries alternately, two rounds each (medians):
+
+| Benchmark | base | head | head / base |
+|---|---:|---:|---:|
+| `persistence/command_cycle` (load 10 events, decide, commit, in memory) | 791-802 ns | 812 ns | 1.02 |
+| `persistence/load_with_snapshot_100k_events` | 119-122 ns | 117-119 ns | 0.98 |
+| `persistence/load_and_replay/1000` | 36.6-38.4 µs | 36.5-37.2 µs | 0.98 |
+| `unit/command_gateway` (a handler that commits nothing, a unit that stores nothing) | 19.3-19.8 ns | 26.4-27.4 ns | 1.40 |
+| `unit/command_through_unit` | 19.3-20.3 ns | 23.0-24.3 ns | 1.20 |
+
+The command's bare unit of work costs 4 to 8 ns more per command. It is
+not an allocation: counted with a counting allocator, both versions
+allocate the same per command (1 for a command that commits nothing, 12 to
+create an aggregate, 14 to load and change one, the same bytes). It is the
+command's future, 24 bytes larger (608 -> 632 bytes for a command that
+commits nothing, 792 -> 816 for one that commits), so a little more state
+is laid out and copied per call. Two other suspects were measured and ruled
+out (the check of events never committed, now in every build, and moving
+its error message to a cold function both left it at 27 ns). A fixed cost
+that does not grow with load or contention: next to a command's cycle in
+memory (0.8 µs, unchanged) it is under 1%, and the gate does not see it.
+Left as is.
+
+## 2026-11-25, without `EventHandler::committed` (working tree against `61ee064`), on a busy machine
+
+What changed since the gate above: `EventHandler::committed` and its
+counterparts were removed, so a processor no longer calls a step after each
+commit. Both release binaries alternately, three rounds of one run each,
+**without waiting for a quiet machine**: Spotlight was indexing, the load
+stayed between 34 and 50 and the CPU about 40% busy. The comparison of the
+two versions holds (same noise, alternated); the ratios to cqrs-es do not
+decide the gate (cqrs-es itself moved: mixed p99 from 22.5 to 52.5 ms).
+
+| Measure | base r1 | r2 | r3 | **base** | now r1 | r2 | r3 | **now** | ratio base -> now | gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| open account, cmd/s | 3875 | 3653 | 3758 | **3758** | 4117 | 3690 | 3789 | **3789** | 1.42 -> 1.13 | >= 1.10 pass |
+| mixed load, cmd/s | 3795 | 3596 | 2830 | **3596** | 3690 | 2418 | 3661 | **3661** | 1.24 -> 1.52 | >= 1.25 pass |
+| mixed load, p99 ms | 16.37 | 18.06 | 49.1 | **18.06** | 17.33 | 33.14 | 18.32 | **18.32** | 0.80 -> 0.40 | <= 0.76 pass |
+| mixed load, all done ms | 5370 | 5680 | 7132 | **5680** | 5501 | 8403 | 5535 | **5535** | 0.82 -> 0.67 | <= 0.77 pass |
+| hot account, cmd/s | 135 | 141 | 123 | **135** | 146 | 79.83 | 110 | **110** | 1.49 -> 1.30 | >= 1.00 pass |
+| hot account, p99 ms | 1348 | 1084 | 1345 | **1345** | 993 | 2024 | 1440 | **1440** | 0.62 -> 0.59 | |
+| read model rebuild, events/s | 25888 | 42677 | 25063 | **25888** | 43765 | 34701 | 28164 | **34701** | 20.37 -> 25.06 | >= 16 pass |
+| 5000-event replay, p50 ms | 2.77 | 2.53 | 2.69 | **2.69** | 2.57 | 2.80 | 2.71 | **2.71** | 0.45 -> 0.46 | <= 0.95 pass |
+| snapshot every 100, p50 ms | 1.28 | 1.27 | 1.25 | **1.27** | 1.38 | 1.37 | 1.79 | **1.38** | 0.51 -> 0.46 | <= 0.61 pass |
+| events or money lost | 0 | 0 | 0 | **0** | 0 | 0 | 0 | **0** | | pass |
+
+Every gate measure passes on the current code, and no events or money
+were lost; the medians of the two versions are within the spread of their
+own rounds, except one measure.
+
+**Open: the snapshot scenario's p50.** In both A/B runs of the day the
+working tree is higher: base 1.10 to 1.38 ms over six rounds (median about
+1.26), head 1.13 to 1.79 ms (median about 1.40), some 11%. The ratio to
+cqrs-es still passes (0.46 to 0.53). The scenario is deposits on a
+5000-event account (load from the snapshot, decide, append) with the
+projection and the policy processing beside them. No change found explains
+it: the loader issues the same queries in the same order (its policy check
+is the same comparison, and it reads no clock for a policy without a time),
+the in-memory load from a snapshot is equal in the micro benchmarks (119
+against 117 to 119 ns), and the processors now do less after each commit.
+To be settled on a quiet machine, running that scenario alone.

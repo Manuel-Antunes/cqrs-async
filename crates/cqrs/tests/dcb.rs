@@ -144,12 +144,7 @@ struct Gateway {
 /// it takes the unit's transaction (in memory, `()`).
 #[cqrs::command_handler]
 impl CommandHandler<Subscribe> for Gateway {
-    async fn handle(
-        &self,
-        command: &Subscribe,
-        events: &mut CommandContext<SchoolEvent>,
-        _: &mut (),
-    ) -> Result<(), Error> {
+    async fn handle(&self, command: &Subscribe, events: &mut CommandContext<SchoolEvent, ()>) -> Result<(), Error> {
         let first_run = self.runs.fetch_add(1, Ordering::Relaxed) == 0;
         for &course in &command.courses {
             let course = self
@@ -163,7 +158,7 @@ impl CommandHandler<Subscribe> for Gateway {
                 subscribe_directly(self.courses.store(), course.id, other);
             }
             course.subscribe(command.student, student.as_deref(), events)?;
-            events.record(course);
+            events.commit(course);
         }
         Ok(())
     }
@@ -334,7 +329,7 @@ fn a_read_only_aggregate_is_checked_too() {
     assert!(student.is_none(), "no subscription yet: absence is checked too");
     subscribe_directly(&store, 3, 1);
     course.subscribe(1, None, &mut events).unwrap();
-    events.record(course);
+    events.commit(course);
     let refused = commit(&mut events, gateway.publisher());
     assert!(matches!(refused, Err(StoreError::ConditionFailed)));
 }
@@ -357,12 +352,90 @@ fn an_aggregate_saved_twice_checks_only_what_others_append() {
     let mut events = CommandContext::with_metadata(Metadata::new());
     let course = block_on(courses.load_in(&2, &mut events)).unwrap().unwrap();
     events.append(SchoolEvent::Subscribed { course: 2, student: 5 });
-    let course = events.record(course);
+    let course = events.commit(course);
     assert_eq!(course.students, [5], "the entity after its events");
     events.append(SchoolEvent::Subscribed { course: 2, student: 6 });
-    events.record(course);
+    events.commit(course);
     commit(&mut events, other.publisher()).unwrap();
     assert_eq!(block_on(courses.load(&2)).unwrap().unwrap().students, [5, 6]);
+}
+
+/// Student 1 is in course 2; course 3 is the one being decided.
+fn gateway_with_a_student() -> (Store, Wired) {
+    let (store, gateway) = gateway(None);
+    subscribe_directly(&store, 2, 1);
+    (store, gateway)
+}
+
+/// A decision on a course and on a student, both built from tags, the student
+/// saved after the course. Another writer subscribes the student elsewhere
+/// between the loads and the commit. Whichever way the two were read, the
+/// commit is refused: a write checks what the whole unit read, not only what
+/// its own aggregate was built from.
+fn stale_student(read_in_the_run: bool) -> (Store, Result<(), StoreError>) {
+    let (store, gateway) = gateway_with_a_student();
+    let Gateway { courses, students, .. } = gateway.inner();
+    let mut events = CommandContext::with_metadata(Metadata::new());
+    let (course, student) = block_on(async {
+        if read_in_the_run {
+            let course = courses.load_in(&3, &mut events).await.unwrap().unwrap();
+            (course, students.load_in(&1, &mut events).await.unwrap().unwrap())
+        } else {
+            (
+                courses.load(&3).await.unwrap().unwrap(),
+                students.load(&1).await.unwrap().unwrap(),
+            )
+        }
+    });
+    assert_eq!(student.courses, 1);
+    subscribe_directly(&store, 1, 1);
+    events.append(SchoolEvent::Subscribed { course: 3, student: 1 });
+    events.commit(course);
+    events.append(SchoolEvent::Subscribed { course: 3, student: 1 });
+    events.commit(student);
+    let committed = commit(&mut events, gateway.publisher());
+    (store, committed)
+}
+
+#[test]
+fn two_aggregates_loaded_apart_are_checked_together() {
+    let (store, committed) = stale_student(false);
+    assert!(matches!(committed, Err(StoreError::ConditionFailed)), "{committed:?}");
+    let events = store.all().len();
+    assert_eq!(
+        events, 5,
+        "3 courses opened, 2 subscriptions, nothing of the refused unit"
+    );
+}
+
+#[test]
+fn two_aggregates_loaded_in_the_run_are_checked_together() {
+    let (_, committed) = stale_student(true);
+    assert!(matches!(committed, Err(StoreError::ConditionFailed)), "{committed:?}");
+}
+
+#[test]
+fn what_is_read_after_the_first_record_is_checked_by_it_too() {
+    // The course is recorded before the student is read, so its own write was
+    // built without the student's condition; the unit checks it anyway.
+    let (store, gateway) = gateway(None);
+    let mut events = CommandContext::with_metadata(Metadata::new());
+    events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
+    events.commit(cqrs::aggregate::New::<Course>(9));
+    let student = block_on(gateway.inner().students.load_in(&1, &mut events)).unwrap();
+    assert!(student.is_none());
+    subscribe_directly(&store, 1, 1);
+    events.append(SchoolEvent::Subscribed { course: 9, student: 1 });
+    events.commit(cqrs::aggregate::New::<Student>(1));
+    let committed = commit(&mut events, gateway.publisher());
+    assert!(matches!(committed, Err(StoreError::ConditionFailed)), "{committed:?}");
+    assert!(
+        store
+            .all()
+            .iter()
+            .all(|e| !matches!(e.payload, SchoolEvent::CourseOpened { course: 9, .. })),
+        "the first write is refused too, not committed alone"
+    );
 }
 
 #[test]
@@ -371,7 +444,7 @@ fn a_new_aggregate_root_is_created_in_its_own_stream() {
     let course = cqrs::aggregate::New::<Course>(9);
     let mut events = CommandContext::with_metadata(Metadata::new());
     events.append(SchoolEvent::CourseOpened { course: 9, capacity: 3 });
-    events.record(course);
+    events.commit(course);
     commit(&mut events, gateway.publisher()).unwrap();
     let loaded = block_on(gateway.inner().courses.load(&9)).unwrap().unwrap();
     assert_eq!(loaded.capacity, 3);

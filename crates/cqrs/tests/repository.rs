@@ -3,9 +3,12 @@
 //! `AggregateFixture`; re-running a decision that lost a race belongs to the
 //! gateway (see `stateful.rs`).
 
+use std::sync::Arc;
+
 use cqrs::{
-    aggregate::{Aggregate, AggregateLoader, EventAppender, Loaded},
-    command::{EventPublisher, Pending},
+    aggregate::{Aggregate, AggregateLoader, EventAppender, Loaded, New, Repository},
+    command::{CommandContext, EventPublisher, Pending},
+    event::Metadata,
     processing::InlinePublisher,
     store::{InMemoryEventStore, StoreError},
     testing::{AggregateFixture, block_on},
@@ -143,4 +146,75 @@ fn a_decision_that_appends_nothing_commits_nothing() {
 #[test]
 fn an_aggregate_without_events_is_not_found() {
     assert!(sums().find(7).is_none());
+}
+
+/// A repository that keeps the state of the sums itself: what `save`
+/// writes goes to the unit's transaction (here, a list of statements).
+struct Kept;
+
+impl Repository<Sum> for Kept {
+    type Tx = Vec<String>;
+
+    async fn find(&self, id: &u32, tx: &mut Vec<String>) -> Result<Option<Loaded<Sum>>, StoreError> {
+        tx.push(format!("select {id}"));
+        Ok(Some(Loaded::at(Sum { id: *id, total: 7 }, 3)))
+    }
+
+    async fn save(&self, sum: &Loaded<Sum>, tx: &mut Vec<String>) -> Result<(), StoreError> {
+        tx.push(format!(
+            "upsert {} total {} version {:?}",
+            sum.id,
+            sum.total,
+            sum.version()
+        ));
+        Ok(())
+    }
+}
+
+#[test]
+fn committing_then_saving_keeps_the_entity_after_its_events_in_the_transaction() {
+    let mut ctx = CommandContext::in_transaction(Metadata::new(), Vec::new());
+    let sum = block_on(Kept.find(&1, ctx.tx())).unwrap().unwrap();
+    sum.add(5, &mut ctx).unwrap();
+    let saved = ctx.commit(sum);
+    block_on(Kept.save(&saved, ctx.tx())).unwrap();
+    assert_eq!(
+        (saved.total, saved.version()),
+        (12, Some(4)),
+        "the entity after its events"
+    );
+    assert_eq!(ctx.tx(), &["select 1", "upsert 1 total 12 version Some(4)"]);
+    assert!(ctx.pending().is_empty());
+    let (writes, tx) = ctx.into_parts();
+    assert_eq!(tx.len(), 2);
+    assert_eq!(writes.len(), 1, "the events are appended by the unit of work, once");
+    assert_eq!(writes[0].events, [Added(5)]);
+}
+
+#[test]
+fn a_shared_repository_forwards_find_and_save() {
+    let kept = Arc::new(Kept);
+    let mut ctx = CommandContext::in_transaction(Metadata::new(), Vec::new());
+    let sum = block_on(kept.find(&1, ctx.tx())).unwrap().unwrap();
+    sum.add(1, &mut ctx).unwrap();
+    let sum = ctx.commit(sum);
+    block_on(kept.save(&sum, ctx.tx())).unwrap();
+    assert_eq!(ctx.tx(), &["select 1", "upsert 1 total 8 version Some(4)"]);
+}
+
+#[test]
+fn a_loader_is_a_repository_for_any_transaction_and_saves_nothing() {
+    let store: Store = Store::default();
+    let sums = AggregateLoader::<Sum, _>::new(Store::clone(&store)).in_transaction::<Vec<String>>();
+    let mut ctx = CommandContext::in_transaction(Metadata::new(), Vec::new());
+    assert!(block_on(sums.find(&1, ctx.tx())).unwrap().is_none());
+    Sum::initial(&1).add(4, &mut ctx).unwrap();
+    let saved = ctx.commit(New::<Sum>(1));
+    block_on(sums.save(&saved, ctx.tx())).unwrap();
+    assert_eq!((saved.total, saved.version()), (4, Some(1)));
+    assert!(
+        ctx.tx().is_empty(),
+        "its events are its state: nothing written in the transaction"
+    );
+    assert_eq!(ctx.writes().len(), 1);
 }

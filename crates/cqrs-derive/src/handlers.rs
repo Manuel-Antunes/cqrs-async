@@ -43,11 +43,12 @@ fn declares(item: &ItemImpl, name: &str) -> bool {
 
 /// `#[command_handler]` on `impl CommandHandler<C> for H`: the command is the
 /// type behind `handle`'s `&Command` argument (and the trait's parameter, if
-/// left out), the event the parameter of its `&mut CommandContext<Event>`
-/// argument, and the unit of work its third argument: `tx: &mut Tx` is
-/// `InTransaction<Tx>`; without one, `Autocommit` (and the macro adds the
-/// `&mut ()` the trait passes). It adds the two associated types, and the
-/// `Handles<C>` marker a gateway listing `C` requires.
+/// left out), the event the first type argument of its
+/// `&mut CommandContext<Event, ..>` argument, and the unit of work the
+/// number of them: `CommandContext<Event>` is `Autocommit`;
+/// `CommandContext<Event, Tx>` is `InTransaction<Tx>` (even for `()`). It adds
+/// the two associated types, and the `Handles<C>` marker a gateway listing
+/// `C` requires.
 pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
     let krate = crate::krate();
     let method = handle(&item)?;
@@ -63,37 +64,24 @@ pub fn command_handler(mut item: ItemImpl) -> Result<TokenStream2> {
         }
     };
     let context = argument(method, 1, "a `ctx: &mut CommandContext<Event>` argument")?;
-    let event = context_event(&context)?;
-    let transaction = match argument(method, 2, "") {
-        Ok(Type::Reference(TypeReference {
-            elem,
-            mutability: Some(_),
-            ..
-        })) => Some(*elem),
-        Ok(other) => {
-            return Err(Error::new(
-                other.span(),
-                "expected `tx: &mut Tx`: the unit of work's transaction, lent to the handler",
-            ));
-        }
-        Err(_) => None,
-    };
+    let (event, transaction) = context_types(&context)?;
+    let extra = method
+        .sig
+        .inputs
+        .iter()
+        .filter(|input| matches!(input, FnArg::Typed(_)))
+        .nth(2);
+    if let Some(extra) = extra {
+        return Err(Error::new(
+            extra.span(),
+            "the unit's transaction is in the context: take `ctx: &mut CommandContext<Event, Tx>` and use \
+             `ctx.tx()`",
+        ));
+    }
     let unit: Type = match &transaction {
         Some(transaction) => parse_quote!(#krate::InTransaction<#transaction>),
         None => parse_quote!(#krate::Autocommit),
     };
-    if transaction.is_none() {
-        // The trait passes the unit's transaction, `()` here.
-        let method = item
-            .items
-            .iter_mut()
-            .find_map(|item| match item {
-                ImplItem::Fn(method) if method.sig.ident == "handle" => Some(method),
-                _ => None,
-            })
-            .expect("found above");
-        method.sig.inputs.push(parse_quote!(_: &mut ()));
-    }
     if !declares(&item, "Unit") {
         item.items.insert(0, parse_quote!(type Unit = #unit;));
     }
@@ -183,9 +171,15 @@ fn handles_marker(item: &ItemImpl, message: &Type) -> TokenStream2 {
     }
 }
 
-/// `E` in `&mut CommandContext<E>`.
-fn context_event(ty: &Type) -> Result<Type> {
-    let error = || Error::new(ty.span(), "expected `&mut CommandContext<Event>`");
+/// `E` in `&mut CommandContext<E>`, and `Tx` in `&mut CommandContext<E, Tx>`
+/// (`None` when it is not written).
+fn context_types(ty: &Type) -> Result<(Type, Option<Type>)> {
+    let error = || {
+        Error::new(
+            ty.span(),
+            "expected `&mut CommandContext<Event>` or `&mut CommandContext<Event, Tx>`",
+        )
+    };
     let Type::Reference(TypeReference {
         elem,
         mutability: Some(_),
@@ -210,8 +204,8 @@ fn context_event(ty: &Type) -> Result<Type> {
         GenericArgument::Type(ty) => Some(ty.clone()),
         _ => None,
     });
-    match (types.next(), types.next()) {
-        (Some(event), None) => Ok(event),
+    match (types.next(), types.next(), types.next()) {
+        (Some(event), transaction, None) => Ok((event, transaction)),
         _ => Err(error()),
     }
 }

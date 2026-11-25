@@ -1,0 +1,18 @@
+error[E0277]: `Elsewhere` cannot keep snapshots of `Clock`
+  --> tests/ui/snapshot_in_a_store_that_cannot_keep_them.rs:24:20
+   |
+24 |     let _ = events.repository::<Clock>();
+   |                    ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `KeepSnapshots<Clock, Snapshots>` is not implemented for `Elsewhere`
+  --> tests/ui/snapshot_in_a_store_that_cannot_keep_them.rs:20:1
+   |
+20 | struct Elsewhere;
+   | ^^^^^^^^^^^^^^^^
+   = note: an aggregate declared with `snapshot(..)` needs an event store that can keep it: `Clone` in memory, `Serialize + DeserializeOwned` on PostgreSQL
+   = note: or drop `snapshot(..)` from `Clock`
+help: the trait `KeepSnapshots<A, Snapshots>` is implemented for `InMemoryEventStore<<A as Aggregate>::Event>`
+  --> src/snapshot.rs
+   |
+   | impl<A: Aggregate + Clone> KeepSnapshots<A, Snapshots> for InMemoryEventStore<A::Event> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

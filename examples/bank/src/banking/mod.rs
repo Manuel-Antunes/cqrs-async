@@ -8,7 +8,6 @@ pub mod domain;
 pub mod portfolio;
 
 use cqrs::{
-    aggregate::AggregateLoader,
     processing::{Events, Forward, ProcessorHandle, ProjectionHandle},
     store::{FanIn, InMemoryEventStore, Json, ReadLog},
 };
@@ -16,7 +15,7 @@ use cqrs_amqp::{Amqp, AmqpError, AmqpPublisher};
 
 use self::{
     commands::{AccountGateway, CustomerGateway},
-    domain::{AccountEvent, CustomerEvent},
+    domain::{Account, AccountEvent, Customer, CustomerEvent},
     portfolio::{BankEvent, PortfolioProjection, PortfolioQueries, SharedPortfolios},
 };
 
@@ -71,8 +70,8 @@ impl Bank {
         // so the two logs are in one order, which the fan-in reads.
         let customer_store = InMemoryEventStore::<CustomerEvent>::new();
         let account_store = customer_store.beside::<AccountEvent>();
-        let customer_events = Customers::new(customer_store.clone());
-        let account_events = Accounts::new(account_store.clone());
+        let customer_events = Customers::new(customer_store);
+        let account_events = Accounts::new(account_store);
         let ledger: Ledger = Events::fan_in((&customer_events, &account_events));
 
         let portfolios = SharedPortfolios::default();
@@ -83,12 +82,12 @@ impl Bank {
             .spawn();
         Self {
             customers: CustomerGateway {
-                customers: AggregateLoader::new(customer_store.clone()),
+                customers: customer_events.repository::<Customer>(),
                 events: customer_events.clone(),
             },
             accounts: AccountGateway {
-                customers: AggregateLoader::new(customer_store),
-                accounts: AggregateLoader::new(account_store),
+                customers: customer_events.repository::<Customer>(),
+                accounts: account_events.repository::<Account>(),
                 events: account_events.clone(),
             },
             queries: PortfolioQueries { portfolios },

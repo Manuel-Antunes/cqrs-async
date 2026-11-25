@@ -39,9 +39,9 @@
 //! loaded aggregate is read-only; only saved events change it):
 //!
 //! ```compile_fail,E0596
-//! # async fn doc(posts: &impl blog::application::commands::PostRepository) {
+//! # async fn doc(posts: &impl cqrs::aggregate::Repository<blog::domain::Post, Tx = ()>) {
 //! use blog::domain::PostId;
-//! let mut post = posts.find(PostId(1)).await.unwrap().unwrap();
+//! let mut post = posts.find(&PostId(1), &mut ()).await.unwrap().unwrap();
 //! let state: &mut blog::domain::Post = &mut post;
 //! # }
 //! ```

@@ -72,7 +72,7 @@
 //! impl<P> CommandHandler<Open> for Bank<P> {
 //!     async fn handle(&self, command: &Open, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
 //!         ctx.append(AccountEvent::Opened);
-//!         ctx.record(New::<Account>(command.id)); // a new stream: fails if it exists
+//!         ctx.commit(New::<Account>(command.id)); // a new stream: fails if it exists
 //!         Ok(())
 //!     }
 //! }
@@ -80,9 +80,9 @@
 //! #[cqrs::command_handler]
 //! impl<P> CommandHandler<Deposit> for Bank<P> {
 //!     async fn handle(&self, command: &Deposit, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
-//!         let account = self.accounts.load(&command.id).await?.ok_or(BankError::NoSuchAccount)?;
+//!         let account = self.accounts.find(&command.id, ctx.tx()).await?.ok_or(BankError::NoSuchAccount)?;
 //!         account.deposit(command.amount, ctx)?;
-//!         ctx.record(account); // appended and committed once the handler returns
+//!         ctx.commit(account); // appended to its stream once the handler returns
 //!         Ok(())
 //!     }
 //! }
@@ -119,13 +119,13 @@
 //!     }
 //! }
 //!
-//! // Wiring: the store, the publisher running the projection inline, the unit.
-//! let store = InMemoryEventStore::new();
+//! // Wiring: the publisher running the projection inline, the unit. The
+//! // publisher hands out the accounts' repository (its store, no snapshots).
 //! let balances = Balances::default();
-//! let publisher = InlinePublisher::new(store.clone())
+//! let publisher = InlinePublisher::new(InMemoryEventStore::new())
 //!     .with_projection(AccountProjection { balances: Arc::clone(&balances) });
 //! let bank = Cqrs::from_publisher(publisher)
-//!     .commands(|events| Bank { accounts: AggregateLoader::new(store), events })
+//!     .commands(|events| Bank { accounts: events.repository::<Account>(), events })
 //!     .queries(Accounts { balances })
 //!     .build();
 //!
@@ -144,8 +144,9 @@
 //! - [`aggregate`](mod@aggregate): the domain side. An [`Aggregate`]
 //!   decides in `&self` methods that append events to an
 //!   [`EventAppender`]; an
-//!   [`AggregateLoader`] rebuilds it from its
-//!   events (and snapshots).
+//!   [`AggregateLoader`], which the engine hands out as its
+//!   [`Repository`], rebuilds it from its events (and
+//!   snapshots).
 //! - [`command`](mod@command): commands and their handlers
 //!   ([`CommandHandler<C>`](command::CommandHandler), one impl per command on
 //!   the gateway struct), run in a unit of work that appends what they
@@ -201,6 +202,7 @@ mod interceptor;
 mod loader;
 mod message;
 mod projection;
+mod repository;
 mod schedule;
 mod snapshot;
 #[cfg(feature = "tokio")]
@@ -234,12 +236,16 @@ pub use cqrs_derive::{
 
 pub mod aggregate {
     //! The domain side: aggregates decide in `&self` methods, appending
-    //! events to an [`EventAppender`]; an [`AggregateLoader`] rebuilds them
-    //! from their events, from a snapshot if there is one.
+    //! events to an [`EventAppender`]; an [`AggregateLoader`], which the
+    //! engine hands out (`events.repository::<A>()`), rebuilds them from
+    //! their events, from a snapshot if the aggregate declares a policy.
 
     pub use crate::aggregate_root::{Aggregate, EventAppender};
     pub use crate::loader::{AggregateLoader, Loaded, New, NotFound};
-    pub use crate::snapshot::{InMemorySnapshots, SnapshotStore};
+    pub use crate::repository::Repository;
+    pub use crate::snapshot::{
+        InMemorySnapshots, KeepSnapshots, NoSnapshots, SnapshotPolicy, SnapshotStore, Snapshots, Snapshotting,
+    };
 }
 
 pub mod command {
@@ -340,7 +346,7 @@ pub mod processing {
 
 /// What most domain and application modules use: `use cqrs::prelude::*;`.
 pub mod prelude {
-    pub use crate::aggregate::{Aggregate, EventAppender, Loaded, New, NotFound};
+    pub use crate::aggregate::{Aggregate, EventAppender, Loaded, New, NotFound, Repository};
     pub use crate::command::{Command, CommandContext, CommandGateway, CommandHandler};
     pub use crate::event::{DomainEvent, EventEnvelope, Metadata, TagResolver};
     pub use crate::processing::{EventHandler, HandlerError, ProcessingContext};

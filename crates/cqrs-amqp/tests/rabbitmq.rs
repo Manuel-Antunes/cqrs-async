@@ -328,7 +328,7 @@ impl CommandHandler<Notify> for Notifications {
             title: command.title.clone(),
         });
         // A new stream per post: a redelivered message conflicts.
-        ctx.record(cqrs::aggregate::New::<Notice>(command.post));
+        ctx.commit(cqrs::aggregate::New::<Notice>(command.post));
         Ok(())
     }
 }

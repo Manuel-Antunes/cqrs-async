@@ -22,7 +22,7 @@ pub use retitle_post::RetitlePost;
 /// [`PostCommands`], the trait of whatever routes them all.
 #[cqrs::command_gateway(commands = PostCommands, handles(CreatePost, RetitlePost, PublishPost))]
 pub struct PostCommandGateway<R, P> {
-    /// Where posts are found and kept.
+    /// Where posts are found and kept, and where new ones get their ids.
     posts: R,
     /// The unit of work every command runs in: it opens the transaction
     /// the handlers and the repository write in, appends what they

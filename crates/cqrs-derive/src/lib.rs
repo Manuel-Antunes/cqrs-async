@@ -51,7 +51,7 @@ fn krate() -> TokenStream2 {
 /// }
 ///
 /// #[cqrs::command_handler]
-/// impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> { .. }
+/// impl<R: Repository<Post>, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> { .. }
 /// ```
 ///
 /// Written by hand, the gateway above is (the macros name these traits
@@ -196,14 +196,20 @@ pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// On `impl CommandHandler<C> for H`: adds `type Event` and `type Unit`,
-/// read from `handle(&self, command: &C, events: &mut CommandContext<Event>[, tx:
-/// &mut Tx])`, and `C` if the trait leaves it out. Types written by hand are
-/// kept. It also marks `H` as handling `C`, for the gateway that lists it.
+/// read from `handle(&self, command: &C, ctx: &mut CommandContext<Event[, Tx]>)`,
+/// and `C` if the trait leaves it out. Types written by hand are kept. It also
+/// marks `H` as handling `C`, for the gateway that lists it.
+///
+/// The unit of work is read from the number of type arguments of the context:
+/// `CommandContext<Event>` runs in `Autocommit`; `CommandContext<Event, Tx>`
+/// runs in `InTransaction<Tx>` (even `CommandContext<Event, ()>`), and the
+/// handler reaches the transaction with `ctx.tx()`. A third argument
+/// to `handle` does not compile.
 ///
 /// ```ignore
 /// #[command_handler]
-/// impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P> {
-///     async fn handle(&self, command: &PublishPost, events: &mut CommandContext<PostEvent>, tx: &mut R::Tx)
+/// impl<R: Repository<Post>, P> CommandHandler<PublishPost> for PostCommandGateway<R, P> {
+///     async fn handle(&self, command: &PublishPost, ctx: &mut CommandContext<PostEvent, R::Tx>)
 ///         -> Result<(), BlogError> { ... }
 /// }
 /// ```
@@ -211,13 +217,13 @@ pub fn projection(arguments: TokenStream, item: TokenStream) -> TokenStream {
 /// Written by hand, the impl above is:
 ///
 /// ```text
-/// impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R, P>
+/// impl<R: Repository<Post>, P> CommandHandler<PublishPost> for PostCommandGateway<R, P>
 /// where
 ///     PostCommandGateway<R, P>: Send + Sync,
 /// {
 ///     type Event = PostEvent;
-///     type Unit = InTransaction<R::Tx>; // `Autocommit` without a `tx` argument
-///     async fn handle(&self, command: &PublishPost, ctx: &mut CommandContext<PostEvent>, tx: &mut R::Tx)
+///     type Unit = InTransaction<R::Tx>; // `Autocommit` for `CommandContext<PostEvent>`
+///     async fn handle(&self, command: &PublishPost, ctx: &mut CommandContext<PostEvent, R::Tx>)
 ///         -> Result<(), BlogError> { ... }
 /// }
 /// // For the gateway that lists `PublishPost`.
@@ -601,6 +607,26 @@ fn tagged_fields(krate: &TokenStream2, fields: &syn::Fields) -> Result<Option<(T
 /// #[derive(Debug)]
 /// pub struct Post { id: PostId, title: String, published: bool }
 /// ```
+///
+/// `snapshot(after_events = 100, after_sourcing = "5s")` says when loading
+/// the aggregate keeps a snapshot of it, so the next load replays only what
+/// came after: after a load that replayed 100 events or more, or one that
+/// took 5 seconds or more, whichever comes first. Either key alone is
+/// enough (at least one is needed, and `after_events` is at least 1);
+/// `after_sourcing` is a whole number followed by `ms`, `s` or `m`. The
+/// engine's `repository::<Post>()` takes the policy from there, and the
+/// event store it serves must be able to keep snapshots of the aggregate
+/// (`Clone` in memory, `Serialize + DeserializeOwned` on PostgreSQL), which
+/// is checked when the repository is asked for.
+///
+/// ```ignore
+/// #[cqrs::aggregate(name = "post", event = PostEvent, snapshot(after_events = 100, after_sourcing = "5s"))]
+/// #[derive(Clone, Serialize, Deserialize)]
+/// pub struct Post { id: PostId, title: String, published: bool }
+/// ```
+///
+/// The macro always writes `impl Snapshotting for Post`: with the policy
+/// when `snapshot(..)` is given, and saying "no snapshots" when it is not.
 #[proc_macro_attribute]
 pub fn aggregate(arguments: TokenStream, item: TokenStream) -> TokenStream {
     into_stream(attribute_form(

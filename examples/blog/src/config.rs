@@ -13,9 +13,11 @@
 //!   projection's transaction, with its token; the blog's migrations run
 //!   the library's tables too.
 //!
-//! The application never knows which: the repository is a port
-//! ([`PostRepository`](crate::application::commands::PostRepository)),
-//! and each wiring picks its adapter. What the unit exposes is named by the
+//! The application never knows which: the handlers ask for a
+//! [`PostRepository`](crate::application::commands::PostRepository) (the
+//! engine hands out the event-sourced one, snapshots as `Post` declares;
+//! PostgreSQL's keeps the posts' state in a table), and each wiring picks
+//! its adapter. What the unit exposes is named by the
 //! traits the gateways and the projection generate ([`PostCommands`], [`PostQueries`],
 //! [`PostSubscriptions`]).
 
@@ -23,7 +25,6 @@ use std::sync::Arc;
 
 use cqrs::{
     Cqrs, Intercepted,
-    aggregate::InMemorySnapshots,
     processing::{Events, InlinePublisher},
     store::InMemoryEventStore,
 };
@@ -39,23 +40,15 @@ use crate::{
     },
     domain::{Post, PostEvent},
     infrastructure::{
-        Audit, AuditLog, EventSourcedPostRepository, InMemoryNotifier, InMemoryPostSummaryRepository, Measured,
-        ProjectionMetrics, SeaOrmPostRepository, SeaOrmPostSummaries, postgres::Migrator,
+        Audit, AuditLog, InMemoryNotifier, InMemoryPostSummaryRepository, Measured, ProjectionMetrics,
+        SeaOrmPostRepository, SeaOrmPostSummaries, postgres::Migrator,
     },
 };
 
-/// The in-memory event store, shared by the repository (reads) and the unit
-/// (commits, processors, subscriptions). A handle: clones share it.
+/// The in-memory event store, shared by the repositories the engine hands out
+/// (reads) and the unit (commits, processors, subscriptions). A handle: clones
+/// share it.
 pub type PostStore = InMemoryEventStore<PostEvent>;
-
-/// How many events of a post a find replays before it keeps a snapshot.
-const SNAPSHOT_EVERY: u64 = 50;
-
-/// The posts' repository over `store`: it rebuilds posts from their events,
-/// keeping a snapshot of the long-lived ones.
-fn posts_over(store: &PostStore) -> EventSourcedPostRepository<PostStore, InMemorySnapshots<Post>> {
-    EventSourcedPostRepository::new(store.clone()).with_snapshots(InMemorySnapshots::default(), SNAPSHOT_EVERY)
-}
 
 /// The blog, wired in memory and synchronously: the projection and the
 /// notification run inside each commit, in the caller's task. Returns the
@@ -86,9 +79,9 @@ pub fn in_memory_with(
     // Synchronous: no subscriptions to push updates to. Each namespace runs
     // isolated: a failing notification never holds the read model back.
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_projection(projection);
+    let publisher = InlinePublisher::<PostEvent, _, _>::new(store).with_projection(projection);
     let blog = Cqrs::from_publisher(publisher)
-        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+        .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .build();
     (blog, summaries, notifier)
@@ -156,8 +149,8 @@ pub fn start_in_memory()
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let app = Cqrs::new(Events::new(store.clone()))
-        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+    let app = Cqrs::new(Events::new(store))
+        .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))

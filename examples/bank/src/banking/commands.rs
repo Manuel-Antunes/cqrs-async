@@ -2,7 +2,7 @@
 //! aggregate root, each committing to its own log.
 
 use cqrs::{
-    aggregate::{AggregateLoader, New},
+    aggregate::{AggregateLoader, Loaded, New, Repository},
     command::{CommandContext, CommandHandler},
     store::InMemoryEventStore,
 };
@@ -78,7 +78,7 @@ impl<P> CommandHandler<RegisterCustomer> for CustomerGateway<P> {
         ctx: &mut CommandContext<CustomerEvent>,
     ) -> Result<(), BankError> {
         Customer::register(&command.name, ctx)?;
-        ctx.record(New::<Customer>(command.id));
+        ctx.commit(New::<Customer>(command.id));
         Ok(())
     }
 }
@@ -88,11 +88,11 @@ impl<P> CommandHandler<RenameCustomer> for CustomerGateway<P> {
     async fn handle(&self, command: &RenameCustomer, ctx: &mut CommandContext<CustomerEvent>) -> Result<(), BankError> {
         let customer = self
             .customers
-            .load(&command.id)
+            .find(&command.id, ctx.tx())
             .await?
             .ok_or(BankError::NoSuchCustomer(command.id))?;
         customer.rename(&command.name, ctx)?;
-        ctx.record(customer);
+        ctx.commit(customer);
         Ok(())
     }
 }
@@ -117,7 +117,7 @@ impl<P> CommandHandler<OpenAccount> for AccountGateway<P> {
             return Err(BankError::NoSuchCustomer(command.customer));
         }
         Account::open(command.customer, ctx);
-        ctx.record(New::<Account>(command.id));
+        ctx.commit(New::<Account>(command.id));
         Ok(())
     }
 }
@@ -125,9 +125,9 @@ impl<P> CommandHandler<OpenAccount> for AccountGateway<P> {
 #[cqrs::command_handler]
 impl<P> CommandHandler<Deposit> for AccountGateway<P> {
     async fn handle(&self, command: &Deposit, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
-        let account = self.load(command.account).await?;
+        let account = self.find(command.account, ctx).await?;
         account.deposit(command.amount, ctx)?;
-        ctx.record(account);
+        ctx.commit(account);
         Ok(())
     }
 }
@@ -135,16 +135,19 @@ impl<P> CommandHandler<Deposit> for AccountGateway<P> {
 #[cqrs::command_handler]
 impl<P> CommandHandler<Withdraw> for AccountGateway<P> {
     async fn handle(&self, command: &Withdraw, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
-        let account = self.load(command.account).await?;
+        let account = self.find(command.account, ctx).await?;
         account.withdraw(command.amount, ctx)?;
-        ctx.record(account);
+        ctx.commit(account);
         Ok(())
     }
 }
 
 impl<P> AccountGateway<P> {
-    /// Account `id`, as of its last event.
-    async fn load(&self, id: u32) -> Result<cqrs::aggregate::Loaded<Account>, BankError> {
-        self.accounts.load(&id).await?.ok_or(BankError::NoSuchAccount(id))
+    /// Account `id`, as of its last event, for this run.
+    async fn find(&self, id: u32, ctx: &mut CommandContext<AccountEvent>) -> Result<Loaded<Account>, BankError> {
+        self.accounts
+            .find(&id, ctx.tx())
+            .await?
+            .ok_or(BankError::NoSuchAccount(id))
     }
 }

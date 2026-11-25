@@ -6,8 +6,8 @@
 use std::{any::type_name, fmt, future::Future, marker::PhantomData};
 
 use crate::{
-    Aggregate, AppendEvents, DomainEvent, EventEnvelope, EventHandler, EventPublisher, HandlerError, Loaded, Pending,
-    StoreError,
+    Aggregate, AggregateLoader, AppendEvents, DomainEvent, EventEnvelope, EventHandler, EventPublisher, HandlerError,
+    KeepSnapshots, Loaded, Pending, Snapshotting, StoreError,
 };
 
 /// Runs committed events through a processing group, in-process and right
@@ -86,8 +86,6 @@ async fn run_handler<E: DomainEvent, H: EventHandler<E>>(
     failures: &mut Vec<HandlerFailure>,
 ) {
     for event in events {
-        // The events are committed already: each one's post-commit step
-        // follows its handling, as in a processor's unit of work.
         if let Err(error) = handler
             .handle(event, &mut crate::ProcessingContext::new(&mut (), false))
             .await
@@ -99,7 +97,6 @@ async fn run_handler<E: DomainEvent, H: EventHandler<E>>(
             });
             return;
         }
-        handler.committed(event).await;
     }
 }
 
@@ -174,7 +171,6 @@ impl<P: crate::Route<()>> EventProcessor<P::Event> for InlineProjection<P> {
                     });
                     break;
                 }
-                self.0.committed(namespace, event).await;
             }
         }
         if failures.is_empty() {
@@ -302,6 +298,35 @@ impl<E, S, H, F> InlinePublisher<E, S, H, F> {
     /// The processing group fed after each commit.
     pub fn processor(&self) -> &H {
         &self.processor
+    }
+
+    /// The repository of the aggregates `A` stored in this publisher's
+    /// store, for command handlers whose units of work have no transaction
+    /// (`Tx = ()`): it reads from the store, keeps the snapshots the store
+    /// can keep for `A` as `A` declares (`snapshot(..)` of
+    /// `#[cqrs::aggregate]`; none if it declares none), and takes part in the
+    /// publisher's units of work.
+    ///
+    /// ```
+    /// # use cqrs::{aggregate::Repository, prelude::*, processing::InlinePublisher, store::InMemoryEventStore};
+    /// # #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
+    /// # enum DoorEvent { Installed { id: u32 } }
+    /// #[cqrs::aggregate(event = DoorEvent, snapshot(after_events = 50))]
+    /// #[derive(Clone)]
+    /// struct Door { id: u32 }
+    /// # impl Door { fn apply(&mut self, _: &DoorEvent) {} }
+    ///
+    /// let publisher = InlinePublisher::<DoorEvent, _>::new(InMemoryEventStore::new());
+    /// let doors = publisher.repository::<Door>();
+    /// # fn takes_repository<R: Repository<Door>>(_: &R) {}
+    /// # takes_repository(&doors);
+    /// ```
+    pub fn repository<A>(&self) -> AggregateLoader<A, S, <S as KeepSnapshots<A, A::Mode>>::Snapshots>
+    where
+        A: Snapshotting<Event = E>,
+        S: Clone + KeepSnapshots<A, A::Mode>,
+    {
+        crate::loader::declared_by_the_aggregate(&self.store)
     }
 }
 

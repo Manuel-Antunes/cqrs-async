@@ -62,8 +62,8 @@ routes. The unit wraps its whole command gateway with `.intercept`:
 
 ```rust
 let audit = Arc::new(AuditLog::default());
-let app = Cqrs::new(Events::new(store.clone()))
-    .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+let app = Cqrs::new(Events::new(store))
+    .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
     .intercept(Audit(Arc::clone(&audit)))     // Intercepted<PostCommandGateway<..>, Audit>
     // ...
     .build();
@@ -186,8 +186,8 @@ pub fn start_in_memory()
     let metrics = Arc::new(ProjectionMetrics::default());
 
     let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-    let app = Cqrs::new(Events::new(store.clone()))
-        .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+    let app = Cqrs::new(Events::new(store))
+        .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
         .intercept(Audit(Arc::clone(&audit)))
         .queries(PostQueryGateway::new(Arc::clone(&summaries)))
         .projection(Intercepted::new(projection, Measured(Arc::clone(&metrics))))

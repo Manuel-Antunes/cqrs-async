@@ -25,8 +25,11 @@ pub use id::PostId;
 ///
 /// The derive writes the [`Aggregate`](cqrs::aggregate::Aggregate) impl: stream `post`,
 /// id from the `id` field, initial state with the other fields at their
-/// default, and `evolve` calling `apply`.
-#[cqrs::aggregate(name = "post", event = PostEvent)]
+/// default, and `evolve` calling `apply`. `snapshot(..)` is the aggregate's
+/// say on snapshots: loading a post that replayed 50 events keeps one, so a
+/// long-lived post is not replayed from its first event every time (the
+/// repository the engine hands out does it, wherever it can keep them).
+#[cqrs::aggregate(name = "post", event = PostEvent, snapshot(after_events = 50))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Post {
     /// Which post this is.

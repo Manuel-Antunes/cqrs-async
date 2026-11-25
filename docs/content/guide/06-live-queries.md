@@ -85,8 +85,9 @@ outside its unit of work, so a subscriber never sees a change that was
 rolled back. It runs on **every instance** of the application, once the
 namespace handled the event, whichever instance did: with several
 instances sharing the segments, a subscriber connected to any of them sees
-every change. That is why it is not `committed`, which runs only on the
-instance that handled the event. It does not run for replayed events.
+every change, where emitting from the handler (as Axon does) would reach
+only the subscribers of the instance that handled the event. It does not
+run for replayed events.
 
 It reads the read model rather than computing the result from the event:
 the summary is already up to date, and the query and its updates then

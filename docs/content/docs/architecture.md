@@ -10,9 +10,9 @@ sidebar_position: 20
  ┌─────────────────────────────────────────────┐   ┌─────────────────────────────────────┐
  │ PostCommandGateway (is the handler)          │   │ PostQueryGateway (is the handler)   │
  │   impl CommandHandler<PublishPost>           │   │   impl QueryHandler<FindPost>       │
- │      find │ decide │ ctx.record │ save       │   │                 │ read              │
- │           ▼        ▼            ▼            │   │                 ▼                   │
- │   PostRepository (your port, your Tx)        │   │   PostSummaryRepository (your port) │
+ │       find │ decide │ commit │ save       │   │                 │ read              │
+ │           ▼        ▼         ▼               │   │                 ▼                   │
+ │   Repository<Post> (engine's, or yours)      │   │   PostSummaryRepository (your port) │
  │                                              │   │                 ▲ write             │
  │   unit of work (#[gateway(unit)]):           │   │   PostProjection                    │
  │   begin → handle → append → commit           │   │     namespace "summaries"           │
@@ -28,9 +28,10 @@ sidebar_position: 20
 ```
 
 - **Write side.** A command goes through a gateway to exactly one handler.
-  The handler finds entities through the application's own repository, lets
-  the domain decide (append events), and records them for the entity they
-  change. The framework's unit of work appends what was recorded, with
+  The handler finds entities through a repository (the one the engine hands
+  out, or the application's own), lets
+  the domain decide (append events), and commits them to the entity they
+  change. The framework's unit of work appends what was committed, with
   optimistic concurrency, and commits.
 - **The event store** is the only source of truth. Every event gets a
   stream (`post-42`), a sequence within it, and a global position.
@@ -49,7 +50,7 @@ The public API is a handful of modules, and a small prelude:
 | Module | What is in it |
 |---|---|
 | `cqrs` (root) | The macros, `Cqrs` and `CqrsBuilder` (an application's unit and its builder), `Units`, `Message`, `Dispatch`, `Interceptor`, `Intercepted` |
-| `cqrs::aggregate` | The domain side: `Aggregate`, `EventAppender`, `AggregateLoader`, `Loaded`, `New`, `NotFound`, `SnapshotStore`, `InMemorySnapshots` |
+| `cqrs::aggregate` | The domain side: `Aggregate`, `EventAppender`, `AggregateLoader`, `Repository`, `Loaded`, `New`, `NotFound`, `SnapshotStore`, `InMemorySnapshots`, `Snapshotting`, `SnapshotPolicy`, `KeepSnapshots` |
 | `cqrs::command` | `Command`, `CommandHandler<C>`, `CommandContext`, `CommandGateway`, and the unit of work: `UnitOfWork`, `UnitMode`, `Autocommit`, `InTransaction`, `dispatch_command` |
 | `cqrs::query` | `Query`, `QueryHandler<Q>`, `QueryGateway`, and subscription queries: `QuerySubscriptions`, `QueryUpdateEmitter`, `QueryUpdateChannel` |
 | `cqrs::event` | `DomainEvent`, `EventEnvelope`, `Metadata`, `StreamId`, and tags: `Tag`, `TagResolver`, `EventCriteria`, `AppendCondition` |
@@ -73,13 +74,12 @@ impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R,
     async fn handle(
         &self,
         command: &PublishPost,
-        ctx: &mut CommandContext<PostEvent>,
-        tx: &mut R::Tx,
+        ctx: &mut CommandContext<PostEvent, R::Tx>,
     ) -> Result<(), BlogError> {
-        let post = self.posts.find(command.id, tx).await?.ok_or(NotFound(command.id))?;
+        let post = self.posts.find(&command.id, ctx.tx()).await?.ok_or(NotFound(command.id))?;
         post.publish(ctx)?;
-        let post = ctx.record(post);
-        self.posts.save(&post, tx).await?;
+        let post = ctx.commit(post);
+        self.posts.save(&post, ctx.tx()).await?;
         Ok(())
     }
 }
@@ -92,24 +92,25 @@ impl<R: PostRepository, P> CommandHandler<PublishPost> for PostCommandGateway<R,
    wrap the gateway.
 2. **The unit of work opens.** The gateway runs the command in a unit of
    work of its `#[gateway(unit)]` field (the unit's `Events`). Because
-   `handle` takes `tx: &mut R::Tx`, the mode is `InTransaction<Tx>`: the
-   unit begins a transaction and lends it. Without a `tx` argument the mode
-   is `Autocommit`: no transaction, one entity per command.
+   `handle` takes a `CommandContext<PostEvent, R::Tx>`, the mode is
+   `InTransaction<Tx>`: the unit begins a transaction and the context owns
+   it. With a `CommandContext<PostEvent>` the mode is `Autocommit`: no
+   transaction, one entity per command.
 3. **The handler decides.** It finds the post in its repository
    (`Loaded<Post>`: the state and the version it was read at), lets the
    domain append through `ctx` (an `EventAppender<PostEvent>`), and calls
-   `ctx.record(post)`. Recording assigns the appended events to that post
-   and returns it evolved, at its new version; nothing is written yet. The
-   repository saves that state in the same transaction (the SeaORM adapter
-   does; the event-sourced one has `Tx = ()` and saves nothing more).
+   `ctx.commit(post)`, which assigns the appended events to that post and
+   returns it evolved, at its new version; nothing is appended yet. Then
+   `save(&post, ctx.tx())` keeps that state in the same transaction (the
+   SeaORM adapter does; the event-sourced one saves nothing).
 4. **The unit appends and commits.** Once `handle` returns `Ok`, the unit
-   appends what was recorded, in the transaction, expecting the version the
+   appends what was committed, in the transaction, expecting the version the
    post was loaded at, and commits: the post's row and its events commit
    together, or not at all. The handler never commits.
 5. **A lost race reruns the handler.** If the stream moved on (or a DCB
    condition failed), the transaction is rolled back and the handler runs
    again on fresh state, up to `conflict_retries` (8 by default). That is
-   why a handler has no side effects besides what it writes in `tx`: an
+   why a handler has no side effects besides what it writes in the context's transaction: an
    e-mail belongs in a projection namespace, after the commit.
 6. **The commit is announced.** `Events` broadcasts the committed envelopes
    on its live feed, which wakes the tracking processors; an
@@ -247,15 +248,15 @@ Axon names live.
 | `@CommandHandler` | A `#[cqrs::command_handler] impl CommandHandler<C>` on the command gateway, one per command |
 | `@QueryHandler` | A `#[cqrs::query_handler] impl QueryHandler<Q>` on the query gateway |
 | `CommandGateway`, `QueryGateway` | `CommandGateway<C>` (`send`, `send_with` for metadata), `QueryGateway<Q>` (`query`), implemented by `#[cqrs::command_gateway]` / `#[cqrs::query_gateway]` |
-| `MetaData` | `Metadata`, carried by every event the command records |
-| `EventAppender` | `CommandContext<E>` in the handler; the domain takes it as `&mut impl EventAppender<E>` |
+| `MetaData` | `Metadata`, carried by every event the command commits |
+| `EventAppender` | `CommandContext<E>` (or `CommandContext<E, Tx>`) in the handler; the domain takes it as `&mut impl EventAppender<E>` |
 | `ProcessingContext` | `ProcessingContext<'_, Tx>` for event handlers; a command's unit of work is the gateway's `UnitOfWork` with its `CommandContext` |
 | `TransactionManager` | `TransactionManager` |
 | `@EventSourcedEntity` | `#[cqrs::aggregate(name = .., event = ..)]`, or `impl Aggregate` |
 | `@EventSourcedEntity(tagKey = ..)` | `#[cqrs::aggregate(tag = "..")]` (`Aggregate::criteria`) |
 | `@EventSourcingHandler` | The aggregate's `apply` method, which `Aggregate::evolve` calls |
-| Creating command handler | An associated function (`Post::create(id, .., ctx)`) and `ctx.record(New::<Post>(id))` |
-| `Repository`, `EventSourcedRepository` | The application's own repository port, with an `AggregateLoader` in the event-sourced adapter |
+| Creating command handler | An associated function (`Post::create(id, .., ctx)`) and `ctx.commit(New::<Post>(id))` |
+| `Repository`, `EventSourcedRepository` | `Repository<A>` (`find`, `save`), which the application's own port can extend; the event-sourced one is the `AggregateLoader` the engine hands out (`events.repository::<A>()`) |
 | Dynamic consistency boundary: `EventCriteria`, `AppendCondition`, `@EventTag` | `EventCriteria`, `AppendCondition`, `#[tag]` on event fields (`#[derive(cqrs::DomainEvent)]`) or `impl TagResolver`; `CommandContext::source` |
 | `EventStore`, `EventStorageEngine` | `EventStore`, over the ports `LoadStream`, `AppendEvents`, `SourceEvents`, `ReadLog` |
 | Event handling component, processing group, `@Namespace` | A projection namespace: `namespaces(..)` on `#[cqrs::projection]`, one `#[cqrs::event_handler(namespace = "..")] impl EventHandler` each |
@@ -276,7 +277,7 @@ Axon names live.
 | Dispatch and handler interceptors | `Interceptor<M>` around a gateway (`.intercept(..)`, `Intercepted`), `EventInterceptor<E, Tx>` around a projection's handlers |
 | Upcasters | `Upcaster`; `Upcast`, made by `upcast(event_type, from, convert)` |
 | `Converter` | `Codec` (`Json`, `Protobuf`) |
-| Snapshots | `SnapshotStore`, `AggregateLoader::with_snapshots(store, every)` |
+| Snapshots, `@Snapshotting` | `SnapshotStore`, `#[cqrs::aggregate(.., snapshot(after_events = N, after_sourcing = "5s"))]` on the aggregate, `Events::repository::<A>()` building its loader; `AggregateLoader::with_snapshots(store, policy)` by hand |
 | `AggregateTestFixture` | `testing::AggregateFixture` |
 
 Where the shapes differ, the reason is almost always the same: Axon

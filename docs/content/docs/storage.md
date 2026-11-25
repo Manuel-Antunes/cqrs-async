@@ -294,24 +294,39 @@ that keeps JSON.
 ## Snapshots
 
 A `SnapshotStore<A>` keeps aggregate states so a load replays only the
-events after them. `AggregateLoader::with_snapshots(snapshots, every)`
-saves one whenever a load had to replay `every` events or more; commits
-never snapshot. The blog's event-sourced repository passes it through:
+events after them. The aggregate says when: `snapshot(after_events = 50,
+after_sourcing = "5s")` in `#[cqrs::aggregate(..)]` (either key, or both:
+the first one reached wins; `after_sourcing` is a number followed by `ms`,
+`s` or `m`). The engine says where: `events.repository::<Post>()` builds the
+aggregate's `AggregateLoader` over the engine's store, with the snapshot
+store that event store keeps for `Post` (`KeepSnapshots`) and the aggregate's
+policy. A load that replayed `after_events` events or more, or took
+`after_sourcing` or more, saves a snapshot; commits never snapshot.
 
 ```rust
+// src/domain/post/mod.rs
+#[cqrs::aggregate(name = "post", event = PostEvent, snapshot(after_events = 50))]
 // src/config.rs
-fn posts_over(store: &PostStore) -> EventSourcedPostRepository<PostStore, InMemorySnapshots<Post>> {
-    EventSourcedPostRepository::new(store.clone()).with_snapshots(InMemorySnapshots::default(), SNAPSHOT_EVERY)
-}
+.commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
 ```
 
-`PostgresSnapshotStore::<Post>::new(pool)` keeps the newest one per stream
+In memory the event store keeps clones, so the aggregate must be `Clone`;
+each repository gets snapshots of its own (they are an optimization, and
+two repositories of one aggregate do not share them). On PostgreSQL the
+aggregate must be `Serialize + DeserializeOwned`: an aggregate that
+declares `snapshot(..)` and cannot be kept by the engine's store does not
+compile. One that declares none is served by any store.
+
+`PostgresSnapshotStore::<Post>::new(pool)` (or `pg.snapshots::<Post>()`)
+keeps the newest one per stream
 in `cqrs_snapshots`, as JSON, at revision 1. `with_revision(n)` stamps
 them: a snapshot of another revision is ignored (the aggregate is replayed,
 then snapshotted again), so bump it when the aggregate's serialized shape
 changes. A snapshot that fails to decode is only a full replay. Snapshots
 are never the truth: deleting them only makes loads slower. `()` is the
-snapshot store that keeps none.
+snapshot store that keeps none. A loader put together by hand takes its
+snapshot store and policy from `AggregateLoader::with_snapshots(snapshots,
+policy)`, where a plain number is "after that many events".
 
 ## Writing a store
 

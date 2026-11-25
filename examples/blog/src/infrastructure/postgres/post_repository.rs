@@ -1,5 +1,5 @@
 use cqrs::{
-    aggregate::{Aggregate, Loaded},
+    aggregate::{Aggregate, Loaded, Repository},
     store::StoreError,
 };
 use cqrs_postgres::PgTransaction;
@@ -27,20 +27,10 @@ fn backend(error: sea_orm::DbErr) -> StoreError {
     StoreError::backend(error)
 }
 
-impl PostRepository for SeaOrmPostRepository {
+impl Repository<Post> for SeaOrmPostRepository {
     type Tx = PgTransaction;
 
-    async fn next_id(&self, tx: &mut PgTransaction) -> Result<PostId, StoreError> {
-        let next = Statement::from_string(DbBackend::Postgres, "SELECT nextval('post_ids') AS id");
-        let row = SeaOrm::new(tx).query_one_raw(next).await.map_err(backend)?;
-        let id: i64 = row
-            .ok_or_else(|| StoreError::backend("the post_ids sequence returned nothing"))?
-            .try_get("", "id")
-            .map_err(backend)?;
-        Ok(PostId(u64::try_from(id).map_err(StoreError::backend)?))
-    }
-
-    async fn find(&self, id: PostId, tx: &mut PgTransaction) -> Result<Option<Loaded<Post>>, StoreError> {
+    async fn find(&self, id: &PostId, tx: &mut PgTransaction) -> Result<Option<Loaded<Post>>, StoreError> {
         let key = i64::try_from(id.0).map_err(StoreError::backend)?;
         let row = post::Entity::find_by_id(key)
             .one(&SeaOrm::new(tx))
@@ -50,7 +40,7 @@ impl PostRepository for SeaOrmPostRepository {
             return Ok(None);
         };
         let version = u64::try_from(row.version).map_err(StoreError::backend)?;
-        Ok(Some(Loaded::at(Post::restore(id, row.title, row.published), version)))
+        Ok(Some(Loaded::at(Post::restore(*id, row.title, row.published), version)))
     }
 
     async fn save(&self, post: &Loaded<Post>, tx: &mut PgTransaction) -> Result<(), StoreError> {
@@ -69,5 +59,20 @@ impl PostRepository for SeaOrmPostRepository {
             .await
             .map_err(backend)?;
         Ok(())
+    }
+}
+
+/// Ids from the `post_ids` sequence, taken in the transaction of the
+/// command's unit of work: several instances of the blog never hand out the
+/// same one.
+impl PostRepository for SeaOrmPostRepository {
+    async fn next_id(&self, tx: &mut PgTransaction) -> Result<PostId, StoreError> {
+        let next = Statement::from_string(DbBackend::Postgres, "SELECT nextval('post_ids') AS id");
+        let row = SeaOrm::new(tx).query_one_raw(next).await.map_err(backend)?;
+        let id: i64 = row
+            .ok_or_else(|| StoreError::backend("the post_ids sequence returned nothing"))?
+            .try_get("", "id")
+            .map_err(backend)?;
+        Ok(PostId(u64::try_from(id).map_err(StoreError::backend)?))
     }
 }

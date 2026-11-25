@@ -1,0 +1,5 @@
+error: `after_sourcing` is a whole number followed by `ms`, `s` or `m` (`"250ms"`, `"5s"`, `"2m"`)
+ --> tests/ui/snapshot_sourcing_in_hours.rs:6:80
+  |
+6 | #[cqrs::aggregate(event = Ticked, snapshot(after_events = 10, after_sourcing = "5h"))]
+  |                                                                                ^^^^

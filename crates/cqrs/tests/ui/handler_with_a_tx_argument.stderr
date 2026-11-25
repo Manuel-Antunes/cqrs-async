@@ -1,0 +1,5 @@
+error: the unit's transaction is in the context: take `ctx: &mut CommandContext<Event, Tx>` and use `ctx.tx()`
+  --> tests/ui/handler_with_a_tx_argument.rs:17:74
+   |
+17 |     async fn handle(&self, _: &Tick, _: &mut CommandContext<Ticked, ()>, _: &mut ()) -> Result<(), StoreError> {
+   |                                                                          ^

@@ -19,6 +19,7 @@ pub async fn cqrs_postgres::Postgres::migrate(&self) -> core::result::Result<(),
 pub fn cqrs_postgres::Postgres::new(sqlx_postgres::PgPool) -> Self
 pub fn cqrs_postgres::Postgres::pool(&self) -> &sqlx_postgres::PgPool
 pub fn cqrs_postgres::Postgres::schedule<C>(&self, &str) -> cqrs_postgres::PostgresSchedule<C>
+pub fn cqrs_postgres::Postgres::snapshots<A>(&self) -> cqrs_postgres::PostgresSnapshotStore<A>
 pub fn cqrs_postgres::Postgres::store<E>(&self, &str) -> cqrs_postgres::PostgresEventStore<E>
 pub fn cqrs_postgres::Postgres::tokens(&self) -> &cqrs_postgres::PostgresTokenStore
 pub fn cqrs_postgres::Postgres::transactions(&self) -> &cqrs_postgres::PostgresTransactions
@@ -48,6 +49,9 @@ impl<E> cqrs_postgres::PostgresEventStore<E>
 pub fn cqrs_postgres::PostgresEventStore<E>::new(sqlx_postgres::PgPool, &str) -> Self
 impl<'c, E, U> cqrs::event_store::AppendEvents<E, sqlx_core::transaction::Transaction<'c, sqlx_postgres::database::Postgres>> for cqrs_postgres::PostgresEventStore<E, U> where E: cqrs::event_envelope::DomainEvent + serde_core::ser::Serialize, U: cqrs::upcast::Upcaster
 pub async fn cqrs_postgres::PostgresEventStore<E, U>::append_tagged(&self, &mut sqlx_core::transaction::Transaction<'c, sqlx_postgres::database::Postgres>, &cqrs::event_envelope::StreamId, cqrs::event_store::ExpectedVersion, &[cqrs::event_store::TaggedEvent<E>], &cqrs::event_envelope::Metadata, core::option::Option<&cqrs::criteria::AppendCondition>) -> core::result::Result<alloc::vec::Vec<cqrs::event_store::Recorded>, cqrs::event_store::StoreError>
+impl<A, U> cqrs::snapshot::KeepSnapshots<A, cqrs::snapshot::Snapshots> for cqrs_postgres::PostgresEventStore<<A as cqrs::aggregate_root::Aggregate>::Event, U> where A: cqrs::aggregate_root::Aggregate + serde_core::ser::Serialize + serde_core::de::DeserializeOwned
+pub type cqrs_postgres::PostgresEventStore<<A as cqrs::aggregate_root::Aggregate>::Event, U>::Snapshots = cqrs_postgres::PostgresSnapshotStore<A>
+pub fn cqrs_postgres::PostgresEventStore<<A as cqrs::aggregate_root::Aggregate>::Event, U>::snapshots(&self) -> Self::Snapshots
 impl<E, U> core::clone::Clone for cqrs_postgres::PostgresEventStore<E, U>
 pub fn cqrs_postgres::PostgresEventStore<E, U>::clone(&self) -> Self
 impl<E, U> core::fmt::Debug for cqrs_postgres::PostgresEventStore<E, U>

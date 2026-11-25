@@ -19,20 +19,19 @@ pub struct CreatePost {
     pub title: String,
 }
 
-/// Takes the next id from the repository, lets the domain create the post,
-/// records it (expecting it not to exist yet) and saves it.
+/// Takes the next id from the repository, lets the domain create the post
+/// and saves it (expecting it not to exist yet).
 #[cqrs::command_handler]
 impl<R: PostRepository, P> CommandHandler<CreatePost> for PostCommandGateway<R, P> {
     async fn handle(
         &self,
         command: &CreatePost,
-        ctx: &mut CommandContext<PostEvent>,
-        tx: &mut R::Tx,
+        ctx: &mut CommandContext<PostEvent, R::Tx>,
     ) -> Result<PostId, BlogError> {
-        let id = self.posts.next_id(tx).await?;
+        let id = self.posts.next_id(ctx.tx()).await?;
         Post::create(id, command.title.as_str(), ctx)?;
-        let post = ctx.record(New::<Post>(id));
-        self.posts.save(&post, tx).await?;
+        let post = ctx.commit(New::<Post>(id));
+        self.posts.save(&post, ctx.tx()).await?;
         Ok(id)
     }
 }

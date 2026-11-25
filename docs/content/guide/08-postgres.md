@@ -89,16 +89,20 @@ instances starting together take turns.
 
 ## The post's state, in the command's transaction
 
-`PostRepository` has `type Tx`: the transaction it works in. The
-event-sourced adapter from part 2 has `Tx = ()`. The SeaORM adapter has
-`Tx = PgTransaction`, the command's own:
+The handlers ask for a `PostRepository`, a `Repository<Post>`, which has `type Tx`: the
+transaction it works in. The repository the engine hands out
+(`events.repository::<Post>()`, part 2) takes the engine's, a
+`PgTransaction` on PostgreSQL, and writes nothing in it: the post's events
+are its state. The SeaORM repository is yours, for state kept in a table:
+its `Tx = PgTransaction` is the command's own, which the handler lends it
+(`ctx.tx()`); it reads the post's row in `find` and keeps it in `save`:
 
 ```rust
 // src/infrastructure/postgres/post_repository.rs
-impl PostRepository for SeaOrmPostRepository {
+impl Repository<Post> for SeaOrmPostRepository {
     type Tx = PgTransaction;
 
-    async fn find(&self, id: PostId, tx: &mut PgTransaction) -> Result<Option<Loaded<Post>>, StoreError> {
+    async fn find(&self, id: &PostId, tx: &mut PgTransaction) -> Result<Option<Loaded<Post>>, StoreError> {
         let key = i64::try_from(id.0).map_err(StoreError::backend)?;
         let row = post::Entity::find_by_id(key)
             .one(&SeaOrm::new(tx))
@@ -108,7 +112,7 @@ impl PostRepository for SeaOrmPostRepository {
             return Ok(None);
         };
         let version = u64::try_from(row.version).map_err(StoreError::backend)?;
-        Ok(Some(Loaded::at(Post::restore(id, row.title, row.published), version)))
+        Ok(Some(Loaded::at(Post::restore(*id, row.title, row.published), version)))
     }
 
     async fn save(&self, post: &Loaded<Post>, tx: &mut PgTransaction) -> Result<(), StoreError> {
@@ -128,8 +132,21 @@ impl PostRepository for SeaOrmPostRepository {
             .map_err(backend)?;
         Ok(())
     }
+}
 
-    // next_id: SELECT nextval('post_ids'), in the same transaction
+```
+
+The ids are a method of the same repository, the port's `next_id`: here
+`SELECT nextval('post_ids')`, in the same transaction:
+
+```rust
+// src/infrastructure/postgres/post_repository.rs
+impl PostRepository for SeaOrmPostRepository {
+    async fn next_id(&self, tx: &mut PgTransaction) -> Result<PostId, StoreError> {
+        let next = Statement::from_string(DbBackend::Postgres, "SELECT nextval('post_ids') AS id");
+        let row = SeaOrm::new(tx).query_one_raw(next).await.map_err(backend)?;
+        // ... the `id` column, as a `PostId`
+    }
 }
 ```
 
@@ -139,10 +156,12 @@ transaction or outlive it. The opposite is not possible: SeaORM's own
 `DatabaseTransaction` does not lend its connection, and the library's
 statements are sqlx's, checked at compile time.
 
-The handlers did not change. They take `tx: &mut R::Tx`, so their unit of
-work is `InTransaction<PgTransaction>`: the unit begins the transaction,
-the handler finds, decides, `ctx.record(post)` and saves, then the unit
-appends the recorded events in the same transaction and commits once.
+The handlers did not change. They take `ctx: &mut CommandContext<PostEvent,
+R::Tx>`, so their unit of work is `InTransaction<PgTransaction>`: the unit
+begins the transaction and the context owns it, the handler finds, decides,
+commits the events to the post and saves it (the row), then
+the unit appends the committed events in the same transaction and commits
+once.
 State and events commit together, or not at all.
 
 Finding a post now reads one row, whatever its history. The row keeps the
@@ -153,7 +172,7 @@ back (its row and its events), and the handler runs again on the new state.
 ## The read model, in the projection's transaction
 
 The projection writes through `PostSummaryStore<Tx>`, with the `Tx` the
-processor hands it in `context.transaction()`. In memory `Tx` is `()`. On
+processor hands it in `context.tx()`. In memory `Tx` is `()`. On
 PostgreSQL it is the processor's `PgTransaction`, the one that moves its
 token:
 

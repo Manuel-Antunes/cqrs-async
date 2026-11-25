@@ -1,14 +1,14 @@
 use std::marker::PhantomData;
 
 use cqrs::{
-    aggregate::{Aggregate, SnapshotStore},
+    aggregate::{Aggregate, KeepSnapshots, SnapshotStore, Snapshots},
     event::StreamId,
     store::StoreError,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::PgPool;
 
-use crate::{backend, unsigned};
+use crate::{PostgresEventStore, backend, unsigned};
 
 /// Snapshots of aggregates `A` in PostgreSQL, as JSON (`serde`): the newest
 /// one per aggregate, in `cqrs_snapshots`.
@@ -105,5 +105,20 @@ where
         .await
         .map_err(backend)?;
         Ok(())
+    }
+}
+
+/// PostgreSQL keeps snapshots of the aggregates that are `Serialize +
+/// DeserializeOwned`, as JSON in `cqrs_snapshots`, in the database of the
+/// event store (at revision 1: [`PostgresSnapshotStore::with_revision`] and
+/// `Postgres::snapshots` name another shape).
+impl<A, U> KeepSnapshots<A, Snapshots> for PostgresEventStore<A::Event, U>
+where
+    A: Aggregate + Serialize + DeserializeOwned,
+{
+    type Snapshots = PostgresSnapshotStore<A>;
+
+    fn snapshots(&self) -> Self::Snapshots {
+        PostgresSnapshotStore::new(self.pool().clone())
     }
 }

@@ -1,0 +1,5 @@
+error: a snapshot after 0 events: `after_events` is at least 1
+ --> tests/ui/snapshot_after_zero_events.rs:6:59
+  |
+6 | #[cqrs::aggregate(event = Ticked, snapshot(after_events = 0))]
+  |                                                           ^

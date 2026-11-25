@@ -3,16 +3,20 @@
 //! returns: the aggregate with the version it was read at. [`New`] is the
 //! other target of a commit: an aggregate whose stream does not exist yet.
 //!
-//! It is the only way to load. Repositories belong to the application (a port
-//! with the finders it needs), and their adapters hold an `AggregateLoader`;
-//! command handlers commit what they decide through the
-//! [`EventPublisher`](crate::EventPublisher) port.
+//! It is the only way to rebuild an aggregate from its events, and the
+//! engine hands it out (`events.repository::<A>()`), with its store, the
+//! snapshots it can keep and its transaction: there is no repository to
+//! write for an event-sourced aggregate. In a command handler it is a
+//! [`Repository`] (`find` and `save`); an application whose port adds
+//! methods (a next id) implements that port for it. A loader put together by
+//! hand (`AggregateLoader::new(store)`) is for tests, tools, and reading a
+//! log without its engine.
 
-use std::{fmt, marker::PhantomData, ops::Deref};
+use std::{fmt, marker::PhantomData, ops::Deref, time::Instant};
 
 use crate::{
-    Aggregate, AppendCondition, CommandContext, EventCriteria, EventEnvelope, ExpectedVersion, LoadStream,
-    SnapshotStore, SourceEvents, StoreError, StreamId,
+    Aggregate, AppendCondition, CommandContext, EventCriteria, EventEnvelope, ExpectedVersion, KeepSnapshots,
+    LoadStream, Repository, SnapshotPolicy, SnapshotStore, Snapshotting, SourceEvents, StoreError, StreamId,
 };
 #[derive(Debug)]
 
@@ -135,15 +139,15 @@ impl<A: Aggregate> Loaded<A> {
 ///
 /// # block_on(async {
 /// let publisher = InlinePublisher::new(InMemoryEventStore::new());
-/// // What a command's unit of work does, by hand: record, then append.
+/// // What a command's unit of work does, by hand: commit, then append.
 /// let mut events = CommandContext::new();
 /// Door::install(1, &mut events);
-/// events.record(New::<Door>(1));
+/// events.commit(New::<Door>(1));
 /// append_writes::<_, Autocommit, _>(&publisher, &mut (), events.take_writes()).await?;
 ///
 /// // Once more: the stream exists now.
 /// Door::install(1, &mut events);
-/// events.record(New::<Door>(1));
+/// events.commit(New::<Door>(1));
 /// let again = append_writes::<_, Autocommit, _>(&publisher, &mut (), events.take_writes()).await;
 /// assert!(matches!(again, Err(StoreError::Conflict { .. })));
 /// # Ok::<(), StoreError>(())
@@ -152,7 +156,7 @@ impl<A: Aggregate> Loaded<A> {
 ///
 /// A decision that creates the aggregate if it is missing (a counter that
 /// starts at zero) runs on its state before any event, which `New` converts
-/// into: `repository.find(id).await?.unwrap_or_else(|| New(id).into())`. The
+/// into: `repository.find(&id, ctx.tx()).await?.unwrap_or_else(|| New(id).into())`. The
 /// commit then expects the stream not to exist when it was not found.
 pub struct New<A: Aggregate>(pub A::Id);
 
@@ -196,59 +200,108 @@ impl<A> Deref for Loaded<A> {
 /// `S` and the snapshot store `N` (`()`: no snapshots).
 ///
 /// ```text
-/// let posts = AggregateLoader::<Post, _>::new(store);                  // in your repository's adapter
-/// let post = posts.load(&id).await?;
+/// let posts = events.repository::<Post>();   // from the engine
+/// let post = posts.load(&id).await?;          // in a command handler: `posts.find(&id, ctx.tx())`
 /// ```
 ///
-/// With [`with_snapshots`](Self::with_snapshots), a load that had to replay
-/// at least `every` events saves a snapshot, so the next one replays only
-/// what came after it; commits do not snapshot (the publisher serves every
-/// aggregate of an event type, the loader is the one place that knows one).
-pub struct AggregateLoader<A, S, N = ()> {
+/// With [`with_snapshots`](Self::with_snapshots), a load that reaches the
+/// [`SnapshotPolicy`] (it had to replay enough events, or took long enough)
+/// saves a snapshot, so the next one replays only what came after it;
+/// commits do not snapshot (the publisher serves every aggregate of an event
+/// type, the loader is the one place that knows one, and a snapshot taken at
+/// commit would be of events a rolled back unit never stored).
+///
+/// `Tx` is the transaction of the units of work whose handlers use it as their
+/// [`Repository`](crate::Repository): it reads outside the transaction and
+/// writes nothing in it, so any transaction does (`()`: none, which
+/// [`new`](Self::new) gives; [`in_transaction`](Self::in_transaction) names
+/// another).
+pub struct AggregateLoader<A, S, N = (), Tx = ()> {
     /// Where the event streams live.
     store: S,
     /// Saved states, so a load replays only the tail (`()`: none).
     snapshots: N,
-    /// Take a snapshot after replaying this many events (0: never).
-    snapshot_every: u64,
+    /// When a load keeps a snapshot (`None`: never).
+    policy: Option<SnapshotPolicy>,
     /// Ties the loader to one aggregate type without storing one.
     aggregate: PhantomData<fn() -> A>,
+    /// Ties the loader to the transaction of the units it takes part in,
+    /// which it only passes along.
+    transaction: PhantomData<fn() -> Tx>,
 }
 
-impl<A, S, N> ::std::fmt::Debug for AggregateLoader<A, S, N> {
+impl<A, S, N, Tx> ::std::fmt::Debug for AggregateLoader<A, S, N, Tx> {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.debug_struct("AggregateLoader").finish_non_exhaustive()
     }
 }
 
 impl<A, S> AggregateLoader<A, S> {
-    /// A loader over `store`, without snapshots.
+    /// A loader over `store`, without snapshots, for units of work without a
+    /// transaction.
     pub fn new(store: S) -> Self {
         Self {
             store,
             snapshots: (),
-            snapshot_every: 0,
+            policy: None,
             aggregate: PhantomData,
+            transaction: PhantomData,
         }
     }
 }
 
-impl<A, S, N> AggregateLoader<A, S, N> {
-    /// Keeps a snapshot in `snapshots` whenever a load replayed `every`
-    /// events or more, so loading replays fewer than `every` events after
-    /// the newest one. Worth it for long-lived aggregates; the stream stays
-    /// the source of truth.
+/// The loader of the aggregate `A` an engine hands out: over a handle of its
+/// event store `store`, with the snapshots that store keeps for `A` and the
+/// policy `A` declares.
+pub(crate) fn declared_by_the_aggregate<A, S, Tx>(
+    store: &S,
+) -> AggregateLoader<A, S, <S as KeepSnapshots<A, A::Mode>>::Snapshots, Tx>
+where
+    A: Snapshotting,
+    S: Clone + KeepSnapshots<A, A::Mode>,
+{
+    AggregateLoader {
+        store: store.clone(),
+        snapshots: store.snapshots(),
+        policy: A::POLICY,
+        aggregate: PhantomData,
+        transaction: PhantomData,
+    }
+}
+
+impl<A, S, N, Tx> AggregateLoader<A, S, N, Tx> {
+    /// The same loader for the units of work whose transaction is `Tx2`: it
+    /// reads outside it, so it takes part in them as it does in any other.
+    pub fn in_transaction<Tx2>(self) -> AggregateLoader<A, S, N, Tx2> {
+        AggregateLoader {
+            store: self.store,
+            snapshots: self.snapshots,
+            policy: self.policy,
+            aggregate: PhantomData,
+            transaction: PhantomData,
+        }
+    }
+
+    /// Keeps a snapshot in `snapshots` whenever a load reaches `policy` (a
+    /// [`SnapshotPolicy`], or a number of events: `10` keeps one whenever a
+    /// load replayed 10 events or more, so loading replays fewer than 10
+    /// events after the newest one). Worth it for long-lived aggregates; the
+    /// stream stays the source of truth.
+    ///
+    /// This is the loader put together by hand. An aggregate declares its
+    /// own policy (`#[cqrs::aggregate(.., snapshot(..))]`), and the engine's
+    /// `repository::<A>()` builds the loader from it.
     ///
     /// # Panics
     ///
-    /// If `every` is zero.
-    pub fn with_snapshots<N2>(self, snapshots: N2, every: u64) -> AggregateLoader<A, S, N2> {
-        assert!(every > 0, "snapshot every 0 events");
+    /// If `policy` is zero events.
+    pub fn with_snapshots<N2>(self, snapshots: N2, policy: impl Into<SnapshotPolicy>) -> AggregateLoader<A, S, N2, Tx> {
         AggregateLoader {
             store: self.store,
             snapshots,
-            snapshot_every: every,
+            policy: Some(policy.into()),
             aggregate: PhantomData,
+            transaction: PhantomData,
         }
     }
 
@@ -258,7 +311,7 @@ impl<A, S, N> AggregateLoader<A, S, N> {
     }
 }
 
-impl<A, S, N> AggregateLoader<A, S, N>
+impl<A, S, N, Tx> AggregateLoader<A, S, N, Tx>
 where
     A: Aggregate,
     S: LoadStream<A::Event> + SourceEvents<A::Event>,
@@ -280,25 +333,27 @@ where
         }
     }
 
-    /// [`load`](Self::load) within a command: for an aggregate built from
-    /// [`criteria`](Aggregate::criteria), the commits of `events` then fail
-    /// if anything it was built from changes, **even if it did not exist**
-    /// (absence is a fact a decision can rely on too). The aggregates a
-    /// decision reads without committing are loaded this way.
+    /// [`load`](Self::load) within a run of a command handler: for an
+    /// aggregate built from [`criteria`](Aggregate::criteria), the writes of
+    /// the run then fail if anything it was built from changes, **even if it
+    /// did not exist** (absence is a fact a decision can rely on too), and
+    /// even if the run never saves it. What a decision only reads, or
+    /// creates if missing, is loaded this way; for an aggregate that is its
+    /// stream, it is `load`.
     ///
     /// # Errors
     ///
     /// The store's.
-    pub async fn load_in(
+    pub async fn load_in<Tx2>(
         &self,
         id: &A::Id,
-        events: &mut CommandContext<A::Event>,
+        ctx: &mut CommandContext<A::Event, Tx2>,
     ) -> Result<Option<Loaded<A>>, StoreError> {
         let Some(criteria) = A::criteria(id) else {
             return self.load_stream(id).await;
         };
         let (loaded, condition) = self.source_by(id, criteria).await?;
-        events.depend_on(condition);
+        ctx.depend_on(condition);
         Ok(loaded)
     }
 
@@ -312,7 +367,7 @@ where
     pub async fn source(
         &self,
         criteria: EventCriteria,
-        events: &mut CommandContext<A::Event>,
+        events: &mut CommandContext<A::Event, Tx>,
     ) -> Result<Vec<EventEnvelope<A::Event>>, StoreError> {
         events.source(&self.store, criteria).await
     }
@@ -332,6 +387,12 @@ where
     /// The aggregate of the stream `id`: from its newest snapshot, if any,
     /// then the events after it.
     async fn load_stream(&self, id: &A::Id) -> Result<Option<Loaded<A>>, StoreError> {
+        // The clock is read only for a policy that has a time threshold.
+        let started = self
+            .policy
+            .as_ref()
+            .is_some_and(SnapshotPolicy::times_sourcing)
+            .then(Instant::now);
         // A failing snapshot store only costs a full replay, but one that
         // keeps failing costs it on every load: say so.
         let snapshot = self.snapshots.load(id).await.unwrap_or_else(|error| {
@@ -349,7 +410,9 @@ where
         if version == 0 && replayed == 0 {
             return Ok(None);
         }
-        if self.snapshot_every > 0 && replayed >= self.snapshot_every {
+        let sourcing = started.map(|started| started.elapsed()).unwrap_or_default();
+        // Nothing replayed, nothing new to keep, however long the load took.
+        if replayed > 0 && self.policy.is_some_and(|policy| policy.reached(replayed, sourcing)) {
             // A failed snapshot only means a longer replay next time.
             if let Err(error) = self.snapshots.save(&aggregate, version).await {
                 tracing::warn!(aggregate = A::TYPE, version, %error, "cannot keep the snapshot");
@@ -360,6 +423,30 @@ where
             version: Some(version),
             condition: None,
         }))
+    }
+}
+
+/// The loader is a [`Repository`] of `A` for units of work of any transaction
+/// `Tx`: it reads outside it and writes nothing in it, as the events of an
+/// aggregate are its state.
+///
+/// `find` is [`load`](AggregateLoader::load): the loader reads outside the
+/// transaction it is lent (optimistic concurrency guards the append) and
+/// persists nothing in it, the events being the state. An aggregate built from
+/// [`criteria`](Aggregate::criteria) that a decision reads without saving
+/// it, or that may not exist yet, is read with
+/// [`load_in`](AggregateLoader::load_in) instead, which takes the context.
+impl<A, S, N, Tx> Repository<A> for AggregateLoader<A, S, N, Tx>
+where
+    A: Aggregate,
+    S: LoadStream<A::Event> + SourceEvents<A::Event>,
+    N: SnapshotStore<A>,
+    Tx: Send,
+{
+    type Tx = Tx;
+
+    fn find(&self, id: &A::Id, _: &mut Tx) -> impl Future<Output = Result<Option<Loaded<A>>, StoreError>> + Send {
+        self.load(id)
     }
 }
 

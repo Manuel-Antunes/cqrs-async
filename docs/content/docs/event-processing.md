@@ -359,14 +359,14 @@ task, right after each commit:
 ```rust
 // src/config.rs
 let projection = PostProjection::new(Arc::clone(&summaries), Arc::clone(&notifier));
-let publisher = InlinePublisher::<PostEvent, _, _>::new(store.clone()).with_projection(projection);
+let publisher = InlinePublisher::<PostEvent, _, _>::new(store).with_projection(projection);
 let blog = Cqrs::from_publisher(publisher)
-    .commands(|events| PostCommandGateway::new(posts_over(&store), events))
+    .commands(|events| PostCommandGateway::new(events.repository::<Post>(), events))
     .queries(PostQueryGateway::new(Arc::clone(&summaries)))
     .build();
 ```
 
-A command returns once every handler ran (`handle`, then `committed`), so
+A command returns once every handler ran, so
 queries see its effects at once. What is fed:
 
 | | |

@@ -52,9 +52,9 @@ struct Bank<P> {
 #[cqrs::command_handler]
 impl<P> CommandHandler<Deposit> for Bank<P> {
     async fn handle(&self, command: &Deposit, ctx: &mut CommandContext<AccountEvent>) -> Result<(), BankError> {
-        let account = self.accounts.load(&command.id).await?.ok_or(BankError::NoSuchAccount)?;
+        let account = self.accounts.find(&command.id, ctx.tx()).await?.ok_or(BankError::NoSuchAccount)?;
         account.deposit(command.amount, ctx)?;
-        ctx.record(account); // appended and committed once the handler returns
+        ctx.commit(account); // appended to its stream once the handler returns
         Ok(())
     }
 }

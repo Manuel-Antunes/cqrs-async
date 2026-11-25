@@ -370,7 +370,7 @@ pub struct RetryOutcome {
 /// [`TrackingProcessor::retry_dead_letters`]).
 ///
 /// Each event runs in its own unit of work from `transactions`, as in the
-/// processor: `handle`, the letter's removal, commit, then `committed`. A
+/// processor: `handle`, the letter's removal, then the commit. A
 /// failure rolls its changes back; the requeue or eviction commits in a
 /// unit of its own. The removal commits with what the handler wrote: in a
 /// database transaction, a crash (or another retry running at the same
@@ -437,7 +437,6 @@ where
                 continue;
             }
             transactions.commit(tx).await?;
-            handler.committed(&letter.event).await;
             outcome.handled += 1;
         }
     }

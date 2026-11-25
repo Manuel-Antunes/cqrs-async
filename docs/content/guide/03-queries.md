@@ -67,7 +67,7 @@ shape:
   runs it (part 4): on PostgreSQL, that is the transaction that also saves
   the processor's progress, so a change and its token commit together
   (part 8).
-- **Not the write side's repository.** `PostRepository` finds an
+- **Not the write side's repository.** The posts' `PostRepository` finds an
   aggregate to decide on; this one stores rows shaped for reading. They
   differ in storage, consistency and callers, so they stay different
   types.

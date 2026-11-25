@@ -1,13 +1,5 @@
 error: `updated` is a projection namespace's: it emits through the projection's `updates(..)` channels
-  --> tests/ui/updated_without_namespace.rs:16:5
+  --> tests/ui/updated_without_namespace.rs:18:5
    |
-16 |     async fn updated(&self, _: &EventEnvelope<PostEvent>, _: &()) {}
+18 |     async fn updated(&self, _: &EventEnvelope<PostEvent>, _: &()) {}
    |     ^^^^^
-
-warning: unused imports: `EventHandler`, `HandlerError`, `ProcessingContext`, and `event::EventEnvelope`
- --> tests/ui/updated_without_namespace.rs:1:12
-  |
-1 | use cqrs::{event::EventEnvelope, processing::{EventHandler, HandlerError, ProcessingContext}};
-  |            ^^^^^^^^^^^^^^^^^^^^               ^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

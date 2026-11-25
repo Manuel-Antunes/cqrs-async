@@ -1,0 +1,5 @@
+error: expected `after_events` or `after_sourcing`
+ --> tests/ui/snapshot_unknown_key.rs:6:44
+  |
+6 | #[cqrs::aggregate(event = Ticked, snapshot(every = 10))]
+  |                                            ^^^^^

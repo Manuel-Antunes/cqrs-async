@@ -1,8 +1,7 @@
 //! The unit of work around event handling:
-//! per event, `begin` → interceptors → `handle` → token → `commit` →
-//! `committed`; a failure rolls back everything written in it, interceptors
-//! included. The same unit runs dead-letter retries; inline handlers get
-//! their `committed` step too.
+//! per event, `begin` → interceptors → `handle` → token → `commit`; a
+//! failure rolls back everything written in it, interceptors included. The
+//! same unit runs dead-letter retries.
 //!
 //! The unit of work here is an in-memory journal: what is written in the
 //! transaction reaches the "database" only on commit, so rollbacks show.
@@ -19,13 +18,11 @@ use std::{
 
 use cqrs::{
     Intercepted,
-    aggregate::Aggregate,
-    command::{EventPublisher, Pending},
-    event::{DomainEvent, EventEnvelope, Metadata, StreamId},
+    event::{EventEnvelope, Metadata, StreamId},
     processing::{
         DeadLetter, DeadLetterQueue, EventChain, EventHandler, EventInterceptor, Events, HandlerError,
-        InMemoryDeadLetters, InMemoryTokenStore, InlinePublisher, ParkAfter, ProcessingContext, TokenStore,
-        TrackingOptions, TrackingToken, TransactionManager, retry_dead_letters,
+        InMemoryDeadLetters, InMemoryTokenStore, ParkAfter, ProcessingContext, TokenStore, TrackingOptions,
+        TrackingToken, TransactionManager, retry_dead_letters,
     },
     store::{AppendEvents, Cursor, ExpectedVersion, InMemoryEventStore, StoreError},
 };
@@ -123,15 +120,11 @@ impl EventHandler for Rows {
     ) -> Result<(), HandlerError> {
         let n = event.payload.0;
         log(&self.phases, format!("handle {n}"));
-        context.transaction().push(format!("row {n}"));
+        context.tx().push(format!("row {n}"));
         if n == self.fail_on && !self.failed.swap(true, Ordering::Relaxed) {
             return Err(HandlerError::msg("fails once"));
         }
         Ok(())
-    }
-
-    async fn committed(&self, event: &EventEnvelope<Ticked>) {
-        log(&self.phases, format!("committed {}", event.payload.0));
     }
 }
 
@@ -146,7 +139,7 @@ impl EventInterceptor<Ticked, Vec<String>> for Stamp {
         next: N,
     ) -> Result<(), HandlerError> {
         log(&self.0, format!("intercept {}", event.payload.0));
-        context.transaction().push(format!("stamp {}", event.payload.0));
+        context.tx().push(format!("stamp {}", event.payload.0));
         next.proceed(context).await
     }
 }
@@ -201,13 +194,11 @@ async fn each_event_runs_in_one_unit_of_work_and_a_failure_rolls_it_back() {
             "handle 1",
             "token",
             "commit",
-            "committed 1",
             "begin",
             "intercept 2",
             "handle 2",
             "token",
             "commit",
-            "committed 2",
         ]
     );
     // The failed try's stamp and row were rolled back with it.
@@ -242,17 +233,7 @@ async fn a_batch_is_one_unit_of_work_with_one_token() {
     let journal = batched(0).await;
     assert_eq!(
         *journal.phases.lock().unwrap(),
-        [
-            "begin",
-            "handle 1",
-            "handle 2",
-            "handle 3",
-            "token",
-            "commit",
-            "committed 1",
-            "committed 2",
-            "committed 3",
-        ]
+        ["begin", "handle 1", "handle 2", "handle 3", "token", "commit",]
     );
     assert_eq!(
         *journal.database.lock().unwrap(),
@@ -267,25 +248,9 @@ async fn a_failed_batch_rolls_back_and_its_events_run_one_at_a_time() {
         *journal.phases.lock().unwrap(),
         [
             // The batch: tick 2 fails, everything rolls back.
-            "begin",
-            "handle 1",
-            "handle 2",
-            // One at a time.
-            "begin",
-            "handle 1",
-            "token",
-            "commit",
-            "committed 1",
-            "begin",
-            "handle 2",
-            "token",
-            "commit",
-            "committed 2",
-            "begin",
-            "handle 3",
-            "token",
-            "commit",
-            "committed 3",
+            "begin", "handle 1", "handle 2", // One at a time.
+            "begin", "handle 1", "token", "commit", "begin", "handle 2", "token", "commit", "begin", "handle 3",
+            "token", "commit",
         ]
     );
     assert_eq!(
@@ -376,20 +341,9 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
     assert_eq!(
         *journal.phases.lock().unwrap(),
         [
-            "begin",
-            "handle 1",
-            "unpark 1",
-            "commit",
-            "committed 1",
-            "begin",
-            "handle 2", // failed: rolled back, still parked
+            "begin", "handle 1", "unpark 1", "commit", "begin", "handle 2", // failed: rolled back, still parked
             "begin",    // the letter requeued (attempts, cause, diagnostics)
-            "commit",
-            "begin",
-            "handle 2",
-            "unpark 2",
-            "commit",
-            "committed 2",
+            "commit", "begin", "handle 2", "unpark 2", "commit",
         ]
     );
     assert_eq!(
@@ -398,54 +352,4 @@ async fn dead_letter_retries_run_in_the_unit_of_work() {
         "each letter left the queue in the unit of work that applied its event"
     );
     assert!(queue.sequences("rows").await.unwrap().is_empty());
-}
-
-struct Clock(u32);
-
-impl Aggregate for Clock {
-    const TYPE: &'static str = "clock";
-    type Id = u32;
-    type Event = Ticked;
-
-    fn initial(id: &u32) -> Self {
-        Self(*id)
-    }
-
-    fn id(&self) -> &u32 {
-        &self.0
-    }
-
-    fn evolve(&mut self, _: &Ticked) {}
-}
-
-/// Inline, the unit of work is the append itself: `handle`, then
-/// `committed`, per event.
-struct Inline(Phases);
-
-impl<E: DomainEvent> EventHandler<E> for Inline {
-    async fn handle(&self, event: &EventEnvelope<E>, _: &mut ProcessingContext<'_>) -> Result<(), HandlerError> {
-        log(&self.0, format!("handle {}", event.position));
-        Ok(())
-    }
-
-    async fn committed(&self, event: &EventEnvelope<E>) {
-        log(&self.0, format!("committed {}", event.position));
-    }
-}
-
-#[tokio::test]
-async fn inline_handlers_get_their_committed_step() {
-    let phases = Phases::default();
-    let clocks = InlinePublisher::new(InMemoryEventStore::new()).with_processor((Inline(Arc::clone(&phases)),));
-    clocks
-        .commit(
-            cqrs::aggregate::New::<Clock>(1).into(),
-            Pending::new(vec![Ticked(1), Ticked(2)]),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        *phases.lock().unwrap(),
-        ["handle 1", "committed 1", "handle 2", "committed 2"]
-    );
 }

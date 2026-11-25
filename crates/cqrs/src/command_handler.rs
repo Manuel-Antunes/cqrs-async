@@ -1,16 +1,16 @@
-//! Command handlers and their unit of work: the handler decides, records what it decided,
-//! and the gateway commits.
+//! Command handlers and their unit of work: the handler decides and commits what it
+//! decided to its entities, and the gateway appends it and commits the transaction.
 //!
 //! The gateway is the handler: one struct holding the services its commands
-//! need (usually the application's own repository), with one
-//! `CommandHandler<C>` impl per command. `#[command_handler]` reads the
-//! command, the event type and the unit of work from the signature of
-//! `handle`; `#[command_gateway]` routes the commands it lists to those impls,
-//! each in a unit of work of its `#[gateway(unit)]` field:
+//! need (usually a repository: the one the engine hands out, or one of the
+//! application's own), with one `CommandHandler<C>` impl per command.
+//! `#[command_handler]` reads the command, the event type and the unit of
+//! work from the signature of `handle`; `#[command_gateway]` routes the
+//! commands it lists to those impls, each in a unit of work of its
+//! `#[gateway(unit)]` field:
 //!
 //! ```
-//! use std::future::Future;
-//! use cqrs::{aggregate::{AggregateLoader, EventAppender, Loaded, New}, command::{CommandContext, CommandGateway, CommandHandler}, processing::InlinePublisher, store::{InMemoryEventStore, StoreError}, testing::block_on};
+//! use cqrs::{aggregate::{New, Repository}, command::{CommandContext, CommandGateway, CommandHandler}, processing::InlinePublisher, store::{InMemoryEventStore, StoreError}, testing::block_on};
 //!
 //! #[derive(Clone, Debug, PartialEq, cqrs::DomainEvent)]
 //! enum CounterEvent { Added(u64) }
@@ -25,20 +25,6 @@
 //! #[cqrs::command(output = u64, error = StoreError)]
 //! struct Add { id: u32, n: u64 }
 //!
-//! /// The application's port: how handlers find counters.
-//! trait Counters: Send + Sync {
-//!     fn find(&self, id: u32) -> impl Future<Output = Result<Option<Loaded<Counter>>, StoreError>> + Send;
-//! }
-//!
-//! /// Its adapter, rebuilding counters from the store.
-//! struct StoredCounters(AggregateLoader<Counter, InMemoryEventStore<CounterEvent>>);
-//!
-//! impl Counters for StoredCounters {
-//!     async fn find(&self, id: u32) -> Result<Option<Loaded<Counter>>, StoreError> {
-//!         self.0.load(&id).await
-//!     }
-//! }
-//!
 //! /// The gateway, and the unit of work its commands run in.
 //! #[cqrs::command_gateway(handles(Add))]
 //! struct CounterCommands<R, P> {
@@ -48,21 +34,20 @@
 //! }
 //!
 //! #[cqrs::command_handler]
-//! impl<R: Counters, P> CommandHandler<Add> for CounterCommands<R, P> {
+//! impl<R: Repository<Counter, Tx = ()>, P> CommandHandler<Add> for CounterCommands<R, P> {
 //!     async fn handle(&self, command: &Add, ctx: &mut CommandContext<CounterEvent>) -> Result<u64, StoreError> {
 //!         // A counter starts at zero: adding to a missing one creates it.
-//!         let counter = self.counters.find(command.id).await?.unwrap_or_else(|| New(command.id).into());
+//!         let counter = self.counters.find(&command.id, ctx.tx()).await?.unwrap_or_else(|| New(command.id).into());
 //!         ctx.append(CounterEvent::Added(command.n));
-//!         let counter = ctx.record(counter); // the counter after its events
+//!         let counter = ctx.commit(counter); // the counter after its events
+//!         self.counters.save(&counter, ctx.tx()).await?; // nothing to keep: its events are its state
 //!         Ok(counter.total)
 //!     }
 //! }
 //!
-//! let store = InMemoryEventStore::new();
-//! let commands = CounterCommands {
-//!     counters: StoredCounters(AggregateLoader::new(store.clone())),
-//!     events: InlinePublisher::new(store),
-//! };
+//! // The engine hands out the repository: its store, its snapshots, its transaction.
+//! let events = InlinePublisher::new(InMemoryEventStore::new());
+//! let commands = CounterCommands { counters: events.repository::<Counter>(), events };
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 2 }))?, 2);
 //! assert_eq!(block_on(commands.send(Add { id: 1, n: 3 }))?, 5);
 //! # Ok::<(), StoreError>(())
@@ -71,16 +56,17 @@
 //! # The unit of work
 //!
 //! For each command the gateway hands the handler a fresh [`CommandContext`]
-//! (carrying the command's metadata) and, if the handler asks for one, the
-//! transaction of the unit of work:
+//! (carrying the command's metadata, and the transaction of the unit of work
+//! if the context names one):
 //!
-//! - **Without a transaction** (`handle(&self, command, events)`, the mode
+//! - **Without a transaction** (`ctx: &mut CommandContext<Event>`, the mode
 //!   [`Autocommit`]): what the handler recorded is appended in one statement
 //!   of the store, once the handler returned `Ok`. One entity per command.
-//! - **With one** (`handle(&self, command, events, tx: &mut Tx)`, the mode
+//! - **With one** (`ctx: &mut CommandContext<Event, Tx>`, the mode
 //!   [`InTransaction<Tx>`]): the unit opens the transaction of its
-//!   [`TransactionManager`](crate::TransactionManager), the handler and its
-//!   repositories write in it (an entity's state, rows of their own), the
+//!   [`TransactionManager`](crate::TransactionManager) and the context owns
+//!   it; the handler and its repositories write in it
+//!   (`ctx.tx()`: an entity's state, rows of their own), the
 //!   recorded events are appended in it last, and the unit commits.
 //!   Everything commits together, or nothing does.
 //!
@@ -116,7 +102,7 @@
 //! #[cqrs::command_handler]
 //! impl CommandHandler<Tick> for TickHandler {
 //!     async fn handle(&self, _: &Tick, events: &mut CommandContext<Ticked>) -> Result<(), StoreError> {
-//!         events.record(New::<Bell>(1)); // a bell rings, it does not tick
+//!         events.commit(New::<Bell>(1)); // a bell rings, it does not tick
 //!         Ok(())
 //!     }
 //! }
@@ -160,16 +146,24 @@ use crate::{
 };
 
 /// The context of one run of a command handler, handed in by the gateway: the events the
-/// domain decides on, until [`record`](Self::record) assigns them to an
+/// domain decides on, until [`commit`](Self::commit) assigns them to an
 /// entity; the metadata the command was sent with, which every event
-/// carries; and the [`AppendCondition`] of what
-/// the run read with [`source`](Self::source). The unit of
-/// work appends what was recorded once the handler returned.
+/// carries; the [`AppendCondition`] of what
+/// the run read with [`source`](Self::source); and the transaction of the
+/// unit of work, if the handler runs in one. The unit of
+/// work appends what was committed to it once the handler returned.
+///
+/// `Tx` is the transaction the unit opened for this run, which the handler
+/// and its repositories write in (`ctx.tx()`); it commits with the
+/// events. It is `()` when there is none (the unit then runs in
+/// [`Autocommit`]): `CommandContext<E>` is the context of a unit without a
+/// transaction, `CommandContext<E, Tx>` the one of a unit in
+/// [`InTransaction<Tx>`], which `#[command_handler]` reads from the
+/// signature of `handle`.
 ///
 /// It is an [`EventAppender`](crate::EventAppender), so domain methods take
 /// it as `&mut impl EventAppender<E>`.
-#[derive(Debug)]
-pub struct CommandContext<E> {
+pub struct CommandContext<E, Tx = ()> {
     /// Appended and not recorded yet.
     events: Vec<E>,
     /// Sent with the command; stored with every event.
@@ -178,6 +172,19 @@ pub struct CommandContext<E> {
     condition: Option<AppendCondition>,
     /// What the run decided, entity by entity, in order.
     writes: Vec<Write<E>>,
+    /// The unit's transaction, which the handler writes in.
+    tx: Tx,
+}
+
+impl<E: ::std::fmt::Debug, Tx> ::std::fmt::Debug for CommandContext<E, Tx> {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("CommandContext")
+            .field("events", &self.events)
+            .field("metadata", &self.metadata)
+            .field("condition", &self.condition)
+            .field("writes", &self.writes)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What one commit stores, for [`EventPublisher::commit`]: events, their
@@ -221,23 +228,47 @@ pub struct Write<E> {
 }
 
 impl<E> CommandContext<E> {
-    /// An empty context without metadata (what a test passes).
+    /// An empty context without metadata nor transaction (what a test
+    /// passes).
     pub fn new() -> Self {
         Self::with_metadata(Metadata::new())
     }
 
-    /// An empty context whose events carry `metadata`: what a gateway hands
-    /// each run of a handler.
+    /// An empty context without a transaction, whose events carry
+    /// `metadata`: what a gateway hands each run of a handler in
+    /// [`Autocommit`].
     pub fn with_metadata(metadata: Metadata) -> Self {
+        Self::in_transaction(metadata, ())
+    }
+}
+
+impl<E, Tx> CommandContext<E, Tx> {
+    /// An empty context whose events carry `metadata`, owning `tx`, the
+    /// transaction of the unit of work: what a unit hands each run of a
+    /// handler.
+    pub fn in_transaction(metadata: Metadata, tx: Tx) -> Self {
         Self {
             events: Vec::new(),
             metadata,
             condition: None,
             writes: Vec::new(),
+            tx,
         }
     }
 
-    /// Appends `event` to the decision, until [`record`](Self::record)
+    /// The unit's transaction, to write in: what is written there commits
+    /// with the events, or is rolled back with them. (`()` without one.)
+    pub fn tx(&mut self) -> &mut Tx {
+        &mut self.tx
+    }
+
+    /// What the run recorded, and the transaction back: what the unit appends
+    /// the events in, and commits.
+    pub fn into_parts(self) -> (Vec<Write<E>>, Tx) {
+        (self.writes, self.tx)
+    }
+
+    /// Appends `event` to the decision, until [`commit`](Self::commit)
     /// assigns it to an entity. The same as
     /// [`EventAppender::append`](crate::EventAppender::append), without
     /// importing the trait (domain methods take `&mut impl EventAppender<E>`).
@@ -293,15 +324,17 @@ impl<E> CommandContext<E> {
         self.condition = AppendCondition::both(self.condition.take(), Some(condition));
     }
 
-    /// Records the events appended since the last call as `entity`'s: they are appended to its
-    /// stream by the unit of work, expecting the version it was loaded at
-    /// (or, for a [`New`](crate::New) one, that it does not exist), with the
-    /// command's metadata and the conditions of what the run read.
+    /// Commits the events appended since the last call to `entity`, as its
+    /// new version: they are appended to its stream by the unit of work,
+    /// expecting the version it was loaded at (or, for a
+    /// [`New`](crate::New) one, that it does not exist), with the command's
+    /// metadata and the conditions of what the run read.
     ///
-    /// Pure: nothing is written yet. Returns the entity as it is after the
-    /// events ([`Aggregate::evolve`]), at the version they take it to: what
-    /// a repository that keeps state saves, in the unit's transaction.
-    pub fn record<A>(&mut self, entity: impl Into<Loaded<A>>) -> Loaded<A>
+    /// A version of the entity, not a database commit: nothing is written
+    /// yet. Returns the entity as it is after the events
+    /// ([`Aggregate::evolve`]), at the version they take it to: what a
+    /// repository that keeps state saves, in the unit's transaction.
+    pub fn commit<A>(&mut self, entity: impl Into<Loaded<A>>) -> Loaded<A>
     where
         E: DomainEvent,
         A: Aggregate<Event = E>,
@@ -337,7 +370,7 @@ impl<E> Default for CommandContext<E> {
     }
 }
 
-impl<E> Extend<E> for CommandContext<E> {
+impl<E, Tx> Extend<E> for CommandContext<E, Tx> {
     fn extend<I: IntoIterator<Item = E>>(&mut self, events: I) {
         self.events.extend(events);
     }
@@ -346,7 +379,7 @@ impl<E> Extend<E> for CommandContext<E> {
 /// Appends and publishes events outside a command's unit of work (an
 /// import, a test seeding a store): appends `pending` to the entity's
 /// stream, expecting the version it was loaded at, then hands the events to
-/// whatever processes them. Command handlers do not use it: they record, and
+/// whatever processes them. Command handlers do not use it: they commit to the context, and
 /// their unit of work ([`UnitOfWork`]) appends.
 ///
 /// [`Events`](crate::Events) is one (it broadcasts the commit), and so is
@@ -396,7 +429,8 @@ impl<E: DomainEvent, T: EventPublisher<E>> EventPublisher<E> for std::sync::Arc<
 /// How a command's unit of work runs: [`Autocommit`] or
 /// [`InTransaction<Tx>`], chosen by the handler's signature.
 pub trait UnitMode: Send {
-    /// What the handler borrows (`()` without a transaction).
+    /// What the unit opens for the handler, which its context owns (`()`
+    /// without a transaction).
     type Tx: Send;
     /// Whether the store appends on its own, one statement per command.
     const AUTOCOMMIT: bool;
@@ -414,8 +448,9 @@ impl UnitMode for Autocommit {
 }
 
 /// A transaction of type `Tx`, opened and committed by the unit of work,
-/// borrowed by the handler and its repositories (`tx: &mut Tx`): their
-/// writes and the events commit together.
+/// owned by the handler's context (`CommandContext<E, Tx>`) and written in by
+/// the handler and its repositories (`ctx.tx()`): their writes and
+/// the events commit together.
 pub struct InTransaction<Tx>(PhantomData<fn() -> Tx>);
 
 impl<Tx> ::std::fmt::Debug for InTransaction<Tx> {
@@ -488,8 +523,9 @@ impl<E: DomainEvent, U: UnitMode, T: UnitOfWork<E, U>> UnitOfWork<E, U> for std:
 }
 
 /// Handles command `C`: finds what it needs (through the application's
-/// repositories), lets the domain append events, and records them for the
-/// entity they change (`events.record(entity)`). Its unit of work commits.
+/// repositories), lets the domain append events, and commits them to the
+/// entity they change (`ctx.commit(entity)`, then the repository's `save`). Its
+/// unit of work commits.
 ///
 /// The command is a generic parameter: one struct (the gateway,
 /// `#[cqrs::command_gateway]`) handles several commands, one impl each,
@@ -502,21 +538,23 @@ pub trait CommandHandler<C: Command + Sync>: Send + Sync {
     /// The events it decides on.
     type Event: DomainEvent;
     /// Its unit of work: [`Autocommit`], or [`InTransaction<Tx>`] when
-    /// `handle` takes a `tx: &mut Tx` (filled in by `#[command_handler]`).
+    /// `handle` takes a `CommandContext<Event, Tx>` (filled in by
+    /// `#[command_handler]`).
     type Unit: UnitMode;
 
-    /// Decides, and records what it decided. Events appended but never
-    /// recorded when it returns `Ok` are a bug (a forgotten `record`):
-    /// debug builds panic.
+    /// Decides, and commits what it decided. Events appended but never
+    /// committed when it returns `Ok` are a bug (a forgotten `commit`): the
+    /// unit of work refuses the command, in every build, with a
+    /// [`StoreError::Backend`] error, and appends nothing.
     ///
     /// It may run again, with a fresh context and transaction, if the
     /// append lost a race (see [`conflict_retries`](Self::conflict_retries)):
-    /// besides writing in `tx`, it must have no side effects.
+    /// besides writing in the context's transaction, it must have no side
+    /// effects.
     fn handle(
         &self,
         command: &C,
-        events: &mut CommandContext<Self::Event>,
-        tx: &mut <Self::Unit as UnitMode>::Tx,
+        ctx: &mut CommandContext<Self::Event, <Self::Unit as UnitMode>::Tx>,
     ) -> impl Future<Output = Result<OutputOf<C>, ErrorOf<C>>> + Send;
 
     /// How many times the handler re-runs after losing a race (0: never).
@@ -548,7 +586,7 @@ fn lost_race(error: &StoreError) -> bool {
 /// # Errors
 ///
 /// What the handler returns, or the store's error (converted), after the
-/// retries for a lost race. In [`Autocommit`], recording more than one
+/// retries for a lost race. In [`Autocommit`], committing to more than one
 /// entity is an error: their appends would not be atomic.
 pub async fn dispatch_command<C, H, U>(
     handler: &H,
@@ -564,19 +602,24 @@ where
 {
     let mut retries = handler.conflict_retries();
     loop {
-        let mut events = CommandContext::with_metadata(metadata.clone());
-        let mut tx = unit.begin().await?;
-        let output = handler.handle(&command, &mut events, &mut tx).await?;
-        debug_assert!(
-            events.pending().is_empty(),
-            "{} returned Ok with events it never recorded",
-            std::any::type_name::<H>(),
-        );
-        let writes = events.take_writes();
+        let tx = unit.begin().await?;
+        let mut ctx = CommandContext::in_transaction(metadata.clone(), tx);
+        // An error drops the context, and the transaction with it: rolled back.
+        let output = handler.handle(&command, &mut ctx).await?;
+        if !ctx.pending().is_empty() {
+            return Err(StoreError::backend(format!(
+                "{} returned Ok with {} events it never committed: commit them to an entity \
+                 (`ctx.commit(entity)`), or they are lost",
+                std::any::type_name::<H>(),
+                ctx.pending().len(),
+            ))
+            .into());
+        }
+        let (writes, mut tx) = ctx.into_parts();
         if <H::Unit as UnitMode>::AUTOCOMMIT && writes.len() > 1 {
             return Err(StoreError::backend(format!(
-                "{} recorded {} entities without a transaction: their appends would not be atomic; \
-                 take the unit's transaction in `handle` (`tx: &mut Tx`)",
+                "{} committed to {} entities without a transaction: their appends would not be atomic; \
+                 take the unit's transaction in the context (`CommandContext<Event, Tx>`)",
                 std::any::type_name::<H>(),
                 writes.len(),
             ))
@@ -601,9 +644,15 @@ where
 }
 
 /// Appends `writes` through `unit`, in `tx`, in order: what a unit of work
-/// does with what a handler recorded. A write's condition skips the events
-/// the writes before it appended: the run's own events match what it read,
-/// so a later write checks only what others appended.
+/// does with what a handler recorded.
+///
+/// What the writes were conditioned on is checked as one: the first write
+/// carries the conditions of all of them (what any entity of the unit was
+/// built from, or the run read, even after that entity was recorded), so
+/// nothing the unit read can have changed under any of its writes. The writes
+/// after it check the same criteria from the last event the unit appended on:
+/// its own events match what it read, so only what others appended since
+/// counts.
 ///
 /// # Errors
 ///
@@ -612,17 +661,28 @@ where
 pub async fn append_writes<E, U, W>(
     unit: &W,
     tx: &mut U::Tx,
-    writes: Vec<Write<E>>,
+    mut writes: Vec<Write<E>>,
 ) -> Result<Vec<EventEnvelope<E>>, StoreError>
 where
     E: DomainEvent,
     U: UnitMode,
     W: UnitOfWork<E, U>,
 {
+    // One write checks its own condition, as it is: nothing to combine.
+    if writes.len() > 1 {
+        let conditions = writes
+            .iter()
+            .fold(None, |all, write| AppendCondition::both(all, write.condition.clone()));
+        if let Some(condition) = &conditions {
+            for write in &mut writes {
+                write.condition = Some(condition.clone());
+            }
+        }
+    }
     let mut appended: Vec<EventEnvelope<E>> = Vec::new();
     for mut write in writes {
         if let (Some(condition), Some(last)) = (&mut write.condition, appended.last()) {
-            condition.after = condition.after.max(last.position);
+            condition.after = last.position;
         }
         appended.extend(unit.append(tx, write).await?);
     }

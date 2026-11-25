@@ -1,9 +1,10 @@
 //! Application layer: the use cases, written against ports only.
 //!
-//! - [`commands`] are command handlers: each gets an appender from the
-//!   gateway, finds the post in the application's
-//!   [`PostRepository`](commands::PostRepository) port, lets the domain append
-//!   and saves it through the same port; routed by
+//! - [`commands`] are command handlers: each gets a context from the
+//!   gateway, finds the post in the
+//!   [`PostRepository`](commands::PostRepository) port, lets the domain
+//!   append and saves it through the same repository (which also hands out
+//!   new ids); routed by
 //!   [`PostCommandGateway`](commands::PostCommandGateway).
 //! - [`queries`] only read, from the [`PostSummaryRepository`](queries::PostSummaryRepository)
 //!   read-model port, and are routed by

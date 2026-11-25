@@ -128,7 +128,7 @@ the details; the blog does not need them.
 
 ```rust
 // src/domain/post/error.rs
-/// A business rule the post refused to break. Nothing is recorded when an
+/// A business rule the post refused to break. Nothing is committed when an
 /// operation returns one of these.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostError {
@@ -156,7 +156,7 @@ pub struct Post {
 }
 
 impl Post {
-    /// How an event changes the post, both when it is recorded and when it
+    /// How an event changes the post, both when it is committed and when it
     /// is replayed: no validation, no failure.
     fn apply(&mut self, event: &PostEvent) {
         match event {
@@ -243,13 +243,13 @@ The rules this shape enforces:
 - **Creating takes no post.** `create` is an associated function (Axon 5's
   static creational command handler): there is no post to decide on yet,
   and none can be created twice by calling it on one that exists. Its
-  events are recorded for `New::<Post>(id)`, which expects the stream not
+  events are committed to `New::<Post>(id)`, which expects the stream not
   to exist (part 2). `initial` is only where replay starts.
 - **No buffer in the aggregate.** Decisions append to the appender they
   are given (Axon 5's `EventAppender`); the struct stays plain data, so
   derives and serde work as usual.
 - **A decision sees the state from before it ran.** The appended events
-  are applied when they are recorded.
+  are applied when they are committed.
 - **The domain barely knows the framework.** `EventAppender<E>` is
   implemented for every `Extend<E>`, so a decision could take
   `&mut impl Extend<PostEvent>` and the domain would import nothing from

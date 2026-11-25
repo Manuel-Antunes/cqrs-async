@@ -193,21 +193,16 @@ impl Gateway {
 }
 
 /// Opening needs nothing, as a creation decides on nothing. Written by
-/// hand, without `#[command_handler]`: the unit of work is named, `handle`
-/// takes its transaction (none here, `()`), and the gateway is told it
-/// handles `Open` (`Handles`, which the attribute writes otherwise).
+/// hand, without `#[command_handler]`: the unit of work is named, and the
+/// gateway is told it handles `Open` (`Handles`, which the attribute writes
+/// otherwise).
 impl CommandHandler<Open> for Gateway {
     type Event = CounterEvent;
     type Unit = cqrs::command::Autocommit;
 
-    async fn handle(
-        &self,
-        Open(id): &Open,
-        events: &mut CommandContext<CounterEvent>,
-        (): &mut (),
-    ) -> Result<u32, Error> {
+    async fn handle(&self, Open(id): &Open, events: &mut CommandContext<CounterEvent>) -> Result<u32, Error> {
         events.append(CounterEvent::Opened);
-        events.record(cqrs::aggregate::New::<Counter>(*id));
+        events.commit(cqrs::aggregate::New::<Counter>(*id));
         Ok(*id)
     }
 }
@@ -230,7 +225,7 @@ impl CommandHandler<Add> for Gateway {
         if self.forget_save {
             return Ok(counter.total + command.n);
         }
-        Ok(events.record(counter).total)
+        Ok(events.commit(counter).total)
     }
 }
 
@@ -329,18 +324,13 @@ impl CommandHandler<Add> for Twice {
     type Event = CounterEvent;
     type Unit = cqrs::command::InTransaction<()>;
 
-    async fn handle(
-        &self,
-        command: &Add,
-        events: &mut CommandContext<CounterEvent>,
-        (): &mut (),
-    ) -> Result<u64, Error> {
+    async fn handle(&self, command: &Add, events: &mut CommandContext<CounterEvent>) -> Result<u64, Error> {
         let stale = self.0.load(&command.id).await?.unwrap();
         let fresh = self.0.load(&command.id).await?.unwrap();
         events.append(CounterEvent::Added(1));
-        events.record(fresh);
+        events.commit(fresh);
         events.append(CounterEvent::Added(1));
-        events.record(stale);
+        events.commit(stale);
         Ok(0)
     }
 }
@@ -371,13 +361,8 @@ fn several_entities_without_a_transaction_are_refused() {
     impl CommandHandler<Add> for TwiceWithoutTransaction {
         type Event = CounterEvent;
         type Unit = cqrs::command::Autocommit;
-        async fn handle(
-            &self,
-            command: &Add,
-            events: &mut CommandContext<CounterEvent>,
-            (): &mut (),
-        ) -> Result<u64, Error> {
-            Twice(Arc::clone(&self.0)).handle(command, events, &mut ()).await
+        async fn handle(&self, command: &Add, events: &mut CommandContext<CounterEvent>) -> Result<u64, Error> {
+            Twice(Arc::clone(&self.0)).handle(command, events).await
         }
     }
     let counters = counters();
@@ -396,9 +381,7 @@ fn several_entities_without_a_transaction_are_refused() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "never recorded")]
-fn forgetting_to_save_panics_in_debug_builds() {
+fn forgetting_to_save_is_an_error_in_every_build() {
     let counters = counters();
     let forgetful = Gateway {
         forget_save: true,
@@ -406,7 +389,14 @@ fn forgetting_to_save_panics_in_debug_builds() {
     };
     let gateway = forgetful;
     block_on(gateway.send(Open(1))).unwrap();
-    let _ = block_on(gateway.send(Add { id: 1, n: 5 }));
+    let result = block_on(gateway.send(Add { id: 1, n: 5 }));
+    match result {
+        Err(Error::Store(StoreError::Backend(cause))) => {
+            assert!(cause.to_string().contains("never committed"), "{cause}");
+        }
+        other => panic!("expected the forgotten commit to be refused, got {other:?}"),
+    }
+    assert_eq!(total(&counters, 1), 0, "nothing appended");
 }
 
 #[test]

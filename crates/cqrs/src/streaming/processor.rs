@@ -993,7 +993,7 @@ where
     }
 
     /// Every event of `batch` handled and the token moved past the last one,
-    /// in one unit of work; then each one's post-commit step.
+    /// in one unit of work.
     async fn handle_batch_in_unit_of_work(
         &self,
         batch: &[(Arc<EventEnvelope<E>>, Cursor)],
@@ -1026,11 +1026,6 @@ where
             return Ok(TokenUpdate::ClaimLost); // dropping `tx` rolls back
         }
         self.transactions.commit(tx).await.map_err(HandlerError::from)?;
-        for (event, _) in batch {
-            self.handler
-                .committed_in(event, event.position <= replay_until, INTERNAL)
-                .await;
-        }
         Ok(TokenUpdate::Stored)
     }
 
@@ -1132,8 +1127,7 @@ where
     }
 
     /// One attempt: `event` handled and the token stored in one unit of
-    /// work, committed together; then the handler's post-commit step. A
-    /// lost claim rolls the unit back.
+    /// work, committed together. A lost claim rolls the unit back.
     async fn handle_in_unit_of_work(
         &self,
         event: &EventEnvelope<E>,
@@ -1152,7 +1146,6 @@ where
             return Ok(TokenUpdate::ClaimLost);
         }
         self.transactions.commit(tx).await.map_err(HandlerError::from)?;
-        self.handler.committed_in(event, token.replay, INTERNAL).await;
         Ok(TokenUpdate::Stored)
     }
 

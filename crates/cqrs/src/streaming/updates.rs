@@ -330,9 +330,8 @@ fn distinct<T: Clone + PartialEq + Send, E: Send>(
 /// It runs on **every** instance of the application ([`emit_updates`]),
 /// for every committed event, once the projections handled it, whichever
 /// instance did: so a subscriber connected to any instance sees every
-/// change. That is why it is not a projection's
-/// [`committed`](crate::EventHandler::committed), which runs only on the
-/// instance that handled the event.
+/// change, where emitting from the handler would reach only the subscribers
+/// of the instance that handled the event.
 pub trait EmitUpdates<E: DomainEvent>: Send + Sync {
     /// Emits what `event` changed. Failures are the emitter's to log: a
     /// missed update only leaves a subscriber behind until the next one.

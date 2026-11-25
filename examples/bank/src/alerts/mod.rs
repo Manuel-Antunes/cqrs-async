@@ -115,7 +115,7 @@ impl CommandHandler<RaiseAlert> for AlertGateway {
             amount: command.amount,
         });
         // A new stream per bank event: a second delivery conflicts.
-        ctx.record(New::<Alert>(command.source));
+        ctx.commit(New::<Alert>(command.source));
         Ok(())
     }
 }
